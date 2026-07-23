@@ -1,0 +1,17 @@
+{
+  "parse_text": { "status": 422, "body": { "error": { "code": "VALIDATION_ERROR", "message": "입력 내용을 확인해 주세요.", "field_errors": [{ "field": "content", "code": "REQUIRED", "message": "경험 내용을 입력해 주세요." }], "request_id": "REQ-E01", "retryable": false } } },
+  "parse_file": { "status": 413, "body": { "error": { "code": "FILE_TOO_LARGE", "message": "파일은 10MiB 이하여야 합니다.", "field_errors": [{ "field": "file", "code": "MAX_SIZE", "message": "파일 크기를 줄여 주세요." }], "request_id": "REQ-E02", "retryable": false } } },
+  "commit_experiences": { "status": 503, "body": { "error": { "code": "AI_SERVICE_UNAVAILABLE", "message": "저장 서비스를 일시적으로 사용할 수 없습니다.", "field_errors": [], "request_id": "REQ-E03", "retryable": true, "retry_after_seconds": 10 } } },
+  "experience_tree": { "status": 500, "body": { "error": { "code": "INTERNAL_ERROR", "message": "경험 목록을 불러오지 못했습니다.", "field_errors": [], "request_id": "REQ-E04", "retryable": true } } },
+  "experience_detail": { "status": 404, "body": { "error": { "code": "RESOURCE_NOT_FOUND", "message": "경험을 찾을 수 없습니다.", "field_errors": [], "request_id": "REQ-E05", "retryable": false } } },
+  "update_experience": { "status": 409, "body": { "error": { "code": "VERSION_CONFLICT", "message": "다른 변경이 먼저 저장되었습니다.", "field_errors": [], "request_id": "REQ-E06", "retryable": false, "details": { "latest_version": 4 } } } },
+  "experience_sources": { "status": 500, "body": { "error": { "code": "INTERNAL_ERROR", "message": "원본 근거를 불러오지 못했습니다.", "field_errors": [], "request_id": "REQ-E07", "retryable": true } } },
+  "experience_chat": { "status": 504, "body": { "error": { "code": "AI_PROCESSING_TIMEOUT", "message": "답변 생성 시간이 초과되었습니다.", "field_errors": [], "request_id": "REQ-E08", "retryable": true } } },
+  "analyze_job": { "status": 422, "body": { "error": { "code": "VALIDATION_ERROR", "message": "공고 내용을 확인해 주세요.", "field_errors": [{ "field": "posting_content", "code": "REQUIRED", "message": "공고 내용을 입력해 주세요." }], "request_id": "REQ-E09", "retryable": false } } },
+  "match_job": { "status": 503, "body": { "error": { "code": "AI_SERVICE_UNAVAILABLE", "message": "경험 매칭 서비스를 일시적으로 사용할 수 없습니다.", "field_errors": [], "request_id": "REQ-E10", "retryable": true, "retry_after_seconds": 15 } } },
+  "generate_cover_letter": { "status": 429, "body": { "error": { "code": "RATE_LIMITED", "message": "요청이 많습니다. 잠시 후 다시 시도해 주세요.", "field_errors": [], "request_id": "REQ-E11", "retryable": true, "retry_after_seconds": 30 } } },
+  "revise_cover_letter": { "status": 409, "body": { "error": { "code": "VERSION_CONFLICT", "message": "문서가 이미 변경되었습니다.", "field_errors": [], "request_id": "REQ-E12", "retryable": false, "details": { "latest_version": 3 } } } },
+  "job_detail": { "status": 404, "body": { "error": { "code": "RESOURCE_NOT_FOUND", "message": "공고를 찾을 수 없습니다.", "field_errors": [], "request_id": "REQ-E13", "retryable": false } } },
+  "document_detail": { "status": 500, "body": { "error": { "code": "INTERNAL_ERROR", "message": "문서를 불러오지 못했습니다.", "field_errors": [], "request_id": "REQ-E14", "retryable": true } } },
+  "update_document": { "status": 409, "body": { "error": { "code": "VERSION_CONFLICT", "message": "최신 문서를 다시 불러온 뒤 저장해 주세요.", "field_errors": [], "request_id": "REQ-E15", "retryable": false, "details": { "latest_version": 5 } } } }
+}

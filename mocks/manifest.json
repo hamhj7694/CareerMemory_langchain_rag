@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "default_scenario": "success",
+  "scenario_files": {
+    "success": "scenarios/success.json",
+    "empty": "scenarios/empty.json",
+    "partial_success": "scenarios/partial-success.json",
+    "error": "scenarios/error.json"
+  },
+  "routes": [
+    { "api_id": "API-01", "method": "POST", "path": "/api/inputs/text", "key": "parse_text" },
+    { "api_id": "API-02", "method": "POST", "path": "/api/inputs/file", "key": "parse_file" },
+    { "api_id": "API-03", "method": "POST", "path": "/api/experiences/commit", "key": "commit_experiences" },
+    { "api_id": "API-04", "method": "GET", "path": "/api/experiences/tree", "key": "experience_tree" },
+    { "api_id": "API-05", "method": "GET", "path": "/api/experiences/{experienceId}", "key": "experience_detail" },
+    { "api_id": "API-06", "method": "PATCH", "path": "/api/experiences/{experienceId}", "key": "update_experience" },
+    { "api_id": "API-07", "method": "GET", "path": "/api/experiences/{experienceId}/sources", "key": "experience_sources" },
+    { "api_id": "API-08", "method": "POST", "path": "/api/chat/experiences", "key": "experience_chat" },
+    { "api_id": "API-09", "method": "POST", "path": "/api/jobs/analyze", "key": "analyze_job" },
+    { "api_id": "API-10", "method": "POST", "path": "/api/jobs/{jobId}/match", "key": "match_job" },
+    { "api_id": "API-11", "method": "POST", "path": "/api/cover-letters/generate", "key": "generate_cover_letter" },
+    { "api_id": "API-12", "method": "POST", "path": "/api/cover-letters/revise", "key": "revise_cover_letter" },
+    { "api_id": "API-13", "method": "GET", "path": "/api/jobs/{jobId}", "key": "job_detail" },
+    { "api_id": "API-14", "method": "GET", "path": "/api/documents/{documentId}", "key": "document_detail" },
+    { "api_id": "API-15", "method": "PATCH", "path": "/api/documents/{documentId}", "key": "update_document" }
+  ]
+}

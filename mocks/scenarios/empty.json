@@ -1,0 +1,17 @@
+{
+  "parse_text": { "status": 200, "body": { "raw_id": "RAW-EMPTY", "draft_id": "DRF-EMPTY", "domain_name": "미분류", "project": { "name": "분류되지 않은 입력", "period": {}, "experiences": [] }, "project_candidates": [], "warnings": ["구조화할 수 있는 구체적인 경험이 부족합니다."] } },
+  "parse_file": { "status": 200, "body": { "raw_id": "RAW-EMPTY-FILE", "draft_id": "DRF-EMPTY-FILE", "domain_name": "미분류", "project": { "name": "분류되지 않은 파일", "period": {}, "experiences": [] }, "project_candidates": [], "warnings": ["파일에서 경험 정보를 찾지 못했습니다."], "file": { "file_id": "FILE-EMPTY", "filename": "empty.txt", "mime_type": "text/plain", "size_bytes": 0 } } },
+  "commit_experiences": { "status": 422, "body": { "error": { "code": "VALIDATION_ERROR", "message": "저장할 경험이 없습니다.", "field_errors": [{ "field": "project.experiences", "code": "MIN_ITEMS", "message": "경험을 한 개 이상 입력해 주세요." }], "request_id": "REQ-EMPTY-03", "retryable": false } } },
+  "experience_tree": { "status": 200, "body": { "domains": [], "total_experience_count": 0 } },
+  "experience_detail": { "status": 404, "body": { "error": { "code": "RESOURCE_NOT_FOUND", "message": "경험을 찾을 수 없습니다.", "field_errors": [], "request_id": "REQ-EMPTY-05", "retryable": false } } },
+  "update_experience": { "status": 404, "body": { "error": { "code": "RESOURCE_NOT_FOUND", "message": "수정할 경험을 찾을 수 없습니다.", "field_errors": [], "request_id": "REQ-EMPTY-06", "retryable": false } } },
+  "experience_sources": { "status": 200, "body": { "experience_id": "EXP-NO-SOURCE", "sources": [] } },
+  "experience_chat": { "status": 200, "body": { "conversation_id": "CONV-EMPTY", "message_id": "MSG-EMPTY", "answer": "관련 경험과 근거를 찾지 못했습니다.", "experiences": [], "evidence": [], "missing_information": ["구체적인 프로젝트 또는 성과를 추가해 주세요."], "warnings": ["저장된 근거가 없습니다."] } },
+  "analyze_job": { "status": 201, "body": { "job_id": "JOB-EMPTY", "company_name": "", "role_name": "", "posting_content": "내용이 매우 짧은 공고", "cover_letter_questions": [], "requirements": [], "warnings": ["구체적인 요구사항을 추출하지 못했습니다."], "analyzed_at": "2026-07-22T13:00:00+09:00" } },
+  "match_job": { "status": 200, "body": { "job_id": "JOB-EMPTY", "matches": [], "failures": [] } },
+  "generate_cover_letter": { "status": 422, "body": { "error": { "code": "VALIDATION_ERROR", "message": "선택된 경험이 없습니다.", "field_errors": [{ "field": "experience_ids", "code": "MIN_ITEMS", "message": "경험을 1~2개 선택해 주세요." }], "request_id": "REQ-EMPTY-11", "retryable": false } } },
+  "revise_cover_letter": { "status": 422, "body": { "error": { "code": "VALIDATION_ERROR", "message": "수정할 내용이 없습니다.", "field_errors": [{ "field": "content", "code": "REQUIRED", "message": "내용을 입력해 주세요." }], "request_id": "REQ-EMPTY-12", "retryable": false } } },
+  "job_detail": { "status": 404, "body": { "error": { "code": "RESOURCE_NOT_FOUND", "message": "공고를 찾을 수 없습니다.", "field_errors": [], "request_id": "REQ-EMPTY-13", "retryable": false } } },
+  "document_detail": { "status": 404, "body": { "error": { "code": "RESOURCE_NOT_FOUND", "message": "문서를 찾을 수 없습니다.", "field_errors": [], "request_id": "REQ-EMPTY-14", "retryable": false } } },
+  "update_document": { "status": 404, "body": { "error": { "code": "RESOURCE_NOT_FOUND", "message": "수정할 문서를 찾을 수 없습니다.", "field_errors": [], "request_id": "REQ-EMPTY-15", "retryable": false } } }
+}
