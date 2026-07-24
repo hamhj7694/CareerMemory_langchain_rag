@@ -22,15 +22,34 @@ function toUiProposal(proposal) {
     postingContent: proposal.payload.job_draft?.posting_content ?? '',
     rawPayload: proposal.payload,
   };
-  const experience = proposal?.payload?.experiences?.[0];
+  const experiences = proposal?.payload?.experiences ?? [];
+  const experience = experiences[0];
   if (!experience) return null;
+  const toExperienceDraft = (item) => ({
+    title: item.title,
+    domain: item.domain?.name ?? '',
+    project: item.project?.name ?? '',
+    role: item.role ?? '',
+    summary: item.summary ?? '',
+    situation: item.situation ?? '',
+    actions: item.actions ?? [],
+    results: item.results ?? [],
+    facts: item.facts ?? [],
+    skills: item.skills ?? [],
+    evidenceCount: item.source_ref_ids?.length ?? item.source_refs?.length ?? 0,
+    source_ref_ids: item.source_ref_ids ?? [],
+    source_refs: item.source_refs ?? [],
+    needsConfirmation: Boolean(item.missing_information?.length),
+  });
+  const approvedIndexes = new Set(proposal.approved_experience_indexes || []);
+  const drafts = experiences.map((item, index) => ({ ...toExperienceDraft(item), sourceIndex: index, approved: approvedIndexes.has(index) }));
   return {
     id: proposal.id,
     version: proposal.version,
     kind: 'experience',
     title: experience.title,
-    domain: proposal.payload.domain?.name ?? '',
-    project: proposal.payload.project?.name ?? '',
+    domain: experience.domain?.name ?? proposal.payload.domain?.name ?? '',
+    project: experience.project?.name ?? proposal.payload.project?.name ?? '',
     role: experience.role ?? '',
     summary: experience.summary ?? '',
     situation: experience.situation ?? '',
@@ -40,6 +59,8 @@ function toUiProposal(proposal) {
     skills: experience.skills ?? [],
     evidenceCount: experience.source_ref_ids?.length ?? 0,
     needsConfirmation: Boolean(experience.missing_information?.length),
+    experiences: drafts,
+    approvedExperienceIndexes: [...approvedIndexes],
     rawPayload: proposal.payload,
   };
 }
@@ -70,18 +91,20 @@ function applyPanelChanges(proposal, panel) {
   }
   payload.domain = { ...(payload.domain ?? {}), name: panel.domain };
   payload.project = { ...(payload.project ?? {}), name: panel.project };
-  payload.experiences = [...(payload.experiences ?? [])];
-  payload.experiences[0] = {
-    ...(payload.experiences[0] ?? {}),
-    title: panel.title,
-    role: panel.role,
-    summary: panel.summary,
-    situation: panel.situation,
-    actions: panel.actions,
-    results: panel.results,
-    facts: panel.facts,
-    skills: panel.skills,
-  };
+  const panels = panel.experiences?.length ? panel.experiences : [panel];
+  payload.experiences = panels.map((item, index) => ({
+    ...(payload.experiences?.[index] ?? {}),
+    title: item.title,
+    domain: { ...(payload.experiences?.[index]?.domain ?? {}), name: item.domain },
+    project: { ...(payload.experiences?.[index]?.project ?? {}), name: item.project },
+    role: item.role,
+    summary: item.summary,
+    situation: item.situation,
+    actions: item.actions,
+    results: item.results,
+    facts: item.facts,
+    skills: item.skills,
+  }));
   return payload;
 }
 
@@ -217,9 +240,15 @@ export function ChatPage({ onSend }) {
       navigate(`/jobs/${savedJob.jobId}`, { state: { job: savedJob } });
       return;
     }
-    if (proposal?.id) await v2ChatApi.approveProposal(proposal.id, { base_version: proposal.version });
-    setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
-    setNotice(proposal.kind === 'job' ? '공고 분석 제안을 확인했습니다.' : '경험으로 확정해 저장했습니다.');
+    const result = proposal?.id ? await v2ChatApi.approveProposal(proposal.id, { base_version: proposal.version, selection: proposal.selection }) : null;
+    if (result?.proposal?.status !== 'approved') {
+      const nextProposal = toUiProposal(result.proposal);
+      setProposals((current) => ({ ...current, [nextProposal.id]: nextProposal }));
+      setNotice('선택한 경험을 저장했습니다. 다른 초안도 계속 검토할 수 있습니다.');
+    } else {
+      setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
+      setNotice(proposal.kind === 'job' ? '공고 분석 제안을 확인했습니다.' : '경험으로 확정해 저장했습니다.');
+    }
     await refreshConversations();
   };
   const reject = async (proposal) => {
@@ -242,6 +271,29 @@ export function ChatPage({ onSend }) {
     setProposals((current) => ({ ...current, [next.id]: next }));
     setNotice('수정한 내용을 초안에 저장했습니다.');
     return next;
+  };
+  const removeProposalExperience = async (proposal, sourceIndex) => {
+    if (!proposal?.id) return;
+    const currentProposal = proposals[proposal.id] || proposal;
+    const payload = structuredClone(currentProposal.rawPayload);
+    payload.experiences = (payload.experiences || []).filter((_, index) => index !== sourceIndex);
+    const approvedExperienceIndexes = (currentProposal.approvedExperienceIndexes || [])
+      .filter((index) => index !== sourceIndex)
+      .map((index) => (index > sourceIndex ? index - 1 : index));
+    if (!payload.experiences.length) {
+      await v2ChatApi.rejectProposal(proposal.id, { base_version: currentProposal.version });
+      setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
+      setNotice('초안을 삭제했습니다.');
+      return;
+    }
+    const updated = await v2ChatApi.updateProposal(proposal.id, {
+      base_version: currentProposal.version,
+      payload,
+      approved_experience_indexes: approvedExperienceIndexes,
+    });
+    const next = toUiProposal(updated);
+    setProposals((current) => ({ ...current, [next.id]: next }));
+    setNotice('선택한 초안을 삭제했습니다.');
   };
 
   const startNewConversation = () => {
@@ -266,7 +318,7 @@ export function ChatPage({ onSend }) {
     <section className="v2-conversation" aria-label="Career Memory 대화">
       <header className="v2-conversation__header"><div><span className="v2-eyebrow">Career workspace</span><h1>Career Memory와 대화하기</h1></div><button type="button" className="v2-mobile-session-button" onClick={() => setSessionsOpen(true)}>대화 기록</button></header>
       <div className="v2-conversation__scroll" ref={scrollArea}>
-        <MessageThread messages={messages} proposals={proposals} busy={busy} onStarter={start} onEvidence={() => setNotice('연결된 근거를 확인합니다.')} onApproveProposal={approve} onRejectProposal={reject} onChangeProposal={updateProposal} />
+        <MessageThread messages={messages} proposals={proposals} busy={busy} onStarter={start} onEvidence={() => setNotice('연결된 근거를 확인합니다.')} onApproveProposal={approve} onRejectProposal={reject} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />
       </div>
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
       <ChatComposer mode={mode} onModeChange={setMode} text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy} />

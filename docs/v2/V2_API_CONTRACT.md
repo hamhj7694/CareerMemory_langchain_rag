@@ -256,7 +256,27 @@ type ProposalPayload = {
 };
 ```
 
-`ExperienceDraft`는 `title`, `summary`, `situation`, `actions[]`, `results[]`, `role`, `facts[]`, `skills[]`, `missing_information[]`를 가지며 각 fact/action/result는 선택적으로 `source_ref_ids[]`를 가진다.
+`ExperienceDraft`는 다음 계층을 포함해야 한다.
+
+```ts
+type ExperienceDraft = {
+  domain: { id?: Id; name: string };
+  project: { id?: Id; name: string; organization?: string };
+  title: string;
+  summary: string;
+  situation: string;
+  actions: string[];
+  results: string[];
+  role: string;
+  facts: string[];
+  skills: string[];
+  missing_information: string[];
+  source_ref_ids: Id[];
+  source_refs?: Source[];
+};
+```
+
+AI 엔진은 하나의 메시지·파일에서 경험 후보를 0개 이상으로 분해하고, 각 후보마다 `domain → project → ExperienceDraft`를 채워야 한다. 여러 후보가 같은 원문에서 나왔으면 같은 `source_ref_id`를 공유할 수 있으며, 한 후보가 여러 파일에 근거하면 여러 ID를 가진다. 프론트는 `experiences[]`를 임의로 첫 항목으로 축약하지 않고 전체를 검토·수정·승인한다.
 
 | Method | Endpoint | 의미 |
 |---|---|---|
@@ -287,14 +307,14 @@ type ProposalPayload = {
 
 ```json
 {
-  "proposal": { "id": "PRP-001", "status": "approved", "version": 4 },
+  "proposal": { "id": "PRP-001", "status": "approved", "version": 4, "approved_experience_indexes": [0, 1] },
   "created": { "experience_ids": ["EXP-101", "EXP-102"], "job_id": null },
   "updated": { "experience_ids": [] },
   "approved_at": "2026-07-22T16:00:00+09:00"
 }
 ```
 
-승인은 전부 성공하거나 전부 실패하는 트랜잭션이다. 이미 승인된 proposal에 동일 `client_request_id`로 재요청하면 같은 결과를 반환한다.
+경험 제안은 `selection.experience_indexes`에 지정한 초안만 부분 승인할 수 있다. 부분 승인 후 proposal은 `edited` 상태로 유지되고 `approved_experience_indexes`에 승인된 원본 인덱스를 기록한다. 모든 초안이 승인되면 `approved`로 전환된다. 이미 승인된 인덱스를 재요청해도 중복 경험을 만들지 않는다. 이미 승인된 proposal에 동일 `client_request_id`로 재요청하면 같은 결과를 반환한다.
 
 ## 8. 경험 관리 CRUD
 

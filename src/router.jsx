@@ -17,6 +17,7 @@ export const router = createBrowserRouter([
       { path: 'chat', element: <ChatPage /> },
       { path: 'chat/:conversationId', element: <ChatPage /> },
       { path: 'memory', element: <MemoryManagerPage /> },
+      { path: 'memory/new', element: <MemoryDetailPage /> },
       { path: 'memory/:experienceId', element: <MemoryDetailPage /> },
       { path: 'jobs', element: <JobsPage /> },
       { path: 'jobs/:jobId', element: <JobDetailPage /> },

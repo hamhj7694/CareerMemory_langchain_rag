@@ -12,6 +12,16 @@ export const sourceApi = {
   remove(sourceId, options = {}) {
     return apiMode === 'mock' ? unifiedMockApi.removeEvidence(sourceId) : apiRequest({ path: `/api/sources/${idPath(sourceId)}`, method: 'DELETE', body: { clientRequestId: createClientRequestId() }, ...options });
   },
+  unlink(experienceId, sourceId, options = {}) {
+    return apiMode === 'mock'
+      ? unifiedMockApi.unlinkEvidence(experienceId, sourceId)
+      : apiRequest({
+        path: `/api/experiences/${idPath(experienceId)}/sources/${idPath(sourceId)}`,
+        method: 'DELETE',
+        body: { clientRequestId: createClientRequestId() },
+        ...options,
+      });
+  },
   async download(source) {
     if (apiMode === 'mock') return new Blob([source.text || 'Mock source file'], { type: 'text/plain;charset=utf-8' });
     const response = await fetch(`${apiConfig.baseUrl}/api/sources/${idPath(source.id)}/download`);

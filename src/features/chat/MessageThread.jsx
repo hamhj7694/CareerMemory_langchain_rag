@@ -7,7 +7,7 @@ const STARTERS = [
   { mode: 'job', title: '채용공고와 비교', description: '공고 요구사항과 내 경험을 근거별로 비교해요.' },
 ];
 
-export function MessageThread({ messages, proposals, busy, onStarter, onEvidence, onApproveProposal, onRejectProposal, onChangeProposal }) {
+export function MessageThread({ messages, proposals, busy, onStarter, onEvidence, onApproveProposal, onRejectProposal, onChangeProposal, onRemoveProposalExperience }) {
   if (messages.length === 0) return <div className="v2-chat-empty">
     <span className="v2-chat-empty__mark" aria-hidden="true">CM</span>
     <h1>당신의 경험을 이야기해 주세요</h1>
@@ -30,7 +30,7 @@ export function MessageThread({ messages, proposals, busy, onStarter, onEvidence
       {message.proposalIds?.map((proposalId) => {
         const proposal = proposals[proposalId];
         if (!proposal) return null;
-        return <InlineProposalCard key={`${proposalId}-${proposal.version ?? 0}`} proposal={proposal} onApprove={onApproveProposal} onReject={onRejectProposal} onChange={onChangeProposal} />;
+        return <InlineProposalCard key={`${proposalId}-${proposal.version ?? 0}`} proposal={proposal} onApprove={onApproveProposal} onReject={onRejectProposal} onChange={onChangeProposal} onRemoveExperience={onRemoveProposalExperience} />;
       })}
     </article>)}
     {busy && <article className="v2-message v2-message--assistant v2-message--thinking" role="status"><div className="v2-message__meta">Career Memory</div><p><span /> 답변을 준비하고 있어요.</p></article>}

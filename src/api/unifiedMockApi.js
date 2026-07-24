@@ -1,4 +1,5 @@
 import { v2ChatApi } from './v2ChatApi.js';
+import { toExperience } from '../features/experience/model/experienceMapper.js';
 
 let jobSequence = 1;
 const jobs = new Map();
@@ -8,42 +9,34 @@ const evidence = new Map();
 const now = () => new Date().toISOString();
 const clone = (value) => structuredClone(value);
 
-const toExperience = (item) => ({
-  id: item.id,
-  domainId: item.domain?.id,
-  domainName: item.domain?.name,
-  projectId: item.project?.id,
-  projectName: item.project?.name,
-  organization: item.project?.organization || '',
-  period: item.period || {},
-  title: item.title,
-  summary: item.summary || '',
-  situation: item.situation || '',
-  actions: item.actions || [],
-  results: item.results || [],
-  role: item.role || '',
-  facts: item.facts || [],
-  skills: item.skills || [],
-  missingInformation: item.missing_information || [],
-  sourceRefs: item.source_ids || [],
-  evidenceCount: item.evidence_count ?? item.source_ids?.length ?? 0,
-  visibility: 'visible',
-  createdAt: item.created_at,
-  updatedAt: item.updated_at,
-  version: item.version,
-});
-
 const ensureEvidence = (experience) => {
-  (experience.source_ids || []).forEach((sourceId, index) => {
-    if (!evidence.has(sourceId)) evidence.set(sourceId, {
-      id: sourceId,
-      rawId: `RAW-${sourceId}`,
-      sourceType: index ? 'file' : 'text',
-      text: experience.summary || `${experience.title}의 원본 근거`,
-      filename: index ? `${experience.title}-근거-${index}.txt` : undefined,
-      capturedAt: experience.created_at,
-      linkedFacts: (experience.facts || []).map((fact) => ({ fact, quote: fact })),
+  (experience.source_refs || []).forEach((source) => {
+    if (!source?.id) return;
+    evidence.set(source.id, {
+      id: source.id,
+      rawId: source.raw_id || `RAW-${source.id}`,
+      sourceType: source.source_type || (source.filename ? 'file' : 'text'),
+      text: source.text || '',
+      filename: source.filename || source.title,
+      capturedAt: source.captured_at,
+      uploadedAt: source.uploaded_at,
+      linkedFacts: source.linked_facts || [],
     });
+  });
+  (experience.source_ids || []).forEach((sourceId, index) => {
+    if (!evidence.has(sourceId)) {
+      const capturedAt = experience.created_at || now();
+      evidence.set(sourceId, {
+        id: sourceId,
+        rawId: `RAW-${sourceId}`,
+        sourceType: index ? 'file' : 'text',
+        text: experience.summary || `${experience.title}의 원본 근거`,
+        filename: index ? `${experience.title}-근거-${index}.txt` : undefined,
+        capturedAt,
+        uploadedAt: index ? capturedAt : undefined,
+        linkedFacts: (experience.facts || []).map((fact) => ({ fact, quote: fact })),
+      });
+    }
   });
 };
 
@@ -65,6 +58,7 @@ jobs.set(seedJob.jobId, seedJob);
 
 export const unifiedMockApi = {
   async getExperience(experienceId) { return toExperience(await v2ChatApi.getExperience(experienceId)); },
+  async createExperience(input) { return toExperience(await v2ChatApi.createExperience(input)); },
   async updateExperience(experienceId, patch) {
     return toExperience(await v2ChatApi.updateExperience(experienceId, { base_version: patch.version, changes: patch.changes }));
   },
@@ -86,6 +80,32 @@ export const unifiedMockApi = {
   async updateEvidence(sourceId, changes) {
     const current = evidence.get(sourceId) || { id: sourceId, sourceType: 'text', text: '' };
     const updated = { ...current, ...changes, updatedAt: now() }; evidence.set(sourceId, updated); return clone(updated);
+  },
+  async unlinkEvidence(experienceId, sourceId) {
+    const experience = await v2ChatApi.getExperience(experienceId);
+    const sourceIds = (experience.source_ids || []).filter((id) => id !== sourceId);
+    if (sourceIds.length === (experience.source_ids || []).length) throw new Error('현재 경험에 연결된 근거가 아닙니다.');
+    ensureEvidence(experience);
+    const remainingSources = sourceIds.map((id) => evidence.get(id)).filter(Boolean);
+    const supportedFacts = new Set(remainingSources.flatMap((source) => (source.linkedFacts || []).map((link) => link.fact)));
+    const unsupportedFacts = (experience.facts || []).filter((fact) => !supportedFacts.has(fact));
+    const factEvidenceStatus = Object.fromEntries((experience.facts || []).map((fact) => [fact, supportedFacts.has(fact) ? 'supported' : 'needs_evidence']));
+    const updated = await v2ChatApi.updateExperience(experienceId, {
+      base_version: experience.version,
+      changes: {
+        source_ids: sourceIds,
+        evidence_count: sourceIds.length,
+        evidence_status: sourceIds.length ? 'verified' : 'missing',
+        fact_evidence_status: factEvidenceStatus,
+      },
+    });
+    return {
+      experience: toExperience(updated),
+      sources: remainingSources.map(clone),
+      unlinkedSourceId: sourceId,
+      sourceDeleted: false,
+      unsupportedFacts,
+    };
   },
   async removeEvidence(sourceId) { evidence.delete(sourceId); return { sourceId, deleted: true }; },
   async analyzeJob(input) {

@@ -18,9 +18,117 @@ function resolveIntents(requestedIntent) {
   return ['auto'];
 }
 
+const cleanText = (value) => String(value || '').replace(/\r\n/g, '\n').trim();
+const firstMeaningfulLine = (value) => cleanText(value).split('\n').map((line) => line.trim()).find(Boolean) || '';
+
+function splitExperienceBlocks(value) {
+  const text = cleanText(value);
+  if (!text) return [];
+  const paragraphs = text.split(/\n\s*\n+/).map(cleanText).filter(Boolean);
+  const experienceLikeParagraphs = paragraphs.filter((paragraph) => !/^(?:요약|상황|행동|결과|역할|역량|스킬|사실|확인된 사실)\s*[:：]/i.test(firstMeaningfulLine(paragraph)) && !/^(?:[-*•]|\d+[.)])\s+/.test(firstMeaningfulLine(paragraph)));
+  if (paragraphs.length > 1 && experienceLikeParagraphs.length >= 2) return paragraphs;
+  const lines = text.split('\n');
+  const starts = lines.reduce((indexes, line, index) => {
+    if (/^(?:#{1,3}\s+|(?:경험|사례|프로젝트|프로젝트·활동)\s*(?:\d+)?\s*[:：]|\d+[.)]\s+(?=경험|프로젝트|사례))/.test(line.trim())) indexes.push(index);
+    return indexes;
+  }, []);
+  if (starts.length < 2) return [text];
+  return starts.map((start, index) => cleanText(lines.slice(start, starts[index + 1] ?? lines.length).join('\n'))).filter(Boolean);
+}
+
+function parseField(text, labels) {
+  const labelPattern = labels.join('|');
+  const match = cleanText(text).match(new RegExp(`(?:^|\\n)\\s*(?:${labelPattern})\\s*[:：]\\s*([\\s\\S]*?)(?=\\n\\s*(?:요약|상황|행동|결과|역할|역량|스킬|사실|경험 분류|프로젝트·활동)\\s*[:：]|$)`, 'i'));
+  return match?.[1]?.trim() || '';
+}
+
+function listField(value) {
+  return cleanText(value).split('\n').map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+}
+
+function inferDomain(text) {
+  const source = cleanText(text);
+  const explicit = source.match(/(?:경험 분류|분류)\s*[:：]\s*([^\n]+)/);
+  if (explicit?.[1]) return explicit[1].trim();
+  if (/직장|회사|업무|서비스|운영|제품|전환|대시보드/.test(source)) return '직장 경험';
+  if (/교육|학습|수업|분석 과정|강의|연구/.test(source)) return '교육·학습';
+  if (/사이드|커뮤니티|개인 프로젝트|앱 출시/.test(source)) return '사이드 프로젝트';
+  if (/멘토|봉사|대외|동아리/.test(source)) return '대외 활동';
+  return '새 경험 분류';
+}
+
+function inferProject(text, index, filename = '') {
+  const source = cleanText(text);
+  const explicit = source.match(/(?:프로젝트·활동|프로젝트|활동)\s*[:：]\s*([^\n]+)/);
+  if (explicit?.[1]) return explicit[1].trim();
+  const title = firstMeaningfulLine(source).replace(/^(?:#{1,3}\s+|\d+[.)]\s+)/, '').trim();
+  if (title && !/^(요약|상황|행동|결과|역할|역량|사실)\s*[:：]?$/i.test(title)) return title.slice(0, 48);
+  if (filename) return filename.replace(/\.[^.]+$/, '').trim() || `새 프로젝트 ${index + 1}`;
+  return `새 프로젝트 ${index + 1}`;
+}
+
+function sourceForMessage(messageId, content, attachmentIds) {
+  const refs = [];
+  if (cleanText(content)) {
+    const id = `SRC-${messageId}`;
+    const source = { id, source_type: 'text', title: '대화 원문', text: cleanText(content), captured_at: timestamp(), linked_facts: [] };
+    store.sources.push(source);
+    refs.push(source);
+  }
+  attachmentIds.forEach((attachmentId) => {
+    const attachment = store.attachments.find((item) => item.id === attachmentId);
+    if (!attachment) return;
+    const source = { id: attachment.id, source_type: 'file', title: attachment.filename, filename: attachment.filename, mime_type: attachment.mime_type, text: attachment.raw_text || '', uploaded_at: attachment.created_at, captured_at: attachment.created_at, linked_facts: [] };
+    store.sources.push(source);
+    refs.push(source);
+  });
+  return refs;
+}
+
+function buildExperienceDrafts(messageId, content, attachmentIds) {
+  const sources = sourceForMessage(messageId, content, attachmentIds);
+  const inputs = [];
+  if (cleanText(content)) inputs.push({ text: cleanText(content), sourceIds: sources.filter((source) => source.source_type === 'text').map((source) => source.id) });
+  sources.filter((source) => source.source_type === 'file').forEach((source) => {
+    const blocks = splitExperienceBlocks(source.text);
+    if (blocks.length) blocks.forEach((text) => inputs.push({ text, sourceIds: [source.id], filename: source.filename }));
+    else inputs.push({ text: '', sourceIds: [source.id], filename: source.filename });
+  });
+  if (!inputs.length) inputs.push({ text: '', sourceIds: [] });
+  const drafts = inputs.flatMap((input) => splitExperienceBlocks(input.text).map((text) => ({ text, sourceIds: input.sourceIds, filename: input.filename })));
+  const normalized = drafts.length ? drafts : inputs;
+  return normalized.map((input, index) => {
+    const text = cleanText(input.text);
+    const title = firstMeaningfulLine(text).replace(/^(?:#{1,3}\s+|\d+[.)]\s+)/, '').trim() || (input.filename ? input.filename.replace(/\.[^.]+$/, '') : `새 경험 ${index + 1}`);
+    const summary = parseField(text, ['요약']) || text || `${input.filename || '입력 자료'}에서 추출한 경험입니다.`;
+    const situation = parseField(text, ['상황']);
+    const actions = listField(parseField(text, ['행동']));
+    const results = listField(parseField(text, ['결과']));
+    const facts = listField(parseField(text, ['사실', '확인된 사실']));
+    const role = parseField(text, ['역할']);
+    const skills = listField(parseField(text, ['역량', '스킬'])).flatMap((item) => item.split(/[,，]/).map((skill) => skill.trim()).filter(Boolean));
+    const linkedFacts = facts.map((fact) => ({ fact, quote: fact }));
+    const mergeFacts = (current) => [...new Map([...current, ...linkedFacts].map((item) => [item.fact, item])).values()];
+    const sourceRefs = sources.filter((source) => input.sourceIds.includes(source.id)).map((source) => ({ ...source, linked_facts: mergeFacts(source.linked_facts || []) }));
+    sourceRefs.forEach((source) => {
+      const storedSource = store.sources.find((item) => item.id === source.id);
+      if (storedSource) storedSource.linked_facts = mergeFacts(storedSource.linked_facts || []);
+    });
+    return {
+      title, summary, situation, actions, results, role, facts, skills,
+      domain: { name: inferDomain(text || title) },
+      project: { name: inferProject(text || title, index, input.filename) },
+      missing_information: ['구체적인 역할과 정량 성과를 확인해 주세요.'],
+      source_ref_ids: input.sourceIds,
+      source_refs: sourceRefs,
+    };
+  });
+}
+
 function makeProposal(conversationId, messageId, content, intents, attachmentIds) {
   if (!intents.some((intent) => ['experience', 'job'].includes(intent))) return null;
   const isJob = intents.includes('job');
+  const jobSourceRefs = isJob ? sourceForMessage(messageId, content, attachmentIds) : [];
   const proposal = {
     id: nextId('PRP'),
     conversation_id: conversationId,
@@ -31,18 +139,11 @@ function makeProposal(conversationId, messageId, content, intents, attachmentIds
     summary: isJob ? '공고 요구사항을 경험과 비교할 준비가 되었습니다.' : '대화에서 경험 후보를 정리했습니다.',
     payload: isJob
       ? { job_draft: { posting_title: '', company_name: '', role_name: '', source_url: '', posting_content: content } }
-      : {
-          domain: { name: '미분류 경험' },
-          project: { name: '새 프로젝트' },
-          experiences: [{
-            title: content.trim().slice(0, 32) || '첨부 파일에서 찾은 경험',
-            summary: content.trim() || '첨부 파일에서 추출한 경험입니다.',
-            situation: '', actions: [], results: [], role: '', facts: [], skills: [],
-            missing_information: ['구체적인 역할과 정량 성과를 확인해 주세요.'],
-            source_ref_ids: attachmentIds,
-          }],
-        },
-    source_refs: [],
+      : (() => {
+          const experiences = buildExperienceDrafts(messageId, content, attachmentIds);
+          return { domain: experiences[0].domain, project: experiences[0].project, experiences };
+        })(),
+    source_refs: isJob ? jobSourceRefs : store.sources.filter((source) => source.id === `SRC-${messageId}` || attachmentIds.includes(source.id)),
     warnings: [],
     created_at: timestamp(),
     updated_at: timestamp(),
@@ -107,16 +208,18 @@ export async function uploadAttachments(files) {
   if (input.length > 5) fail('VALIDATION_ERROR', '파일은 최대 5개까지 올릴 수 있습니다.', 422);
   const total = input.reduce((sum, file) => sum + (file.size || 0), 0);
   if (total > 100 * 1024 * 1024) fail('FILE_TOO_LARGE', '전체 파일 크기는 100MiB 이하여야 합니다.', 413);
-  const attachments = input.map((file) => {
+  const attachments = await Promise.all(input.map(async (file) => {
     if ((file.size || 0) > 25 * 1024 * 1024) fail('FILE_TOO_LARGE', `${file.name}은 25MiB를 초과합니다.`, 413);
+    const isText = file.type === 'text/plain' || file.name?.toLowerCase().endsWith('.txt');
+    const rawText = isText && typeof file.text === 'function' ? await file.text() : '';
     const attachment = {
       id: nextId('ATT'), filename: file.name, mime_type: file.type || 'text/plain', size_bytes: file.size || 0,
       kind: file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf') ? 'pdf' : 'text',
-      status: 'ready', created_at: timestamp(),
+      status: 'ready', created_at: timestamp(), raw_text: rawText,
     };
     store.attachments.push(attachment);
     return attachment;
-  });
+  }));
   await wait(120);
   return snapshot(attachments);
 }
@@ -184,16 +287,33 @@ export async function getProposal(proposalId) {
   return snapshot(find(store.proposals, proposalId, '정리 제안'));
 }
 
-export async function updateProposal(proposalId, { base_version: baseVersion, payload }) {
+export async function updateProposal(proposalId, { base_version: baseVersion, payload, approved_experience_indexes: approvedExperienceIndexes }) {
   const proposal = find(store.proposals, proposalId, '정리 제안');
   if (proposal.version !== baseVersion) fail('VERSION_CONFLICT', '다른 변경 사항이 있습니다. 최신 내용을 확인해 주세요.', 409, { current: snapshot(proposal) });
   if (proposal.status === 'approved' || proposal.status === 'rejected') fail('INVALID_STATE', '처리가 끝난 제안은 수정할 수 없습니다.', 409);
   proposal.payload = snapshot(payload);
+  if (Array.isArray(approvedExperienceIndexes)) proposal.approved_experience_indexes = [...approvedExperienceIndexes].sort((a, b) => a - b);
   proposal.status = 'edited';
   proposal.updated_at = timestamp();
   proposal.version += 1;
   await wait();
   return snapshot(proposal);
+}
+
+function ensureProposalStructure(draft) {
+  const domainName = draft.domain?.name?.trim() || '새 경험 분류';
+  let domain = store.domains.find((item) => item.name.toLowerCase() === domainName.toLowerCase());
+  if (!domain) {
+    domain = { id: nextId('DOM'), name: domainName, created_at: timestamp(), updated_at: timestamp(), version: 1 };
+    store.domains.push(domain);
+  }
+  const projectName = draft.project?.name?.trim() || '새 프로젝트';
+  let project = store.projects.find((item) => item.domain_id === domain.id && item.name.toLowerCase() === projectName.toLowerCase());
+  if (!project) {
+    project = { id: nextId('PROJ'), domain_id: domain.id, name: projectName, organization: draft.project?.organization?.trim() || '', created_at: timestamp(), updated_at: timestamp(), version: 1 };
+    store.projects.push(project);
+  }
+  return { domain: domainRef(domain.id), project: projectRef(project.id) };
 }
 
 export async function approveProposal(proposalId, { base_version: baseVersion, selection } = {}) {
@@ -202,24 +322,31 @@ export async function approveProposal(proposalId, { base_version: baseVersion, s
   if (proposal.status === 'rejected') fail('INVALID_STATE', '거절한 제안은 승인할 수 없습니다.', 409);
   const createdIds = [];
   if (proposal.type !== 'analyze_job' && proposal.status !== 'approved') {
+    const alreadyApproved = new Set(proposal.approved_experience_indexes || []);
     const indexes = selection?.experience_indexes || proposal.payload.experiences.map((_, index) => index);
     for (const index of indexes) {
+      if (alreadyApproved.has(index)) continue;
       const draft = proposal.payload.experiences[index];
       if (!draft) continue;
+      const structure = ensureProposalStructure(draft);
       const experience = {
-        ...snapshot(draft), id: nextId('EXP'), domain: proposal.payload.domain,
-        project: proposal.payload.project, evidence_count: draft.source_ref_ids?.length || 0,
+        ...snapshot(draft), id: nextId('EXP'), ...structure, evidence_count: draft.source_ref_ids?.length || 0,
         evidence_status: draft.source_ref_ids?.length ? 'verified' : 'missing',
-        source_ids: draft.source_ref_ids || [], created_at: timestamp(), updated_at: timestamp(), version: 1,
+        source_ids: draft.source_ref_ids || [], source_refs: draft.source_refs || [], created_at: timestamp(), updated_at: timestamp(), version: 1,
       };
       store.experiences.unshift(experience);
       createdIds.push(experience.id);
+      alreadyApproved.add(index);
     }
+    proposal.approved_experience_indexes = [...alreadyApproved].sort((a, b) => a - b);
   }
-  if (proposal.status !== 'approved') {
+  const allExperiencesApproved = proposal.type === 'analyze_job' || proposal.approved_experience_indexes?.length >= proposal.payload.experiences.length;
+  if (proposal.status !== 'approved' && allExperiencesApproved) {
     proposal.status = 'approved'; proposal.updated_at = timestamp(); proposal.version += 1;
     const conversation = store.conversations.find((item) => item.id === proposal.conversation_id);
     if (conversation) conversation.pending_proposal_count = Math.max(0, conversation.pending_proposal_count - 1);
+  } else if (proposal.status !== 'approved') {
+    proposal.status = 'edited'; proposal.updated_at = timestamp(); proposal.version += 1;
   }
   await wait(100);
   return { proposal: snapshot(proposal), created: { experience_ids: createdIds, job_id: null }, updated: { experience_ids: [] }, approved_at: timestamp() };
@@ -239,7 +366,7 @@ export async function rejectProposal(proposalId, { base_version: baseVersion } =
 export async function listExperiences(filters = {}) {
   const query = filters.query?.trim().toLowerCase();
   let items = store.experiences.filter((item) => {
-    if (query && !`${item.title} ${item.summary} ${item.skills.join(' ')}`.toLowerCase().includes(query)) return false;
+    if (query && !`${item.title} ${item.summary} ${(item.skills || []).join(' ')}`.toLowerCase().includes(query)) return false;
     if (filters.skill && !item.skills.includes(filters.skill)) return false;
     if (filters.evidence_status && item.evidence_status !== filters.evidence_status) return false;
     return true;
@@ -453,6 +580,7 @@ export async function createExperience(input) {
   const experience = {
     ...snapshot(input), domain, project, id: nextId('EXP'), evidence_count: input.source_ids?.length || 0,
     evidence_status: input.source_ids?.length ? 'verified' : 'missing',
+    source_refs: input.source_refs || [],
     created_at: timestamp(), updated_at: timestamp(), version: 1,
   };
   store.experiences.unshift(experience);

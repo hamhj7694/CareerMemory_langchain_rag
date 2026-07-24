@@ -7,6 +7,7 @@ const idPath = (value) => encodeURIComponent(String(value));
 
 export const experienceApi = {
   commit(draft, options = {}) { return apiRequest({ path: '/api/experiences/commit', method: 'POST', body: { clientRequestId: createClientRequestId(), ...draft }, ...options }); },
+  create(draft, options = {}) { const path = '/api/experiences'; return apiMode === 'mock' && !hasMockHandler('POST', path) ? unifiedMockApi.createExperience(draft) : apiRequest({ path, method: 'POST', body: { clientRequestId: createClientRequestId(), ...draft }, ...options }); },
   getTree(options = {}) { const path = '/api/experiences/tree'; return apiMode === 'mock' && !hasMockHandler('GET', path) ? unifiedMockApi.getExperienceTree() : apiRequest({ path, ...options }); },
   get(experienceId, options = {}) { const path = `/api/experiences/${idPath(experienceId)}`; return apiMode === 'mock' && !hasMockHandler('GET', path) ? unifiedMockApi.getExperience(experienceId) : apiRequest({ path, ...options }); },
   update(experienceId, patch, options = {}) { const path = `/api/experiences/${idPath(experienceId)}`; return apiMode === 'mock' && !hasMockHandler('PATCH', path) ? unifiedMockApi.updateExperience(experienceId, patch) : apiRequest({ path, method: 'PATCH', body: { clientRequestId: createClientRequestId(), ...patch }, ...options }); },

@@ -50,6 +50,7 @@ export const mockV2Store = {
   conversations: [],
   messages: [],
   attachments: [],
+  sources: [],
   proposals: [],
   domains: clone(seedDomains),
   projects: clone(seedProjects),
@@ -65,6 +66,7 @@ export function resetMockV2Store() {
   mockV2Store.conversations = [];
   mockV2Store.messages = [];
   mockV2Store.attachments = [];
+  mockV2Store.sources = [];
   mockV2Store.proposals = [];
   mockV2Store.domains = clone(seedDomains);
   mockV2Store.projects = clone(seedProjects);
