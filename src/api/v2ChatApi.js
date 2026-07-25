@@ -1,5 +1,6 @@
 import { AppError } from './AppError.js';
 import { mockV2Store as store, nextId, resetMockV2Store, snapshot, timestamp } from './v2/mockV2Store.js';
+import { fingerprintFile, sha256ArrayBuffer } from '../utils/fileFingerprint.js';
 
 const wait = (milliseconds = 80) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -63,18 +64,53 @@ function reconcileStructureStore() {
   store.experiences.forEach((experience) => {
     const sourceProjectId = experience.project?.id || experience.project_id;
     const sourceDomainId = experience.domain?.id || experience.domain_id;
-    const projectId = projectIdMap.get(sourceProjectId) || sourceProjectId;
-    const project = projects.find((item) => item.id === projectId);
-    const domainId = project?.domain_id || domainIdMap.get(sourceDomainId) || sourceDomainId;
-    const domain = domains.find((item) => item.id === domainId);
-    if (domain) {
-      experience.domain = { id: domain.id, name: domain.name };
-      experience.domain_id = domain.id;
+    const projectId = sourceProjectId ? (projectIdMap.get(sourceProjectId) || sourceProjectId) : '';
+    const sourceDomainName = cleanStructureName(experience.domain?.name || experience.domain_name || experience.domainName);
+    const sourceProjectName = cleanStructureName(experience.project?.name || experience.project_name || experience.projectName);
+    let project = projects.find((item) => item.id === projectId);
+    const domainId = project?.domain_id || (sourceDomainId ? (domainIdMap.get(sourceDomainId) || sourceDomainId) : '');
+    let domain = domains.find((item) => item.id === domainId)
+      || domainByName.get(structureNameKey(sourceDomainName));
+
+    if (!domain) {
+      const name = sourceDomainName || '미분류 경험';
+      domain = {
+        id: nextId('DOM'),
+        name,
+        created_at: experience.created_at || timestamp(),
+        updated_at: timestamp(),
+        version: 1,
+      };
+      domains.push(domain);
+      domainByName.set(structureNameKey(name), domain);
     }
-    if (project) {
-      experience.project = { id: project.id, name: project.name, organization: project.organization || '' };
-      experience.project_id = project.id;
+
+    const projectName = sourceProjectName || '프로젝트·활동 미분류';
+    if (!project) {
+      project = projectByName.get(`${domain.id}:${structureNameKey(projectName)}`);
     }
+    if (!project) {
+      project = {
+        id: nextId('PROJ'),
+        domain_id: domain.id,
+        name: projectName,
+        organization: experience.project?.organization || experience.organization || '',
+        created_at: experience.created_at || timestamp(),
+        updated_at: timestamp(),
+        version: 1,
+      };
+      projects.push(project);
+      projectByName.set(`${domain.id}:${structureNameKey(projectName)}`, project);
+    } else if (project.domain_id !== domain.id && !domains.some((item) => item.id === project.domain_id)) {
+      project.domain_id = domain.id;
+    }
+
+    if (sourceDomainId) domainIdMap.set(sourceDomainId, domain.id);
+    if (sourceProjectId) projectIdMap.set(sourceProjectId, project.id);
+    experience.domain = { id: domain.id, name: domain.name };
+    experience.domain_id = domain.id;
+    experience.project = { id: project.id, name: project.name, organization: project.organization || '' };
+    experience.project_id = project.id;
   });
 
   store.domains = domains;
@@ -86,7 +122,7 @@ function splitExperienceBlocks(value) {
   const text = cleanText(value);
   if (!text) return [];
   const paragraphs = text.split(/\n\s*\n+/).map(cleanText).filter(Boolean);
-  const experienceLikeParagraphs = paragraphs.filter((paragraph) => !/^(?:요약|상황|행동|결과|역할|역량|스킬|사실|확인된 사실)\s*[:：]/i.test(firstMeaningfulLine(paragraph)) && !/^(?:[-*•]|\d+[.)])\s+/.test(firstMeaningfulLine(paragraph)));
+  const experienceLikeParagraphs = paragraphs.filter((paragraph) => !/^(?:요약|상황|행동|결과|역할|역량|스킬|사실|확인된 사실|근거에서 확인된 내용)\s*[:：]/i.test(firstMeaningfulLine(paragraph)) && !/^(?:[-*•]|\d+[.)])\s+/.test(firstMeaningfulLine(paragraph)));
   if (paragraphs.length > 1 && experienceLikeParagraphs.length >= 2) return paragraphs;
   const lines = text.split('\n');
   const starts = lines.reduce((indexes, line, index) => {
@@ -132,29 +168,36 @@ function sourceForMessage(messageId, content, attachmentIds) {
   const refs = [];
   if (cleanText(content)) {
     const id = `SRC-${messageId}`;
-    const source = { id, source_type: 'text', title: '대화 원문', text: cleanText(content), captured_at: timestamp(), linked_facts: [] };
-    store.sources.push(source);
+    const source = store.sources.find((item) => item.id === id)
+      || { id, source_type: 'message_text', title: '대화 원문', message_id: messageId, text: cleanText(content), captured_at: timestamp(), linked_facts: [] };
+    if (!store.sources.some((item) => item.id === id)) store.sources.push(source);
     refs.push(source);
   }
   attachmentIds.forEach((attachmentId) => {
     const attachment = store.attachments.find((item) => item.id === attachmentId);
     if (!attachment) return;
-    const source = { id: attachment.id, source_type: 'file', title: attachment.filename, filename: attachment.filename, mime_type: attachment.mime_type, text: attachment.raw_text || '', uploaded_at: attachment.created_at, captured_at: attachment.created_at, linked_facts: [] };
-    store.sources.push(source);
+    const source = store.sources.find((item) => item.id === attachment.id) || {
+      id: attachment.id,
+      source_type: 'file',
+      title: attachment.filename,
+      filename: attachment.filename,
+      mime_type: attachment.mime_type,
+      size_bytes: attachment.size_bytes,
+      content_hash: attachment.content_hash,
+      original_attachment_id: attachment.original_attachment_id,
+      raw_bytes: attachment.raw_bytes,
+      text: attachment.raw_text || '',
+      uploaded_at: attachment.created_at,
+      captured_at: attachment.created_at,
+      linked_facts: [],
+    };
+    if (!store.sources.some((item) => item.id === attachment.id)) store.sources.push(source);
     refs.push(source);
   });
   return refs;
 }
 
-function buildExperienceDrafts(messageId, content, attachmentIds) {
-  const sources = sourceForMessage(messageId, content, attachmentIds);
-  const inputs = [];
-  if (cleanText(content)) inputs.push({ text: cleanText(content), sourceIds: sources.filter((source) => source.source_type === 'text').map((source) => source.id) });
-  sources.filter((source) => source.source_type === 'file').forEach((source) => {
-    const blocks = splitExperienceBlocks(source.text);
-    if (blocks.length) blocks.forEach((text) => inputs.push({ text, sourceIds: [source.id], filename: source.filename }));
-    else inputs.push({ text: '', sourceIds: [source.id], filename: source.filename });
-  });
+function buildDraftsFromInputs(inputs, sources) {
   if (!inputs.length) inputs.push({ text: '', sourceIds: [] });
   const drafts = inputs.flatMap((input) => splitExperienceBlocks(input.text).map((text) => ({ text, sourceIds: input.sourceIds, filename: input.filename })));
   const normalized = drafts.length ? drafts : inputs;
@@ -165,7 +208,7 @@ function buildExperienceDrafts(messageId, content, attachmentIds) {
     const situation = parseField(text, ['상황']);
     const actions = listField(parseField(text, ['행동']));
     const results = listField(parseField(text, ['결과']));
-    const facts = listField(parseField(text, ['사실', '확인된 사실']));
+    const facts = listField(parseField(text, ['사실', '확인된 사실', '근거에서 확인된 내용']));
     const role = parseField(text, ['역할']);
     const skills = listField(parseField(text, ['역량', '스킬'])).flatMap((item) => item.split(/[,，]/).map((skill) => skill.trim()).filter(Boolean));
     const linkedFacts = facts.map((fact) => ({ fact, quote: fact }));
@@ -176,17 +219,71 @@ function buildExperienceDrafts(messageId, content, attachmentIds) {
       if (storedSource) storedSource.linked_facts = mergeFacts(storedSource.linked_facts || []);
     });
     return {
+      draft_id: nextId('DRF'),
       title, summary, situation, actions, results, role, facts, skills,
       domain: { name: inferDomain(text || title) },
       project: { name: inferProject(text || title, index, input.filename) },
       missing_information: ['구체적인 역할과 정량 성과를 확인해 주세요.'],
       source_ref_ids: input.sourceIds,
       source_refs: sourceRefs,
+      field_citations: {
+        summary: input.sourceIds,
+        situation: input.sourceIds,
+        actions: input.sourceIds,
+        results: input.sourceIds,
+      facts: input.sourceIds,
+      },
+      confidence: text ? 0.68 : 0.35,
+      skill_groups: [],
     };
   });
 }
 
-function makeProposal(conversationId, messageId, content, intents, attachmentIds) {
+function buildExperienceDrafts(messageId, content, attachmentIds) {
+  const sources = sourceForMessage(messageId, content, attachmentIds);
+  const inputs = [];
+  const fileSources = sources.filter((source) => source.source_type === 'file');
+  const combinedText = [cleanText(content), ...fileSources.map((source) => cleanText(source.text))].filter(Boolean).join('\n\n');
+  if (combinedText || sources.length) {
+    inputs.push({
+      text: combinedText,
+      sourceIds: sources.map((source) => source.id),
+      filename: !cleanText(content) && fileSources.length === 1 ? fileSources[0].filename : undefined,
+    });
+  }
+  return buildDraftsFromInputs(inputs, sources);
+}
+
+function buildConversationExperienceDrafts(messages) {
+  const sources = [];
+  const attachmentIds = [...new Set(messages.flatMap((message) => message.attachment_ids || []))];
+  messages.forEach((message) => {
+    sourceForMessage(message.id, message.content, []).forEach((source) => {
+      if (!sources.some((item) => item.id === source.id)) sources.push(source);
+    });
+  });
+  attachmentIds.forEach((attachmentId) => {
+    const attachmentMessage = messages.find((message) => message.attachment_ids?.includes(attachmentId));
+    sourceForMessage(attachmentMessage?.id || 'conversation', '', [attachmentId]).forEach((source) => {
+      if (!sources.some((item) => item.id === source.id)) sources.push(source);
+    });
+  });
+
+  const inputs = [];
+  const fileSources = sources.filter((source) => source.source_type === 'file');
+  const conversationText = [
+    messages.map((message) => cleanText(message.content)).filter(Boolean).join('\n'),
+    ...fileSources.map((source) => cleanText(source.text)),
+  ].filter(Boolean).join('\n\n');
+  inputs.push({
+    text: conversationText,
+    sourceIds: sources.map((source) => source.id),
+    filename: !messages.some((message) => cleanText(message.content)) && fileSources.length === 1 ? fileSources[0].filename : undefined,
+  });
+  return { experiences: buildDraftsFromInputs(inputs, sources), sources, attachmentIds };
+}
+
+function makeProposal(conversationId, messageId, content, intents, attachmentIds, options = {}) {
   if (!intents.some((intent) => ['experience', 'job'].includes(intent))) return null;
   const isJob = intents.includes('job');
   const jobSourceRefs = isJob ? sourceForMessage(messageId, content, attachmentIds) : [];
@@ -199,12 +296,14 @@ function makeProposal(conversationId, messageId, content, intents, attachmentIds
     title: isJob ? '채용공고 분석 제안' : '새 경험 정리 제안',
     summary: isJob ? '공고 요구사항을 경험과 비교할 준비가 되었습니다.' : '대화에서 경험 후보를 정리했습니다.',
     payload: isJob
-      ? { job_draft: { posting_title: '', company_name: '', role_name: '', source_url: '', posting_content: content } }
+      ? { job_draft: { posting_title: '', company_name: '', role_name: '', source_url: '', posting_content: [content, ...jobSourceRefs.filter((source) => source.source_type === 'file').map((source) => source.text)].filter(Boolean).join('\n\n') } }
       : (() => {
-          const experiences = buildExperienceDrafts(messageId, content, attachmentIds);
-          return { domain: experiences[0].domain, project: experiences[0].project, experiences };
+          const experiences = options.experiences || buildExperienceDrafts(messageId, content, attachmentIds);
+          return { domain: experiences[0]?.domain || { name: '' }, project: experiences[0]?.project || { name: '' }, experiences };
         })(),
-    source_refs: isJob ? jobSourceRefs : store.sources.filter((source) => source.id === `SRC-${messageId}` || attachmentIds.includes(source.id)),
+    source_refs: options.sourceRefs || (isJob ? jobSourceRefs : store.sources.filter((source) => source.id === `SRC-${messageId}` || attachmentIds.includes(source.id))),
+    extraction_run_id: options.extractionRunId,
+    analysis_scope: options.analysisScope,
     warnings: [],
     created_at: timestamp(),
     updated_at: timestamp(),
@@ -224,7 +323,8 @@ export async function createConversation({ title = '새 대화' } = {}) {
   await wait();
   const conversation = {
     id: nextId('CONV'), title, status: 'active', message_count: 0,
-    pending_proposal_count: 0, created_at: timestamp(), updated_at: timestamp(), version: 1,
+    pending_proposal_count: 0, extracted_message_ids: [], last_successful_extraction_sequence: 0,
+    created_at: timestamp(), updated_at: timestamp(), version: 1,
   };
   store.conversations.unshift(conversation);
   return snapshot(conversation);
@@ -253,6 +353,7 @@ export async function deleteConversation(conversationId) {
   store.conversations = store.conversations.filter((item) => item.id !== conversationId);
   store.messages = store.messages.filter((item) => item.conversation_id !== conversationId);
   store.proposals = store.proposals.filter((item) => item.conversation_id !== conversationId);
+  store.extractionRuns = store.extractionRuns.filter((item) => item.conversation_id !== conversationId);
   await wait();
   return { deleted_id: conversationId };
 }
@@ -264,19 +365,41 @@ export async function listMessages(conversationId) {
   return { items: snapshot(items), total_count: items.length };
 }
 
+export async function preflightAttachments(descriptors) {
+  const items = Array.from(descriptors || []).map((descriptor) => {
+    const exact = store.attachments.find((item) => item.content_hash && item.content_hash === descriptor.content_hash);
+    if (exact) return { client_id: descriptor.client_id, status: 'exact_duplicate', existing_attachment: snapshot(exact) };
+    const sameName = store.attachments.find((item) => item.filename?.normalize('NFKC').toLocaleLowerCase('ko-KR') === descriptor.filename?.normalize('NFKC').toLocaleLowerCase('ko-KR'));
+    if (sameName) return { client_id: descriptor.client_id, status: 'same_name_different_content', existing_attachment: snapshot(sameName) };
+    return { client_id: descriptor.client_id, status: 'new_file', existing_attachment: null };
+  });
+  await wait(40);
+  return { items };
+}
+
 export async function uploadAttachments(files) {
   const input = Array.from(files || []);
   if (input.length > 5) fail('VALIDATION_ERROR', '파일은 최대 5개까지 올릴 수 있습니다.', 422);
   const total = input.reduce((sum, file) => sum + (file.size || 0), 0);
   if (total > 100 * 1024 * 1024) fail('FILE_TOO_LARGE', '전체 파일 크기는 100MiB 이하여야 합니다.', 413);
-  const attachments = await Promise.all(input.map(async (file) => {
-    if ((file.size || 0) > 25 * 1024 * 1024) fail('FILE_TOO_LARGE', `${file.name}은 25MiB를 초과합니다.`, 413);
+  const attachments = await Promise.all(input.map(async (selection) => {
+    if (selection.existingAttachmentId) {
+      return { ...snapshot(find(store.attachments, selection.existingAttachmentId, '첨부 파일')), reused: true };
+    }
+    const file = selection.file || selection;
+    if ((selection.size || file.size || 0) > 25 * 1024 * 1024) fail('FILE_TOO_LARGE', `${selection.name || file.name}은 25MiB를 초과합니다.`, 413);
     const isText = file.type === 'text/plain' || file.name?.toLowerCase().endsWith('.txt');
     const rawText = isText && typeof file.text === 'function' ? await file.text() : '';
+    const rawBytes = typeof file.arrayBuffer === 'function' ? await file.arrayBuffer() : null;
+    const contentHash = selection.contentHash || (rawBytes ? await sha256ArrayBuffer(rawBytes) : await fingerprintFile(file));
+    const exact = store.attachments.find((item) => item.content_hash === contentHash);
+    if (exact) return { ...snapshot(exact), reused: true };
+    const sameName = store.attachments.find((item) => item.filename?.normalize('NFKC').toLocaleLowerCase('ko-KR') === file.name?.normalize('NFKC').toLocaleLowerCase('ko-KR'));
     const attachment = {
       id: nextId('ATT'), filename: file.name, mime_type: file.type || 'text/plain', size_bytes: file.size || 0,
       kind: file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf') ? 'pdf' : 'text',
-      status: 'ready', created_at: timestamp(), raw_text: rawText,
+      status: 'ready', created_at: timestamp(), raw_text: rawText, raw_bytes: rawBytes, content_hash: contentHash,
+      original_attachment_id: selection.previousAttachmentId || sameName?.id || null,
     };
     store.attachments.push(attachment);
     return attachment;
@@ -301,22 +424,34 @@ function createMessagePair(conversationId, input) {
   const intents = resolveIntents(input.intent || 'auto');
   const userMessage = {
     id: nextId('MSG'), conversation_id: conversationId, role: 'user', status: 'completed', content,
+    sequence: conversation.message_count + 1,
     requested_intent: input.intent || 'auto', resolved_intents: intents, attachment_ids: attachmentIds,
+    attachment_refs: attachmentIds.map((attachmentId) => {
+      const attachment = find(store.attachments, attachmentId, '첨부 파일');
+      return { id: attachment.id, filename: attachment.filename, mime_type: attachment.mime_type, size_bytes: attachment.size_bytes };
+    }),
     citations: [], proposal_ids: [], actions: [], created_at: timestamp(), completed_at: timestamp(),
   };
   const proposal = makeProposal(conversationId, userMessage.id, content, intents, attachmentIds);
   const response = assistantText(intents, proposal);
   const assistantMessage = {
     id: nextId('MSG'), conversation_id: conversationId, role: 'assistant', status: 'completed', content: response,
+    sequence: conversation.message_count + 2,
     requested_intent: 'auto', resolved_intents: intents, attachment_ids: [], citations: [],
     proposal_ids: proposal ? [proposal.id] : [],
     actions: proposal ? [{ type: 'review_proposal', label: '정리 제안 확인', target_id: proposal.id }] : [],
     created_at: timestamp(), completed_at: timestamp(),
   };
   store.messages.push(userMessage, assistantMessage);
+  const extractedMessageIds = new Set(conversation.extracted_message_ids || []);
+  if (proposal?.type === 'create_experiences') extractedMessageIds.add(userMessage.id);
   Object.assign(conversation, {
     message_count: conversation.message_count + 2,
     pending_proposal_count: conversation.pending_proposal_count + (proposal ? 1 : 0),
+    extracted_message_ids: [...extractedMessageIds],
+    last_successful_extraction_sequence: proposal?.type === 'create_experiences'
+      ? Math.max(conversation.last_successful_extraction_sequence || 0, userMessage.sequence)
+      : conversation.last_successful_extraction_sequence || 0,
     last_message_preview: response,
     updated_at: timestamp(),
     version: conversation.version + 1,
@@ -326,7 +461,114 @@ function createMessagePair(conversationId, input) {
 
 export async function sendMessage(conversationId, input) {
   await wait(160);
-  return snapshot(createMessagePair(conversationId, input).assistantMessage);
+  const result = createMessagePair(conversationId, input);
+  return snapshot({ ...result.assistantMessage, request_message_id: result.userMessage.id });
+}
+
+export async function getConversationExtractionStatus(conversationId) {
+  const conversation = find(store.conversations, conversationId, '대화');
+  const extracted = new Set(conversation.extracted_message_ids || []);
+  const pendingMessages = store.messages.filter((message) => message.conversation_id === conversationId && message.role === 'user' && !extracted.has(message.id));
+  const attachmentIds = [...new Set(pendingMessages.flatMap((message) => message.attachment_ids || []))];
+  await wait();
+  return {
+    conversation_id: conversationId,
+    unprocessed_message_count: pendingMessages.length,
+    unprocessed_attachment_count: attachmentIds.length,
+    last_successful_extraction_sequence: conversation.last_successful_extraction_sequence || 0,
+    last_extraction_at: conversation.last_extraction_at || null,
+  };
+}
+
+export async function extractConversationExperiences(conversationId, { client_request_id: clientRequestId } = {}) {
+  const conversation = find(store.conversations, conversationId, '대화');
+  const previousRun = clientRequestId && store.extractionRuns.find((item) => item.client_request_id === clientRequestId && item.status === 'succeeded');
+  if (previousRun) {
+    return snapshot({
+      run: previousRun,
+      message: find(store.messages, previousRun.assistant_message_id, '메시지'),
+      proposal: find(store.proposals, previousRun.proposal_id, '정리 제안'),
+      conversation,
+    });
+  }
+
+  const extracted = new Set(conversation.extracted_message_ids || []);
+  const messages = store.messages.filter((message) => message.conversation_id === conversationId && message.role === 'user' && !extracted.has(message.id));
+  if (!messages.length) fail('NO_NEW_CONTENT', '새로 정리할 대화나 파일이 없습니다.', 409);
+
+  const fromSequence = Math.min(...messages.map((message) => message.sequence || 0));
+  const toSequence = Math.max(...messages.map((message) => message.sequence || 0));
+  const run = {
+    id: nextId('RUN'),
+    conversation_id: conversationId,
+    from_sequence: fromSequence,
+    to_sequence: toSequence,
+    message_ids: messages.map((message) => message.id),
+    attachment_ids: [...new Set(messages.flatMap((message) => message.attachment_ids || []))],
+    status: 'running',
+    model_version: 'mock-experience-structurer-v1',
+    prompt_version: 'experience-flow-v1',
+    schema_version: 'experience-draft-v1',
+    client_request_id: clientRequestId || nextId('REQ'),
+    started_at: timestamp(),
+  };
+  store.extractionRuns.unshift(run);
+
+  try {
+    const built = buildConversationExperienceDrafts(messages);
+    const analysisScope = {
+      message_count: messages.length,
+      attachment_count: built.attachmentIds.length,
+      from_sequence: fromSequence,
+      to_sequence: toSequence,
+    };
+    const proposal = makeProposal(
+      conversationId,
+      messages.at(-1).id,
+      messages.map((message) => message.content).filter(Boolean).join('\n'),
+      ['experience'],
+      built.attachmentIds,
+      { experiences: built.experiences, sourceRefs: built.sources, extractionRunId: run.id, analysisScope },
+    );
+    const assistantMessage = {
+      id: nextId('MSG'), conversation_id: conversationId, role: 'assistant', status: 'completed',
+      content: `최근 대화 ${messages.length}개와 파일 ${built.attachmentIds.length}개에서 경험 초안 ${built.experiences.length}개를 정리했습니다.`,
+      sequence: conversation.message_count + 1,
+      requested_intent: 'experience', resolved_intents: ['experience'], attachment_ids: [],
+      citations: built.sources.map((source) => ({
+        source_ref_id: source.id,
+        source_type: source.source_type,
+        message_id: source.message_id,
+        label: source.filename || source.title || '원본 근거',
+      })),
+      proposal_ids: [proposal.id],
+      actions: [{ type: 'review_proposal', label: '경험 초안 확인', target_id: proposal.id }],
+      created_at: timestamp(), completed_at: timestamp(),
+    };
+    store.messages.push(assistantMessage);
+    messages.forEach((message) => extracted.add(message.id));
+    Object.assign(conversation, {
+      message_count: conversation.message_count + 1,
+      pending_proposal_count: conversation.pending_proposal_count + 1,
+      extracted_message_ids: [...extracted],
+      last_successful_extraction_sequence: toSequence,
+      last_extraction_at: timestamp(),
+      last_message_preview: assistantMessage.content,
+      updated_at: timestamp(),
+      version: conversation.version + 1,
+    });
+    Object.assign(run, {
+      status: 'succeeded',
+      proposal_id: proposal.id,
+      assistant_message_id: assistantMessage.id,
+      completed_at: timestamp(),
+    });
+    await wait(180);
+    return snapshot({ run, message: assistantMessage, proposal, conversation });
+  } catch (error) {
+    Object.assign(run, { status: 'failed', completed_at: timestamp(), error: { message: error?.message || '경험 구조화에 실패했습니다.' } });
+    throw error;
+  }
 }
 
 export async function* streamMessage(conversationId, input) {
@@ -414,13 +656,47 @@ export async function approveProposal(proposalId, { base_version: baseVersion, s
   return { proposal: snapshot(proposal), created: { experience_ids: createdIds, job_id: null }, updated: { experience_ids: [] }, approved_at: timestamp() };
 }
 
+export async function discardUnapprovedProposalExperiences(proposalId, { base_version: baseVersion } = {}) {
+  const proposal = find(store.proposals, proposalId, '정리 제안');
+  if (baseVersion != null && proposal.version !== baseVersion) fail('VERSION_CONFLICT', '제안 버전이 변경되었습니다.', 409);
+  if (proposal.type === 'analyze_job') fail('INVALID_STATE', '채용공고 제안에는 이 작업을 사용할 수 없습니다.', 409);
+  if (proposal.status === 'rejected') fail('INVALID_STATE', '삭제된 제안입니다.', 409);
+
+  const approvedIndexes = new Set(proposal.approved_experience_indexes || []);
+  const approvedDrafts = (proposal.payload.experiences || []).filter((_, index) => approvedIndexes.has(index));
+  if (!approvedDrafts.length) return rejectProposal(proposalId, { base_version: baseVersion });
+
+  proposal.payload.experiences = approvedDrafts;
+  proposal.approved_experience_indexes = approvedDrafts.map((_, index) => index);
+  proposal.status = 'approved';
+  proposal.updated_at = timestamp();
+  proposal.version += 1;
+  const conversation = store.conversations.find((item) => item.id === proposal.conversation_id);
+  if (conversation) conversation.pending_proposal_count = Math.max(0, conversation.pending_proposal_count - 1);
+  await wait();
+  return snapshot(proposal);
+}
+
 export async function rejectProposal(proposalId, { base_version: baseVersion } = {}) {
   const proposal = find(store.proposals, proposalId, '정리 제안');
   if (baseVersion != null && proposal.version !== baseVersion) fail('VERSION_CONFLICT', '제안 버전이 변경되었습니다.', 409);
   if (proposal.status === 'approved') fail('INVALID_STATE', '승인한 제안은 거절할 수 없습니다.', 409);
   proposal.status = 'rejected'; proposal.updated_at = timestamp(); proposal.version += 1;
   const conversation = store.conversations.find((item) => item.id === proposal.conversation_id);
-  if (conversation) conversation.pending_proposal_count = Math.max(0, conversation.pending_proposal_count - 1);
+  if (conversation) {
+    conversation.pending_proposal_count = Math.max(0, conversation.pending_proposal_count - 1);
+    if (proposal.type === 'create_experiences') {
+      const run = proposal.extraction_run_id && store.extractionRuns.find((item) => item.id === proposal.extraction_run_id);
+      const releasedMessageIds = run?.message_ids || [proposal.originating_message_id];
+      const released = new Set(releasedMessageIds);
+      conversation.extracted_message_ids = (conversation.extracted_message_ids || []).filter((id) => !released.has(id));
+      const remainingSequences = store.messages
+        .filter((message) => conversation.extracted_message_ids.includes(message.id))
+        .map((message) => message.sequence || 0);
+      conversation.last_successful_extraction_sequence = remainingSequences.length ? Math.max(...remainingSequences) : 0;
+      if (run) run.status = 'rejected';
+    }
+  }
   await wait();
   return snapshot(proposal);
 }
@@ -693,9 +969,9 @@ export async function deleteExperience(experienceId, { version, confirm } = {}) 
 
 export const v2ChatApi = {
   createConversation, listConversations, getConversation, updateConversation, deleteConversation,
-  listMessages, sendMessage, streamMessage,
-  uploadAttachments, deleteAttachment,
-  getProposal, updateProposal, approveProposal, rejectProposal,
+  listMessages, sendMessage, streamMessage, getConversationExtractionStatus, extractConversationExperiences,
+  preflightAttachments, uploadAttachments, deleteAttachment,
+  getProposal, updateProposal, approveProposal, discardUnapprovedProposalExperiences, rejectProposal,
   listExperiences, getExperience, createExperience, updateExperience,
   getExperienceDeletionImpact, deleteExperience,
   listStructure, listDomains, createDomain, updateDomain, deleteDomain,

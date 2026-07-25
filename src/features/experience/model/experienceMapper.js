@@ -1,3 +1,5 @@
+import { toExperienceContent, toExperienceContentChanges } from './experienceContent.js';
+
 const list = (value) => Array.isArray(value) ? value.filter(Boolean) : [];
 
 export function toExperience(item = {}) {
@@ -5,7 +7,9 @@ export function toExperience(item = {}) {
   const project = item.project || {};
   const sourceReferences = list(item.sourceRefs || item.source_refs);
   const sourceIds = item.evidenceIds || item.source_ids || sourceReferences.map((source) => typeof source === 'string' ? source : source.id).filter(Boolean);
+  const content = toExperienceContent(item);
   return {
+    ...content,
     id: item.id || '',
     version: item.version ?? 0,
     status: item.status || 'confirmed',
@@ -15,16 +19,8 @@ export function toExperience(item = {}) {
     projectName: item.projectName || project.name || '',
     organization: item.organization || project.organization || '',
     period: item.period || {},
-    title: item.title || '',
-    summary: item.summary || '',
-    role: item.role || '',
     roles: list(item.roles || item.role_tags),
-    situation: item.situation || '',
-    actions: list(item.actions),
-    results: list(item.results),
-    skills: list(item.skills),
     skillLinks: list(item.skillLinks || item.skill_links),
-    facts: list(item.facts),
     factEvidenceStatus: item.factEvidenceStatus || item.fact_evidence_status || {},
     missingInformation: list(item.missingInformation || item.missing_information),
     evidenceIds: list(sourceIds),
@@ -38,16 +34,9 @@ export function toExperience(item = {}) {
 
 export function toExperienceCreateInput(experience) {
   return {
+    ...toExperienceContentChanges(experience),
     project_id: experience.projectId,
-    title: experience.title,
-    summary: experience.summary,
-    role: experience.role,
-    situation: experience.situation,
-    actions: list(experience.actions),
-    results: list(experience.results),
-    skills: list(experience.skills),
     skill_links: list(experience.skillLinks),
-    facts: list(experience.facts),
     missing_information: list(experience.missingInformation),
     source_ids: list(experience.evidenceIds),
     source_refs: list(experience.sourceRefs),
@@ -57,15 +46,8 @@ export function toExperienceCreateInput(experience) {
 
 export function toExperienceChanges(experience) {
   return {
-    title: experience.title,
-    summary: experience.summary,
-    role: experience.role,
-    situation: experience.situation,
-    actions: list(experience.actions),
-    results: list(experience.results),
-    skills: list(experience.skills),
+    ...toExperienceContentChanges(experience),
     skill_links: list(experience.skillLinks),
-    facts: list(experience.facts),
     missing_information: list(experience.missingInformation),
     source_ids: list(experience.evidenceIds),
     source_refs: list(experience.sourceRefs),

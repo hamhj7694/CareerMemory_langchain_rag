@@ -1,29 +1,28 @@
-import { useId, useRef } from 'react';
-
-const ACCEPTED_TYPES = ['application/pdf', 'text/plain'];
-const MAX_FILE_COUNT = 5;
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
-
-const fileKey = (file) => `${file.name}-${file.size}-${file.lastModified}`;
+import { useId, useRef, useState } from 'react';
+import { v2ChatApi } from '../../api/v2ChatApi.js';
+import { EVIDENCE_FILE_LIMITS, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../evidence/model/evidenceFileSelection.js';
 
 export function ChatComposer({ mode, onModeChange, text, onTextChange, files, onFilesChange, onSubmit, busy }) {
   const inputId = useId();
   const fileInput = useRef(null);
-  const addFiles = (event) => {
+  const [fileError, setFileError] = useState('');
+  const [fileNotice, setFileNotice] = useState('');
+  const [checkingFiles, setCheckingFiles] = useState(false);
+  const addFiles = async (event) => {
     const incoming = [...(event.target.files ?? [])];
-    const valid = incoming.filter((file) => ACCEPTED_TYPES.includes(file.type) && file.size <= MAX_FILE_BYTES);
-    const unique = [...files, ...valid].filter((file, index, all) => all.findIndex((item) => fileKey(item) === fileKey(file)) === index);
-    const next = [];
-    let bytes = 0;
-    for (const file of unique.slice(0, MAX_FILE_COUNT)) {
-      if (bytes + file.size <= MAX_TOTAL_BYTES) {
-        next.push(file);
-        bytes += file.size;
-      }
-    }
-    onFilesChange(next);
     event.target.value = '';
+    if (!incoming.length) return;
+    setCheckingFiles(true); setFileError(''); setFileNotice('');
+    try {
+      const result = await mergeEvidenceFileSelections(files, incoming, v2ChatApi.preflightAttachments);
+      onFilesChange(result.files);
+      setFileError(result.error);
+      setFileNotice(result.notice);
+    } catch (reason) {
+      setFileError(reason?.message || '파일의 중복 여부를 확인하지 못했습니다.');
+    } finally {
+      setCheckingFiles(false);
+    }
   };
 
   const handleKeyDown = (event) => {
@@ -35,12 +34,14 @@ export function ChatComposer({ mode, onModeChange, text, onTextChange, files, on
 
   return <div className="v2-composer">
     {files.length > 0 && <ul className="v2-attachments" aria-label="첨부 파일">
-      {files.map((file) => <li key={fileKey(file)}>
+      {files.map((file) => <li key={evidenceFileKey(file)}>
         <span aria-hidden="true">▧</span>
-        <span><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(1)}MiB</small></span>
+        <span><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(1)}MiB · {evidenceFileStatusLabel(file)}</small></span>
         <button type="button" onClick={() => onFilesChange(files.filter((item) => item !== file))} aria-label={`${file.name} 제거`}>×</button>
       </li>)}
     </ul>}
+    {fileError && <p className="v2-composer__error" role="alert">{fileError}</p>}
+    {fileNotice && <p className="v2-composer__file-notice" role="status">{fileNotice}</p>}
     <label className="sr-only" htmlFor={inputId}>Career Memory와 대화하기</label>
     <textarea
       id={inputId}
@@ -60,8 +61,8 @@ export function ChatComposer({ mode, onModeChange, text, onTextChange, files, on
       </div>
       <div className="v2-composer__actions">
         <input ref={fileInput} className="sr-only" type="file" multiple accept=".pdf,.txt,application/pdf,text/plain" onChange={addFiles} />
-        <button type="button" className="v2-icon-button" onClick={() => fileInput.current?.click()} disabled={busy || files.length >= MAX_FILE_COUNT} aria-label="파일 첨부">＋</button>
-        <button type="button" className="v2-send-button" onClick={onSubmit} disabled={busy || (!text.trim() && files.length === 0)} aria-label="메시지 보내기">{busy ? '…' : '↑'}</button>
+        <button type="button" className="v2-icon-button" onClick={() => fileInput.current?.click()} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} aria-label="파일 첨부">{checkingFiles ? '…' : '＋'}</button>
+        <button type="button" className="v2-send-button" onClick={onSubmit} disabled={busy || checkingFiles || (!text.trim() && files.length === 0)} aria-label="메시지 보내기">{busy || checkingFiles ? '…' : '↑'}</button>
       </div>
     </div>
     <small className="v2-composer__hint">Enter로 전송 · PDF/TXT 최대 5개 · 파일당 25MiB</small>

@@ -1,54 +1,7 @@
 import { useState } from 'react';
+import { ExperienceDraftEditor } from './ExperienceDraftEditor.jsx';
 
-const lines = (value) => String(value || '').split('\n').map((item) => item.trim()).filter(Boolean);
-const joined = (value) => (value || []).join('\n');
-const collapsedDrafts = new Map();
-
-function DetailList({ items, empty }) {
-  return items?.length ? <ul>{items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="v2-draft-empty">{empty}</p>;
-}
-
-function ExperienceDraftEditor({ item, index, collapseKey, editing, approved, saving, onUpdate, onEdit, onSave, onCancel, onDelete, onApprove }) {
-  const [collapsed, setCollapsed] = useState(() => collapsedDrafts.get(collapseKey) ?? false);
-  const toggleCollapsed = () => setCollapsed((value) => {
-    const next = !value;
-    collapsedDrafts.set(collapseKey, next);
-    return next;
-  });
-  const update = (key, value) => onUpdate(index, key, value);
-  return <div className={`v2-draft-structure v2-draft-structure--detail ${editing ? 'is-editing' : ''}`}>
-    <header className={`v2-draft-structure__domain-bar ${collapsed ? 'is-collapsed' : ''}`} onClick={toggleCollapsed}>
-      <span>경험 분류</span>
-      {editing ? <input aria-label={`경험 분류 ${index + 1}`} value={item.domain || ''} onClick={(event) => event.stopPropagation()} onChange={(event) => update('domain', event.target.value)} /> : <strong>{item.domain || '미분류 경험'}</strong>}
-      <div className="v2-draft-structure__actions" onClick={(event) => event.stopPropagation()}>
-        {approved ? <strong className="v2-draft-structure__saved">저장되었습니다</strong> : <>{editing ? <><button type="button" onClick={onCancel}>취소</button><button type="button" disabled={saving} onClick={onSave}>{saving ? '저장 중…' : '수정 저장'}</button></> : <button type="button" onClick={onEdit}>수정</button>}<button type="button" className="is-danger" disabled={saving} onClick={onDelete}>삭제</button><button type="button" className="is-primary" disabled={saving} onClick={onApprove}>경험으로 저장</button></>}
-      </div>
-      <button type="button" className="v2-draft-structure__collapse" aria-label={`${item.domain || '경험 분류'} ${collapsed ? '펼치기' : '접기'}`} aria-expanded={!collapsed} onClick={(event) => { event.stopPropagation(); toggleCollapsed(); }}>{collapsed ? '⌄' : '⌃'}</button>
-    </header>
-    {!collapsed && <div className="v2-draft-project">
-      <div><span>프로젝트·활동</span>{editing ? <input aria-label={`프로젝트·활동 ${index + 1}`} value={item.project || ''} onChange={(event) => update('project', event.target.value)} /> : <strong>{item.project || '새 프로젝트'}</strong>}</div>
-      <article className="v2-draft-detail">
-        {editing ? <input className="v2-draft-title-input" aria-label={`경험 제목 ${index + 1}`} value={item.title || ''} onChange={(event) => update('title', event.target.value)} /> : <h3>{item.title || '제목 미입력'}</h3>}
-        <div className="v2-draft-detail-grid">
-          <div className="v2-draft-detail-main">
-            <section><h4>요약</h4>{editing ? <textarea rows="3" value={item.summary || ''} onChange={(event) => update('summary', event.target.value)} /> : <p>{item.summary || '정리된 요약이 없습니다.'}</p>}</section>
-            <section><h4>상황</h4>{editing ? <textarea rows="3" value={item.situation || ''} onChange={(event) => update('situation', event.target.value)} /> : <p>{item.situation || '확인된 상황이 없습니다.'}</p>}</section>
-            <section><h4>행동</h4>{editing ? <textarea rows="4" value={joined(item.actions)} onChange={(event) => update('actions', lines(event.target.value))} placeholder="행동을 줄바꿈으로 구분해 주세요." /> : <DetailList items={item.actions} empty="확인된 행동이 없습니다." />}</section>
-            <section><h4>결과</h4>{editing ? <textarea rows="3" value={joined(item.results)} onChange={(event) => update('results', lines(event.target.value))} placeholder="결과를 줄바꿈으로 구분해 주세요." /> : <DetailList items={item.results} empty="확인된 결과가 없습니다." />}</section>
-          </div>
-          <aside>
-            <section><h4>나의 역할</h4>{editing ? <input value={item.role || ''} onChange={(event) => update('role', event.target.value)} /> : <p>{item.role || '확인된 역할이 없습니다.'}</p>}</section>
-            <section><h4>역량</h4>{editing ? <textarea rows="3" value={joined(item.skills)} onChange={(event) => update('skills', lines(event.target.value))} placeholder="역량을 줄바꿈으로 구분해 주세요." /> : <div className="v2-skill-list">{item.skills?.length ? item.skills.map((skill) => <span key={skill}>{skill}</span>) : <p className="v2-draft-empty">확인된 역량이 없습니다.</p>}</div>}</section>
-            <section><h4>확인된 사실</h4>{editing ? <textarea rows="4" value={joined(item.facts)} onChange={(event) => update('facts', lines(event.target.value))} placeholder="사실을 줄바꿈으로 구분해 주세요." /> : <DetailList items={item.facts} empty="확인된 사실이 없습니다." />}</section>
-            <section className="v2-draft-evidence"><h4>원본 근거</h4><p>원본 {item.evidenceCount || item.source_ref_ids?.length || 0}개와 연결됨</p></section>
-          </aside>
-        </div>
-      </article>
-    </div>}
-  </div>;
-}
-
-export function InlineProposalCard({ proposal, onApprove, onReject, onChange, onRemoveExperience, onEditingChange }) {
+export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRemainingExperiences, onChange, onRemoveExperience, onEditingChange, showBatchActions = false }) {
   const [editing, setEditing] = useState(false);
   const [editingIndex, setEditingIndex] = useState(null);
   const [draft, setDraft] = useState(() => proposal ? structuredClone(proposal) : {});
@@ -96,6 +49,38 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onChange, on
     } catch (reason) { setError(reason?.message ?? '초안을 삭제하지 못했습니다.'); }
     finally { setSaving(false); }
   };
+  const discardRemainingExperiences = async () => {
+    const pendingCount = (activeDraft.experiences || []).filter((item) => !item.approved).length;
+    if (!pendingCount || !window.confirm('저장하지 않은 경험 초안을 모두 삭제할까요? 이미 저장된 경험은 유지됩니다.')) return;
+    setSaving(true); setError('');
+    try {
+      const nextProposal = onDiscardRemainingExperiences
+        ? await onDiscardRemainingExperiences(activeDraft)
+        : await onReject(activeDraft);
+      if (nextProposal) setDraft(nextProposal);
+    }
+    catch (reason) { setError(reason?.message ?? '남은 초안을 삭제하지 못했습니다.'); }
+    finally { setSaving(false); }
+  };
+  const saveAllExperiences = async () => {
+    const pendingIndexes = (activeDraft.experiences || []).map((item, index) => ({ item, index })).filter(({ item }) => !item.approved).map(({ index }) => index);
+    if (!pendingIndexes.length || !window.confirm(`저장하지 않은 경험 초안 ${pendingIndexes.length}개를 모두 저장할까요?`)) return;
+    setSaving(true); setError('');
+    try {
+      let current = activeDraft;
+      for (const index of pendingIndexes) {
+        const item = current.experiences?.[index];
+        if (!item || item.approved) continue;
+        const sourceIndex = item.sourceIndex ?? index;
+        const draftId = item.draft_id;
+        const nextProposal = await onApprove({ ...current, selection: { experience_indexes: [sourceIndex], ...(draftId ? { draft_id: draftId } : {}) } });
+        if (!nextProposal) return;
+        current = nextProposal;
+        setDraft(nextProposal);
+      }
+    } catch (reason) { setError(reason?.message ?? '경험 초안을 모두 저장하지 못했습니다.'); }
+    finally { setSaving(false); }
+  };
   const save = async () => {
     setSaving(true); setError('');
     try { const updated = await onChange(activeDraft); setDraft(updated); setEditing(false); onEditingChange?.(false); return updated; }
@@ -122,10 +107,20 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onChange, on
     <footer><button type="button" className="is-danger" onClick={() => onReject(proposal)}>삭제</button>{editing ? <><button type="button" onClick={() => { setDraft(structuredClone(proposal)); setEditing(false); setError(''); onEditingChange?.(false); }}>취소</button><button type="button" disabled={saving} onClick={save}>{saving ? '저장 중…' : '수정 저장'}</button></> : <button type="button" onClick={beginEditing}>내용 확인·수정</button>}<button type="button" className="is-primary" disabled={saving} onClick={approveJob}>{saving ? '처리 중…' : '분석 시작'}</button></footer>
   </section>;
 
-  const experienceDrafts = activeDraft.experiences?.length ? activeDraft.experiences : [activeDraft];
+  const experienceDrafts = Array.isArray(activeDraft.experiences) ? activeDraft.experiences : [activeDraft];
+  const pendingExperienceCount = experienceDrafts.filter((item) => !item.approved).length;
   return <section className="v2-inline-proposal is-experience">
-    <div className="v2-inline-proposal__heading"><span>경험 초안 · {experienceDrafts.length}개</span><em>{editing ? '수정 모드' : 'AI 초안'}</em></div>
-    <div className="v2-experience-draft-list">{experienceDrafts.map((item, index) => <ExperienceDraftEditor key={`${item.draft_id || item.sourceIndex || 'draft'}-${index}`} collapseKey={`${proposal.id}:${item.draft_id || item.sourceIndex || `draft-${index}`}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>
+    <div className="v2-inline-proposal__heading"><span>경험 초안 · {experienceDrafts.length}개{activeDraft.analysisScope && <small>대화 {activeDraft.analysisScope.message_count}개 · 파일 {activeDraft.analysisScope.attachment_count}개 기준</small>}</span><em>{editing ? '수정 모드' : 'AI 초안'}</em></div>
+    {experienceDrafts.length
+      ? <div className="v2-experience-draft-list">{experienceDrafts.map((item, index) => <ExperienceDraftEditor key={`${item.draft_id || item.sourceIndex || 'draft'}-${index}`} collapseKey={`${proposal.id}:${item.draft_id || item.sourceIndex || `draft-${index}`}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>
+      : <div className="v2-draft-zero-state"><strong>정리할 경험 후보를 찾지 못했습니다.</strong><p>대화에 프로젝트, 역할, 행동이나 결과를 조금 더 구체적으로 남긴 뒤 다시 정리해 주세요.</p><button type="button" onClick={() => onReject(proposal)}>초안 닫기</button></div>}
     {error && <p className="v2-proposal-error" role="alert">{error}</p>}
+    {showBatchActions && experienceDrafts.length > 0 && <footer className="v2-draft-batch-footer">
+      <span>저장하지 않은 초안 {pendingExperienceCount}개</span>
+      <div>
+        <button type="button" className="is-danger" disabled={!pendingExperienceCount || saving || editingIndex !== null} onClick={discardRemainingExperiences}>나머지 삭제</button>
+        <button type="button" className="is-primary" disabled={!pendingExperienceCount || saving || editingIndex !== null} onClick={saveAllExperiences}>{saving ? '처리 중…' : '전체 저장'}</button>
+      </div>
+    </footer>}
   </section>;
 }

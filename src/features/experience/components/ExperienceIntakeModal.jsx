@@ -1,16 +1,43 @@
 import { useState } from 'react';
+import { v2ChatApi } from '../../../api/v2ChatApi.js';
+import { EVIDENCE_FILE_LIMITS, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../../evidence/model/evidenceFileSelection.js';
 
 export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }) {
   const [content, setContent] = useState('');
   const [files, setFiles] = useState([]);
+  const [fileError, setFileError] = useState('');
+  const [fileNotice, setFileNotice] = useState('');
+  const [checkingFiles, setCheckingFiles] = useState(false);
 
   if (!open) return null;
 
-  const canAnalyze = Boolean(content.trim() || files.length > 0);
+  const canAnalyze = Boolean(content.trim() || files.length > 0) && !checkingFiles;
+  const addFiles = async (event) => {
+    const incoming = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!incoming.length) return;
+    setCheckingFiles(true); setFileError(''); setFileNotice('');
+    try {
+      const result = await mergeEvidenceFileSelections(files, incoming, v2ChatApi.preflightAttachments);
+      setFiles(result.files);
+      setFileError(result.error);
+      setFileNotice(result.notice);
+    } catch (reason) {
+      setFileError(reason?.message || '파일의 중복 여부를 확인하지 못했습니다.');
+    } finally {
+      setCheckingFiles(false);
+    }
+  };
   const submit = async (event) => {
     event.preventDefault();
     if (!canAnalyze || busy) return;
     await onAnalyze({ content: content.trim(), files });
+    setContent(''); setFiles([]); setFileError(''); setFileNotice('');
+  };
+  const close = () => {
+    if (busy || checkingFiles) return;
+    setContent(''); setFiles([]); setFileError(''); setFileNotice('');
+    onClose();
   };
 
   return (
@@ -22,7 +49,7 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
             <h2 id="experience-intake-title">경험정리 AI</h2>
             <p>경험을 자유롭게 적거나 파일을 넣으면 기존 경험 구조로 정리합니다.</p>
           </div>
-          <button type="button" className="mv2-icon-button" onClick={onClose} aria-label="닫기" disabled={busy}>×</button>
+          <button type="button" className="mv2-icon-button" onClick={close} aria-label="닫기" disabled={busy || checkingFiles}>×</button>
         </header>
         <form onSubmit={submit}>
           <div className="mv2-experience-intake__body">
@@ -32,14 +59,16 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
             </label>
             <label className="mv2-file-picker">
               <span>파일 근거 추가</span>
-              <input type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files || []))} disabled={busy} />
-              <small>PDF·TXT 등 여러 파일을 한 번에 선택할 수 있습니다.</small>
+              <input type="file" multiple accept=".pdf,.txt,application/pdf,text/plain" onChange={addFiles} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} />
+              <small>{checkingFiles ? '기존 근거와 중복 여부를 확인하고 있습니다…' : 'PDF·TXT를 최대 5개까지 선택할 수 있습니다.'}</small>
             </label>
-            {files.length > 0 && <ul className="mv2-experience-intake__files">{files.map((file) => <li key={`${file.name}-${file.lastModified}`}>{file.name}</li>)}</ul>}
+            {files.length > 0 && <ul className="mv2-experience-intake__files">{files.map((file) => <li key={evidenceFileKey(file)}><span><strong>{file.name}</strong><small>{evidenceFileStatusLabel(file)}</small></span><button type="button" onClick={() => setFiles((current) => current.filter((item) => item !== file))} aria-label={`${file.name} 제거`}>×</button></li>)}</ul>}
+            {fileError && <p className="mv2-experience-intake__file-error" role="alert">{fileError}</p>}
+            {fileNotice && <p className="mv2-experience-intake__file-notice" role="status">{fileNotice}</p>}
             <p className="mv2-experience-intake__notice">현재는 목데이터 분석으로 초안을 만들며, AI 엔진 연결 후 실제 분석 결과로 대체됩니다.</p>
           </div>
           <footer>
-            <button type="button" className="mv2-button mv2-button--secondary" onClick={onClose} disabled={busy}>취소</button>
+            <button type="button" className="mv2-button mv2-button--secondary" onClick={close} disabled={busy || checkingFiles}>취소</button>
             <button type="submit" className="mv2-button" disabled={!canAnalyze || busy}>{busy ? '정리 중…' : '경험 정리하기'}</button>
           </footer>
         </form>
