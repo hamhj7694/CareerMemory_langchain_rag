@@ -20,6 +20,67 @@ function resolveIntents(requestedIntent) {
 
 const cleanText = (value) => String(value || '').replace(/\r\n/g, '\n').trim();
 const firstMeaningfulLine = (value) => cleanText(value).split('\n').map((line) => line.trim()).find(Boolean) || '';
+const cleanStructureName = (value) => String(value || '')
+  .normalize('NFKC')
+  .replace(/[\u200B-\u200D\uFEFF]/g, '')
+  .trim()
+  .replace(/\s+/g, ' ');
+const structureNameKey = (value) => cleanStructureName(value).toLocaleLowerCase('ko-KR');
+
+function reconcileStructureStore() {
+  const domains = [];
+  const domainByName = new Map();
+  const domainIdMap = new Map();
+
+  store.domains.forEach((source) => {
+    const name = cleanStructureName(source.name) || '미분류 경험';
+    const key = structureNameKey(name) || `id:${source.id}`;
+    let domain = domainByName.get(key);
+    if (!domain) {
+      domain = { ...source, name };
+      domains.push(domain);
+      domainByName.set(key, domain);
+    }
+    domainIdMap.set(source.id, domain.id);
+  });
+
+  const projects = [];
+  const projectByName = new Map();
+  const projectIdMap = new Map();
+  store.projects.forEach((source) => {
+    const domainId = domainIdMap.get(source.domain_id) || source.domain_id;
+    const name = cleanStructureName(source.name) || '프로젝트·활동 미분류';
+    const key = `${domainId}:${structureNameKey(name) || `id:${source.id}`}`;
+    let project = projectByName.get(key);
+    if (!project) {
+      project = { ...source, domain_id: domainId, name };
+      projects.push(project);
+      projectByName.set(key, project);
+    }
+    projectIdMap.set(source.id, project.id);
+  });
+
+  store.experiences.forEach((experience) => {
+    const sourceProjectId = experience.project?.id || experience.project_id;
+    const sourceDomainId = experience.domain?.id || experience.domain_id;
+    const projectId = projectIdMap.get(sourceProjectId) || sourceProjectId;
+    const project = projects.find((item) => item.id === projectId);
+    const domainId = project?.domain_id || domainIdMap.get(sourceDomainId) || sourceDomainId;
+    const domain = domains.find((item) => item.id === domainId);
+    if (domain) {
+      experience.domain = { id: domain.id, name: domain.name };
+      experience.domain_id = domain.id;
+    }
+    if (project) {
+      experience.project = { id: project.id, name: project.name, organization: project.organization || '' };
+      experience.project_id = project.id;
+    }
+  });
+
+  store.domains = domains;
+  store.projects = projects;
+  return { domainIdMap, projectIdMap };
+}
 
 function splitExperienceBlocks(value) {
   const text = cleanText(value);
@@ -301,14 +362,15 @@ export async function updateProposal(proposalId, { base_version: baseVersion, pa
 }
 
 function ensureProposalStructure(draft) {
-  const domainName = draft.domain?.name?.trim() || '새 경험 분류';
-  let domain = store.domains.find((item) => item.name.toLowerCase() === domainName.toLowerCase());
+  reconcileStructureStore();
+  const domainName = cleanStructureName(draft.domain?.name) || '새 경험 분류';
+  let domain = store.domains.find((item) => structureNameKey(item.name) === structureNameKey(domainName));
   if (!domain) {
     domain = { id: nextId('DOM'), name: domainName, created_at: timestamp(), updated_at: timestamp(), version: 1 };
     store.domains.push(domain);
   }
-  const projectName = draft.project?.name?.trim() || '새 프로젝트';
-  let project = store.projects.find((item) => item.domain_id === domain.id && item.name.toLowerCase() === projectName.toLowerCase());
+  const projectName = cleanStructureName(draft.project?.name) || '새 프로젝트';
+  let project = store.projects.find((item) => item.domain_id === domain.id && structureNameKey(item.name) === structureNameKey(projectName));
   if (!project) {
     project = { id: nextId('PROJ'), domain_id: domain.id, name: projectName, organization: draft.project?.organization?.trim() || '', created_at: timestamp(), updated_at: timestamp(), version: 1 };
     store.projects.push(project);
@@ -330,7 +392,7 @@ export async function approveProposal(proposalId, { base_version: baseVersion, s
       if (!draft) continue;
       const structure = ensureProposalStructure(draft);
       const experience = {
-        ...snapshot(draft), id: nextId('EXP'), ...structure, evidence_count: draft.source_ref_ids?.length || 0,
+        ...snapshot(draft), id: nextId('EXP'), ...structure, domain_id: structure.domain.id, project_id: structure.project.id, evidence_count: draft.source_ref_ids?.length || 0,
         evidence_status: draft.source_ref_ids?.length ? 'verified' : 'missing',
         source_ids: draft.source_ref_ids || [], source_refs: draft.source_refs || [], created_at: timestamp(), updated_at: timestamp(), version: 1,
       };
@@ -391,6 +453,7 @@ function projectRef(projectId) {
 }
 
 export async function listDomains() {
+  reconcileStructureStore();
   await wait();
   const items = store.domains.map((domain) => ({
     ...domain,
@@ -401,6 +464,7 @@ export async function listDomains() {
 }
 
 export async function listStructure() {
+  reconcileStructureStore();
   const domains = store.domains.map((domain) => ({
     ...domain,
     projects: store.projects.filter((project) => project.domain_id === domain.id).map((project) => ({
@@ -413,9 +477,10 @@ export async function listStructure() {
 }
 
 export async function createDomain(input) {
-  const name = input?.name?.trim();
+  reconcileStructureStore();
+  const name = cleanStructureName(input?.name);
   if (!name) fail('VALIDATION_ERROR', '경험 분류 이름을 입력해 주세요.', 422);
-  if (store.domains.some((domain) => domain.name === name)) fail('DUPLICATE_RESOURCE', '같은 이름의 경험 분류가 이미 있습니다.', 409);
+  if (store.domains.some((domain) => structureNameKey(domain.name) === structureNameKey(name))) fail('DUPLICATE_RESOURCE', '같은 이름의 경험 분류가 이미 있습니다.', 409);
   const domain = { id: nextId('DOM'), name, created_at: timestamp(), updated_at: timestamp(), version: 1 };
   store.domains.push(domain);
   await wait();
@@ -423,17 +488,22 @@ export async function createDomain(input) {
 }
 
 export async function updateDomain(domainId, { base_version: baseVersion, changes = {}, name } = {}) {
+  reconcileStructureStore();
   const domain = find(store.domains, domainId, '경험 분류');
   assertVersion(domain, baseVersion, '경험 분류');
   if (name != null) changes = { ...changes, name };
-  if (changes?.name != null && !changes.name.trim()) fail('VALIDATION_ERROR', '경험 분류 이름을 입력해 주세요.', 422);
-  Object.assign(domain, snapshot(changes), { name: changes?.name?.trim() || domain.name, updated_at: timestamp(), version: domain.version + 1 });
+  const nextName = changes?.name != null ? cleanStructureName(changes.name) : domain.name;
+  if (!nextName) fail('VALIDATION_ERROR', '경험 분류 이름을 입력해 주세요.', 422);
+  if (store.domains.some((item) => item.id !== domainId && structureNameKey(item.name) === structureNameKey(nextName))) fail('DUPLICATE_RESOURCE', '같은 이름의 경험 분류가 이미 있습니다.', 409);
+  Object.assign(domain, snapshot(changes), { name: nextName, updated_at: timestamp(), version: domain.version + 1 });
   store.experiences.filter((item) => item.domain?.id === domainId).forEach((item) => { item.domain.name = domain.name; item.updated_at = timestamp(); });
   await wait();
   return snapshot(domain);
 }
 
 export async function listProjects({ domain_id: domainId } = {}) {
+  const { domainIdMap } = reconcileStructureStore();
+  domainId = domainIdMap.get(domainId) || domainId;
   await wait();
   const items = store.projects.filter((project) => !domainId || project.domain_id === domainId).map((project) => ({
     ...project, experience_count: store.experiences.filter((experience) => experience.project?.id === project.id).length,
@@ -442,23 +512,29 @@ export async function listProjects({ domain_id: domainId } = {}) {
 }
 
 export async function createProject(input) {
-  const name = input?.name?.trim();
+  const { domainIdMap } = reconcileStructureStore();
+  const domainId = domainIdMap.get(input.domain_id) || input.domain_id;
+  const name = cleanStructureName(input?.name);
   if (!name) fail('VALIDATION_ERROR', '프로젝트·활동 이름을 입력해 주세요.', 422);
-  find(store.domains, input.domain_id, '경험 분류');
-  if (store.projects.some((project) => project.domain_id === input.domain_id && project.name === name)) fail('DUPLICATE_RESOURCE', '이 경험 분류에 같은 이름의 프로젝트·활동이 이미 있습니다.', 409);
-  const project = { id: nextId('PROJ'), domain_id: input.domain_id, name, organization: input.organization?.trim() || '', created_at: timestamp(), updated_at: timestamp(), version: 1 };
+  find(store.domains, domainId, '경험 분류');
+  if (store.projects.some((project) => project.domain_id === domainId && structureNameKey(project.name) === structureNameKey(name))) fail('DUPLICATE_RESOURCE', '이 경험 분류에 같은 이름의 프로젝트·활동이 이미 있습니다.', 409);
+  const project = { id: nextId('PROJ'), domain_id: domainId, name, organization: input.organization?.trim() || '', created_at: timestamp(), updated_at: timestamp(), version: 1 };
   store.projects.push(project);
   await wait();
   return snapshot(project);
 }
 
 export async function updateProject(projectId, { base_version: baseVersion, changes = {}, ...directChanges }) {
+  reconcileStructureStore();
   const project = find(store.projects, projectId, '프로젝트·활동');
   assertVersion(project, baseVersion, '프로젝트·활동');
   changes = { ...changes, ...Object.fromEntries(Object.entries(directChanges).filter(([key]) => ['name', 'organization', 'domain_id'].includes(key))) };
   if (changes?.domain_id) find(store.domains, changes.domain_id, '경험 분류');
-  if (changes?.name != null && !changes.name.trim()) fail('VALIDATION_ERROR', '프로젝트·활동 이름을 입력해 주세요.', 422);
-  Object.assign(project, snapshot(changes), { name: changes?.name?.trim() || project.name, updated_at: timestamp(), version: project.version + 1 });
+  const nextDomainId = changes?.domain_id || project.domain_id;
+  const nextName = changes?.name != null ? cleanStructureName(changes.name) : project.name;
+  if (!nextName) fail('VALIDATION_ERROR', '프로젝트·활동 이름을 입력해 주세요.', 422);
+  if (store.projects.some((item) => item.id !== projectId && item.domain_id === nextDomainId && structureNameKey(item.name) === structureNameKey(nextName))) fail('DUPLICATE_RESOURCE', '이 경험 분류에 같은 이름의 프로젝트·활동이 이미 있습니다.', 409);
+  Object.assign(project, snapshot(changes), { domain_id: nextDomainId, name: nextName, updated_at: timestamp(), version: project.version + 1 });
   const domain = domainRef(project.domain_id);
   store.experiences.filter((item) => item.project?.id === projectId).forEach((item) => { item.project = projectRef(projectId); item.domain = domain; item.updated_at = timestamp(); });
   await wait();
@@ -558,27 +634,31 @@ export async function getExperience(experienceId) {
 }
 
 export async function createExperience(input) {
+  const { projectIdMap } = reconcileStructureStore();
   let domain = input.domain;
   let project = input.project;
   if (input.project_id) {
-    project = projectRef(input.project_id);
-    domain = domainRef(find(store.projects, input.project_id, '프로젝트·활동').domain_id);
+    const projectId = projectIdMap.get(input.project_id) || input.project_id;
+    project = projectRef(projectId);
+    domain = domainRef(find(store.projects, projectId, '프로젝트·활동').domain_id);
   } else if (typeof domain === 'object' && domain?.name && typeof project === 'object' && project?.name) {
-    let storedDomain = store.domains.find((item) => item.name === domain.name);
+    const domainName = cleanStructureName(domain.name);
+    const projectName = cleanStructureName(project.name);
+    let storedDomain = store.domains.find((item) => structureNameKey(item.name) === structureNameKey(domainName));
     if (!storedDomain) {
-      storedDomain = { id: nextId('DOM'), name: domain.name.trim(), created_at: timestamp(), updated_at: timestamp(), version: 1 };
+      storedDomain = { id: nextId('DOM'), name: domainName, created_at: timestamp(), updated_at: timestamp(), version: 1 };
       store.domains.push(storedDomain);
     }
-    let storedProject = store.projects.find((item) => item.domain_id === storedDomain.id && item.name === project.name);
+    let storedProject = store.projects.find((item) => item.domain_id === storedDomain.id && structureNameKey(item.name) === structureNameKey(projectName));
     if (!storedProject) {
-      storedProject = { id: nextId('PROJ'), domain_id: storedDomain.id, name: project.name.trim(), organization: project.organization?.trim() || '', created_at: timestamp(), updated_at: timestamp(), version: 1 };
+      storedProject = { id: nextId('PROJ'), domain_id: storedDomain.id, name: projectName, organization: project.organization?.trim() || '', created_at: timestamp(), updated_at: timestamp(), version: 1 };
       store.projects.push(storedProject);
     }
     domain = domainRef(storedDomain.id);
     project = projectRef(storedProject.id);
   }
   const experience = {
-    ...snapshot(input), domain, project, id: nextId('EXP'), evidence_count: input.source_ids?.length || 0,
+    ...snapshot(input), domain, project, domain_id: domain?.id || '', project_id: project?.id || '', id: nextId('EXP'), evidence_count: input.source_ids?.length || 0,
     evidence_status: input.source_ids?.length ? 'verified' : 'missing',
     source_refs: input.source_refs || [],
     created_at: timestamp(), updated_at: timestamp(), version: 1,

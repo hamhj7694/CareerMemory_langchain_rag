@@ -30,7 +30,9 @@ export function MessageThread({ messages, proposals, busy, onStarter, onEvidence
       {message.proposalIds?.map((proposalId) => {
         const proposal = proposals[proposalId];
         if (!proposal) return null;
-        return <InlineProposalCard key={`${proposalId}-${proposal.version ?? 0}`} proposal={proposal} onApprove={onApproveProposal} onReject={onRejectProposal} onChange={onChangeProposal} onRemoveExperience={onRemoveProposalExperience} />;
+        {/* 제안 버전이 갱신되어도 카드 컴포넌트를 재마운트하지 않아
+            각 경험 분류의 접힘/펼침 상태를 유지합니다. */}
+        return <InlineProposalCard key={proposalId} proposal={proposal} onApprove={onApproveProposal} onReject={onRejectProposal} onChange={onChangeProposal} onRemoveExperience={onRemoveProposalExperience} />;
       })}
     </article>)}
     {busy && <article className="v2-message v2-message--assistant v2-message--thinking" role="status"><div className="v2-message__meta">Career Memory</div><p><span /> 답변을 준비하고 있어요.</p></article>}

@@ -6,7 +6,7 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
 
   if (!open) return null;
 
-  const canAnalyze = content.trim() || files.length > 0;
+  const canAnalyze = Boolean(content.trim() || files.length > 0);
   const submit = async (event) => {
     event.preventDefault();
     if (!canAnalyze || busy) return;
@@ -47,4 +47,3 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
     </div>
   );
 }
-

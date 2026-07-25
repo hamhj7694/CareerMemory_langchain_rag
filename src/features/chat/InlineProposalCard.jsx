@@ -2,22 +2,28 @@ import { useState } from 'react';
 
 const lines = (value) => String(value || '').split('\n').map((item) => item.trim()).filter(Boolean);
 const joined = (value) => (value || []).join('\n');
+const collapsedDrafts = new Map();
 
 function DetailList({ items, empty }) {
   return items?.length ? <ul>{items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="v2-draft-empty">{empty}</p>;
 }
 
-function ExperienceDraftEditor({ item, index, editing, approved, saving, onUpdate, onEdit, onSave, onCancel, onDelete, onApprove }) {
-  const [collapsed, setCollapsed] = useState(false);
+function ExperienceDraftEditor({ item, index, collapseKey, editing, approved, saving, onUpdate, onEdit, onSave, onCancel, onDelete, onApprove }) {
+  const [collapsed, setCollapsed] = useState(() => collapsedDrafts.get(collapseKey) ?? false);
+  const toggleCollapsed = () => setCollapsed((value) => {
+    const next = !value;
+    collapsedDrafts.set(collapseKey, next);
+    return next;
+  });
   const update = (key, value) => onUpdate(index, key, value);
   return <div className={`v2-draft-structure v2-draft-structure--detail ${editing ? 'is-editing' : ''}`}>
-    <header className={`v2-draft-structure__domain-bar ${collapsed ? 'is-collapsed' : ''}`} onClick={() => setCollapsed((value) => !value)}>
+    <header className={`v2-draft-structure__domain-bar ${collapsed ? 'is-collapsed' : ''}`} onClick={toggleCollapsed}>
       <span>경험 분류</span>
       {editing ? <input aria-label={`경험 분류 ${index + 1}`} value={item.domain || ''} onClick={(event) => event.stopPropagation()} onChange={(event) => update('domain', event.target.value)} /> : <strong>{item.domain || '미분류 경험'}</strong>}
       <div className="v2-draft-structure__actions" onClick={(event) => event.stopPropagation()}>
         {approved ? <strong className="v2-draft-structure__saved">저장되었습니다</strong> : <>{editing ? <><button type="button" onClick={onCancel}>취소</button><button type="button" disabled={saving} onClick={onSave}>{saving ? '저장 중…' : '수정 저장'}</button></> : <button type="button" onClick={onEdit}>수정</button>}<button type="button" className="is-danger" disabled={saving} onClick={onDelete}>삭제</button><button type="button" className="is-primary" disabled={saving} onClick={onApprove}>경험으로 저장</button></>}
       </div>
-      <button type="button" className="v2-draft-structure__collapse" aria-label={`${item.domain || '경험 분류'} ${collapsed ? '펼치기' : '접기'}`} aria-expanded={!collapsed} onClick={(event) => { event.stopPropagation(); setCollapsed((value) => !value); }}>{collapsed ? '⌄' : '⌃'}</button>
+      <button type="button" className="v2-draft-structure__collapse" aria-label={`${item.domain || '경험 분류'} ${collapsed ? '펼치기' : '접기'}`} aria-expanded={!collapsed} onClick={(event) => { event.stopPropagation(); toggleCollapsed(); }}>{collapsed ? '⌄' : '⌃'}</button>
     </header>
     {!collapsed && <div className="v2-draft-project">
       <div><span>프로젝트·활동</span>{editing ? <input aria-label={`프로젝트·활동 ${index + 1}`} value={item.project || ''} onChange={(event) => update('project', event.target.value)} /> : <strong>{item.project || '새 프로젝트'}</strong>}</div>
@@ -119,7 +125,7 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onChange, on
   const experienceDrafts = activeDraft.experiences?.length ? activeDraft.experiences : [activeDraft];
   return <section className="v2-inline-proposal is-experience">
     <div className="v2-inline-proposal__heading"><span>경험 초안 · {experienceDrafts.length}개</span><em>{editing ? '수정 모드' : 'AI 초안'}</em></div>
-    <div className="v2-experience-draft-list">{experienceDrafts.map((item, index) => <ExperienceDraftEditor key={`${item.title || 'draft'}-${index}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>
+    <div className="v2-experience-draft-list">{experienceDrafts.map((item, index) => <ExperienceDraftEditor key={`${item.draft_id || item.sourceIndex || 'draft'}-${index}`} collapseKey={`${proposal.id}:${item.draft_id || item.sourceIndex || `draft-${index}`}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>
     {error && <p className="v2-proposal-error" role="alert">{error}</p>}
   </section>;
 }

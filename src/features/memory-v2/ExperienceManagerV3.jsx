@@ -12,6 +12,12 @@ import './memory-manager.css';
 const toView = (item) => toExperience(item);
 
 const createdTimeValue = (item) => new Date(item.created_at || item.createdAt || 0).getTime() || 0;
+const structureNameKey = (value) => String(value || '')
+  .normalize('NFKC')
+  .replace(/[\u200B-\u200D\uFEFF]/g, '')
+  .trim()
+  .replace(/\s+/g, ' ')
+  .toLocaleLowerCase('ko-KR');
 const ORDER_STORAGE_KEY = 'career-memory.experience-structure-order.v1';
 const FAILED_EXPERIENCE_DRAFTS_KEY = 'career-memory.failed-experience-drafts.v1';
 const readStructureOrder = () => {
@@ -35,7 +41,70 @@ const readDragPayload = (event) => {
 
 async function loadLibrary() {
   const [experiences, structure] = await Promise.all([v2ChatApi.listExperiences(), v2ChatApi.listStructure()]);
-  return { experiences: experiences.items.map(toView), domains: structure.domains };
+  const mappedExperiences = experiences.items.map(toView);
+  return { experiences: mappedExperiences, domains: mergeExperienceStructure(structure.domains, mappedExperiences) };
+}
+
+// Keep experiences visible even when an older/mock record has a missing or stale
+// domain/project reference. The record remains unchanged; only the view structure
+// receives a deterministic fallback node.
+function mergeExperienceStructure(domains, experiences) {
+  const next = [];
+  const domainById = new Map();
+  const domainByName = new Map();
+  const projectById = new Map();
+
+  // Older mock data can contain different IDs for visually identical names.
+  // Normalize and merge those nodes before experiences are assigned.
+  structuredClone(domains || []).forEach((sourceDomain) => {
+    const domainName = sourceDomain.name?.trim() || '미분류 경험';
+    const domainKey = structureNameKey(domainName) || `id:${sourceDomain.id}`;
+    let domain = domainByName.get(domainKey);
+    if (!domain) {
+      domain = { ...sourceDomain, name: domainName, projects: [] };
+      next.push(domain);
+      domainByName.set(domainKey, domain);
+    }
+    domainById.set(sourceDomain.id, domain);
+
+    const projectByName = new Map(domain.projects.map((project) => [structureNameKey(project.name), project]));
+    (sourceDomain.projects || []).forEach((sourceProject) => {
+      const projectName = sourceProject.name?.trim() || '프로젝트·활동 미분류';
+      const projectKey = structureNameKey(projectName) || `id:${sourceProject.id}`;
+      let project = projectByName.get(projectKey);
+      if (!project) {
+        project = { ...sourceProject, domain_id: domain.id, name: projectName };
+        domain.projects.push(project);
+        projectByName.set(projectKey, project);
+      }
+      projectById.set(sourceProject.id, project);
+    });
+  });
+
+  experiences.forEach((experience) => {
+    const domainKey = structureNameKey(experience.domainName);
+    let domain = (experience.domainId && domainById.get(experience.domainId)) || domainByName.get(domainKey);
+    if (!domain) {
+      const key = experience.domainId || experience.domainName || '미분류 경험';
+      domain = { id: `ORPHAN-DOM-${encodeURIComponent(key)}`, name: experience.domainName || '미분류 경험', projects: [], created_at: experience.createdAt || '', updated_at: experience.updatedAt || '', version: 1 };
+      next.push(domain);
+      domainById.set(domain.id, domain);
+      domainByName.set(structureNameKey(domain.name), domain);
+    }
+    experience.domainId = domain.id;
+    experience.domainName = domain.name;
+    const projectByName = new Map((domain.projects || []).map((project) => [structureNameKey(project.name), project]));
+    let project = (experience.projectId && projectById.get(experience.projectId)) || projectByName.get(structureNameKey(experience.projectName));
+    if (!project) {
+      const key = experience.projectId || experience.projectName || '프로젝트·활동 미분류';
+      project = { id: `ORPHAN-PROJ-${encodeURIComponent(domain.id)}-${encodeURIComponent(key)}`, domain_id: domain.id, name: experience.projectName || '프로젝트·활동 미분류', organization: experience.organization || '', experiences: [], created_at: experience.createdAt || '', updated_at: experience.updatedAt || '', version: 1 };
+      domain.projects = [...(domain.projects || []), project];
+      projectById.set(project.id, project);
+    }
+    experience.projectId = project.id;
+    experience.projectName = project.name;
+  });
+  return next;
 }
 
 function MoreMenu({ label, children }) {
@@ -444,9 +513,17 @@ export function ExperienceManagerV3() {
     setExperienceIntakeBusy(true);
     try {
       const uploadedAttachments = files.length ? await v2ChatApi.uploadAttachments(files) : [];
-      const domain = domains.find((entry) => entry.id === newExperienceContext.domainId);
+      // The structure may have been created immediately before opening this modal.
+      // Resolve the context from the latest API snapshot instead of a possibly stale
+      // React state value so the first draft receives the selected domain/project.
+      let contextDomains = domains;
+      try { contextDomains = (await v2ChatApi.listStructure()).domains || domains; } catch { /* use the last rendered snapshot */ }
+      const domain = contextDomains.find((entry) => entry.id === newExperienceContext.domainId);
       const project = domain?.projects?.find((entry) => entry.id === newExperienceContext.projectId);
+      if (contextDomains !== domains) setDomains(contextDomains);
       const fileText = files.map((file) => file.name).join(', ');
+      const extractedFileText = uploadedAttachments.map((file) => file.raw_text?.trim()).filter(Boolean).join('\n\n');
+      content = [content, extractedFileText].filter(Boolean).join('\n\n');
       const sourceText = [content, fileText ? `첨부 파일: ${fileText}` : ''].filter(Boolean).join('\n\n');
       const firstLine = sourceText.split('\n').map((line) => line.trim()).find(Boolean) || '새 경험';
       const draft = createEmptyExperience({
@@ -624,7 +701,7 @@ export function ExperienceManagerV3() {
       {status === 'loading' && <p className="mv2-sync-status">경험 구조를 불러오는 중입니다…</p>}
       {error && <div className="mv2-sync-error" role="alert"><span>{error}</span><button onClick={status === 'error' ? refresh : () => setError('')}>{status === 'error' ? '다시 시도' : '닫기'}</button></div>}
       <section className="mv2-summary" aria-label="커리어 자산 요약"><button onClick={clearSearch}><strong>{experiences.length}</strong><span>전체 경험</span><small>정리된 경험 보기</small></button><button onClick={() => setAssetModal('evidence')}><strong>{evidenceTotal}</strong><span>경험 근거</span><small>원본 리스트 보기</small></button><button onClick={() => setAssetModal('skills')}><strong>{skillTotal}</strong><span>내 역량</span><small>직군 · 직업 · 역량 보기</small></button></section>
-      <section className="mv2-discovery-panel" aria-label="경험 검색"><div className="mv2-toolbar"><label className="mv2-search"><span className="sr-only">경험 검색</span><input value={query} onChange={(event) => { setSkillGroupFilter(''); setQuery(event.target.value); }} placeholder="경험, 프로젝트·활동, 역량 검색" /></label><strong>{visibleExperienceCount}개 경험</strong></div></section>
+      <section className="mv2-discovery-panel" aria-label="경험 검색"><div className="mv2-toolbar"><label className="mv2-search"><span className="mv2-search__label">경험 검색</span><input value={query} onChange={(event) => { setSkillGroupFilter(''); setQuery(event.target.value); }} placeholder="경험, 프로젝트·활동, 역량 검색" /></label><strong>{visibleExperienceCount}개 경험</strong></div></section>
       <div className="mv2-structure">{displayDomains.map(({ domain, projects, experiences: domainExperiences }) => {
         const isCollapsed = !normalizedQuery && collapsed.has(domain.id);
         const toggleDomain = () => setCollapsed((value) => { const next = new Set(value); next.has(domain.id) ? next.delete(domain.id) : next.add(domain.id); return next; });
