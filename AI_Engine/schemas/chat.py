@@ -15,6 +15,7 @@ class ChatMode(str, Enum):
     """커리어 챗에서 사용자가 선택하는 실행 모드."""
 
     AUTO = "auto"
+    CHAT = "chat"
     EXPERIENCE_EXTRACTION = "experience_extraction"
     JOB_ANALYSIS = "job_analysis"
 
@@ -85,11 +86,22 @@ class ChatRequest(SchemaModel):
     mode: ChatMode = ChatMode.AUTO
     content: str = ""
     attachment_ids: list[Identifier] = Field(default_factory=list)
+    # 로그인 계정의 표시 이름만 AI 문맥에 전달한다.
+    # 이메일과 내부 user_id 같은 개인정보·식별자는 전달하지 않는다.
+    user_display_name: str = Field(default="", max_length=100)
+    # DB에서 복원한 이전 대화입니다.
+    # 현재 사용자 메시지는 content에 따로 들어가므로 history에는 포함하지 않습니다.
+    history: list[ChatMessage] = Field(default_factory=list)
 
     @field_validator("content")
     @classmethod
     def normalize_content(cls, value: str) -> str:
         return value.replace("\r\n", "\n").replace("\r", "\n")
+
+    @field_validator("user_display_name")
+    @classmethod
+    def normalize_user_display_name(cls, value: str) -> str:
+        return " ".join(value.split())
 
     @field_validator("attachment_ids")
     @classmethod

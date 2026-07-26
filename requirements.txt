@@ -1,0 +1,15 @@
+# AI 엔진 실행에 필요한 Python 패키지
+python-dotenv>=1.0,<2.0
+fastapi>=0.116,<1.0
+uvicorn[standard]>=0.35,<1.0
+sqlalchemy>=2.0,<3.0
+pwdlib[argon2]>=0.3,<1.0
+openai>=2.0,<3.0
+pydantic>=2.10,<3.0
+langchain>=1.0,<2.0
+langchain-core>=1.0,<2.0
+langchain-openai>=1.0,<2.0
+langchain-google-genai>=4.0,<5.0
+langgraph>=1.0,<2.0
+langchain-chroma>=1.0,<2.0
+chromadb>=1.0,<2.0

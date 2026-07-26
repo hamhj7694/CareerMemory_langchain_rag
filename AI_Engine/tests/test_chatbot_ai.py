@@ -18,7 +18,7 @@ from AI_Engine.chatbot_ai import (
     ChatbotAIInputError,
     create_chatbot_agent,
 )
-from AI_Engine.schemas import ChatRequest
+from AI_Engine.schemas import ChatMessage, ChatRequest
 
 
 FIXED_TIME = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
@@ -133,6 +133,65 @@ class ChatbotAITests(unittest.TestCase):
         self.assertEqual(response.prompt_version, "test-prompt-v1")
         self.assertEqual(response.schema_version, "test-schema-v1")
 
+    def test_invoke_sends_saved_history_before_current_message(self) -> None:
+        request = self.request.model_copy(
+            update={
+                "history": [
+                    ChatMessage(
+                        id="user-message-old",
+                        conversation_id="conversation-1",
+                        sequence=1,
+                        role="user",
+                        content="저는 데이터 분석 업무를 했어요.",
+                        created_at=FIXED_TIME,
+                    ),
+                    ChatMessage(
+                        id="assistant-message-old",
+                        conversation_id="conversation-1",
+                        sequence=2,
+                        role="assistant",
+                        content="어떤 성과가 있었나요?",
+                        created_at=FIXED_TIME,
+                    ),
+                ]
+            }
+        )
+
+        self.chatbot.invoke(request)
+
+        self.assertEqual(
+            self.agent.invoke_input["messages"],
+            [
+                {
+                    "role": "user",
+                    "content": "저는 데이터 분석 업무를 했어요.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "어떤 성과가 있었나요?",
+                },
+                {
+                    "role": "user",
+                    "content": "내 강점을 어떻게 설명하면 좋을까?",
+                },
+            ],
+        )
+
+    def test_invoke_sends_only_account_display_name_as_system_context(
+        self,
+    ) -> None:
+        request = self.request.model_copy(
+            update={"user_display_name": "홍길동"}
+        )
+
+        self.chatbot.invoke(request)
+
+        messages = self.agent.invoke_input["messages"]
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("홍길동", messages[0]["content"])
+        self.assertNotIn("user@example.com", messages[0]["content"])
+        self.assertEqual(messages[-1]["role"], "user")
+
     def test_default_versions_use_chatbot_constants(self) -> None:
         chatbot = ChatbotAI(
             self.agent,
@@ -151,6 +210,13 @@ class ChatbotAITests(unittest.TestCase):
             response.schema_version,
             CHATBOT_SCHEMA_VERSION,
         )
+
+    def test_explicit_chat_mode_is_executed_by_chatbot(self) -> None:
+        request = self.request.model_copy(update={"mode": "chat"})
+
+        response = self.chatbot.invoke(request)
+
+        self.assertEqual(response.message.content, "함께 정리해 볼게요.")
 
     def test_explicit_experience_mode_is_not_executed_by_chatbot(self) -> None:
         request = self.request.model_copy(
@@ -205,6 +271,17 @@ class ChatbotAITests(unittest.TestCase):
         self.assertEqual([event.type for event in events], ["started", "error"])
         self.assertEqual(events[-1].error.code, "chat_model_error")
         self.assertNotIn("provider failure", events[-1].error.message)
+
+    def test_stream_invalid_mode_returns_non_retryable_input_error(self) -> None:
+        request = self.request.model_copy(
+            update={"mode": "job_analysis"}
+        )
+
+        events = list(self.chatbot.stream(request))
+
+        self.assertEqual([event.type for event in events], ["started", "error"])
+        self.assertEqual(events[-1].error.code, "invalid_request")
+        self.assertFalse(events[-1].error.retryable)
 
 
 if __name__ == "__main__":

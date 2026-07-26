@@ -184,7 +184,13 @@ class JobAnalysisAITests(unittest.TestCase):
         self.assertEqual(result.index_version, "test-index-v1")
 
         call = client.responses.calls[0]
-        self.assertEqual(call["tool_choice"], "auto")
+        self.assertEqual(
+            call["tool_choice"],
+            {
+                "type": "function",
+                "name": JOB_REQUIREMENT_TOOL_NAME,
+            },
+        )
         self.assertEqual(call["tools"], [JOB_REQUIREMENT_TOOL])
         self.assertEqual(
             call["instructions"],
@@ -239,6 +245,13 @@ class JobAnalysisAITests(unittest.TestCase):
 
         match_call = client.responses.calls[1]
         self.assertEqual(match_call["tools"], [JOB_MATCH_TOOL])
+        self.assertEqual(
+            match_call["tool_choice"],
+            {
+                "type": "function",
+                "name": JOB_MATCH_TOOL_NAME,
+            },
+        )
         self.assertEqual(
             match_call["instructions"],
             JOB_MATCH_SYSTEM_PROMPT,

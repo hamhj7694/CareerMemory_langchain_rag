@@ -10,6 +10,7 @@
 다음 문서를 상위 요구사항으로 사용한다.
 
 - `Data_Flow_Summary.md`
+- `AI_MEMORY_CONTEXT_POLICY.md`
 - `docs/DATA_SCHEMA_AUDIT_improvement.md`
 
 AI 엔진, 백엔드 API, 프론트엔드는 이 문서에 정의된 역할 경계와 데이터 계약을 기준으로 연결한다.
@@ -23,10 +24,21 @@ AI 엔진, 백엔드 API, 프론트엔드는 이 문서에 정의된 역할 경�
 사용자와 대화하고 대화 세션의 메시지와 첨부 자료를 문맥으로 사용한다.
 
 - 일반적인 대화와 질문에 답변한다.
-- 저장된 확정 경험과 원본 근거를 조회할 수 있다.
-- 대화와 첨부 파일을 세션 문맥에 누적한다.
+- 현재 `conversation_id`의 대화와 첨부만 세션 문맥에 누적한다.
+- 다른 대화 세션의 메시지 원문은 자동으로 공유하지 않는다.
+- 로그인 사용자가 경험 관리에 확정 저장한 경험과 원본 근거를 세션에 관계없이 RAG로 조회할 수 있다.
+- 경험 검색에는 로그인 세션에서 얻은 `user_id` 필터를 반드시 적용한다.
 - 경험이나 채용공고 데이터를 직접 확정 저장하지 않는다.
 - 필요한 경우 경험정리 AI 또는 채용공고 분석 AI 실행을 제안할 수 있다.
+
+문맥 계층은 다음과 같다.
+
+```text
+단기 문맥 = 현재 conversation_id의 메시지·첨부
+장기 문맥 = 현재 user_id의 확정 Experience 검색 결과
+```
+
+대화에서 발견한 경험은 사용자 승인 후 경험 관리에 저장되고 검색 인덱스가 갱신된 시점부터 장기 문맥으로 사용할 수 있다.
 
 ### 2.2 경험정리 AI
 
@@ -165,6 +177,8 @@ AI_Engine/
 | `schemas/chat.py` | 챗봇 메시지·응답·인용·스트리밍 이벤트 계약 |
 | `schemas/routing.py` | 자동 모드 의도 판정과 체인 선택 계약 |
 | `schemas/experience_job.py` | 이전 통합 import 경로를 유지하는 호환 계층. 신규 구현은 이 파일에 추가하지 않음 |
+
+`chatbot_ai.py`의 `InMemorySaver`는 단일 프로세스 개발·단위 테스트용 기본값이다. 운영 환경에서는 API가 저장한 대화 Repository에서 문맥을 수집하거나 영속 Checkpointer를 주입해야 한다. 서버 재시작과 멀티 워커에서 상태가 유지되지 않는 `InMemorySaver`만으로는 커리어 챗 완료 조건을 충족하지 않는다.
 
 ---
 
@@ -312,13 +326,15 @@ Experience Search Document에서 후보 경험 검색
 ## 10. 구현 순서
 
 1. `schemas/`에 공통 입력·출력 스키마 정의
-2. `chatbot_ai.py` 구현
-3. `experience_ai.py` 구현 및 다중 경험 추출 검증
-4. `job_analysis_ai.py`에 RAG와 공고 분석 구현
-5. `router.py`에서 명시적 모드와 자동 모드 라우팅 구현
-6. `AI_langchain.py`에서 세 AI 실행 흐름 연결
-7. 백엔드 API 및 프론트엔드 공통 데이터 계약 연결
-8. 단위 테스트, 통합 테스트, 중복 실행 및 실패 복구 테스트
+2. `AI_FRONTEND_CONTRACT_MAPPING.md`에서 AI 스키마·API wire DTO·프론트 mapper·Mock 응답·화면 소비 필드를 대조
+3. `chatbot_ai.py` 구현
+4. `experience_ai.py` 구현 및 다중 경험 추출 검증
+5. `job_analysis_ai.py`에 RAG와 공고 분석 구현
+6. `router.py`에서 명시적 모드와 자동 모드 라우팅 구현
+7. `AI_langchain.py`에서 세 AI 실행 흐름 연결
+8. 백엔드 API Adapter에서 AI DTO를 프론트엔드 공개 계약으로 변환
+9. Mock 응답과 실제 AI 응답에 같은 프론트 mapper·계약 테스트 적용
+10. 단위 테스트, 통합 테스트, 중복 실행 및 실패 복구 테스트
 
 ---
 

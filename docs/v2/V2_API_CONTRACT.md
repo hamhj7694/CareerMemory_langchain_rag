@@ -26,6 +26,9 @@
 4. **스트리밍은 표시 방식이고 저장 의미가 아니다.** `done` 이벤트를 받아도 proposal 승인 전에는 경험에 반영되지 않는다.
 5. JSON은 `snake_case`, ID는 opaque string, 시간은 timezone 포함 ISO 8601을 사용한다.
 6. mutation에는 `client_request_id`, 갱신에는 `version` 또는 `base_version`을 사용한다.
+7. 대화 메시지 원문은 해당 `conversation_id`의 단기 문맥이며 다른 세션에 자동 공유하지 않는다.
+8. 사용자가 승인하여 경험 관리에 저장한 경험만 계정 공통 장기 기억으로 사용한다.
+9. 챗봇의 경험 RAG 검색은 인증된 `user_id`로 제한하며 프론트가 보낸 사용자 ID를 신뢰하지 않는다.
 
 ## 2. 책임 경계
 
@@ -163,6 +166,8 @@ type MessageAction = {
 ```
 
 비스트리밍 응답은 완성된 `Message`를 반환한다. 스트리밍 endpoint는 `202`가 아니라 `200 text/event-stream`으로 연결되며, 최초 `message.accepted` 이벤트에서 사용자/assistant message ID를 제공한다.
+
+메시지 처리 시 서버는 현재 대화 세션의 메시지와 로그인 사용자의 확정 경험 검색 결과를 별도로 수집한다. 다른 대화 세션의 메시지 원문이나 미확정 proposal을 자동으로 포함하지 않는다. 저장 경험을 사용한 답변은 `citations` 또는 경험 참조 정보로 어떤 경험을 참고했는지 추적할 수 있어야 한다.
 
 ## 5. 첨부 파일
 

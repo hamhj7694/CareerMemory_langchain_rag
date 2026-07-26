@@ -22,6 +22,19 @@ button:disabled { cursor: not-allowed; }
 .app-navigation a.active { color: var(--color-primary); background: var(--color-primary-subtle); }
 .api-status { margin-top: auto; display: flex; align-items: center; gap: var(--space-2); color: var(--color-text-muted); font-size: var(--text-label); }
 .api-status span { color: var(--color-confirmed); }
+.app-account { display: grid; gap: 2px; padding-top: var(--space-4); border-top: 1px solid var(--color-border); }
+.app-account strong, .app-account span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-account strong { font-size: var(--text-body-sm); }
+.app-account span { color: var(--color-text-subtle); font-size: var(--text-label); }
+.app-account button, .app-account a { width: fit-content; padding: 4px 0; border: 0; color: var(--color-primary); background: transparent; font-size: var(--text-label); font-weight: 650; }
+.account-page { width: min(100%, 720px); display: grid; gap: var(--space-6); }
+.account-card { padding: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.account-card h2 { margin: 0 0 var(--space-3); }
+.account-card > p { color: var(--color-text-muted); }
+.account-card dl { margin: 0; display: grid; gap: var(--space-3); }
+.account-card dl div { display: grid; grid-template-columns: 120px 1fr; gap: var(--space-3); }
+.account-card dt { color: var(--color-text-subtle); }
+.account-card dd { margin: 0; font-weight: 650; }
 .app-workspace { min-width: 0; }
 .app-header { position: sticky; top: 0; z-index: var(--z-sticky); height: 64px; padding: 0 var(--space-8); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; background: rgb(255 255 255 / 94%); backdrop-filter: blur(10px); }
 .app-header h1 { margin: 0; font-size: var(--text-body); }
@@ -92,7 +105,7 @@ button:disabled { cursor: not-allowed; }
 @media (max-width: 767px) {
   .app-shell { display: block; padding-bottom: 64px; }
   .app-sidebar { position: fixed; inset: auto 0 0; z-index: var(--z-sticky); width: auto; height: 64px; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-width: 1px 0 0; flex-direction: row; align-items: center; justify-content: center; }
-  .app-brand, .api-status { display: none; }
+  .app-brand, .api-status, .app-account { display: none; }
   .app-navigation { width: min(100%, 560px); grid-template-columns: repeat(3, 1fr); }
   .app-navigation a { text-align: center; }
   .app-header__context { display: none; }

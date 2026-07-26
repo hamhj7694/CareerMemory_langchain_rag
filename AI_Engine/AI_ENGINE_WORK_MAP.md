@@ -9,6 +9,8 @@
 - 데이터 구조 개선 기준: `../docs/DATA_SCHEMA_AUDIT_improvement.md`
 - 프론트엔드 작업 매핑: `../docs/WORK_AGENT_MATRIX.md`
 - 프론트엔드 작업 분해: `../docs/WORK_BREAKDOWN.md`
+- AI ↔ 프론트엔드 변환 계약: `AI_FRONTEND_CONTRACT_MAPPING.md`
+- AI 기억·세션 공유 정책: `../AI_MEMORY_CONTEXT_POLICY.md`
 
 상태 표시는 `[ ]` todo, `[~]` in progress, `[!]` blocked, `[?]` review, `[x]` done을 사용한다.
 
@@ -41,6 +43,8 @@ AI_langchain.py
 4. AI는 확정 경험을 직접 저장하지 않고 `ExperienceDraft[]`를 반환한다.
 5. 사용자 승인 후 백엔드 트랜잭션이 경험·근거 연결을 확정 저장한다.
 6. 프론트엔드는 Python AI 엔진을 직접 호출하지 않고 API 계약을 사용한다.
+7. 대화 원문은 현재 세션에서만 사용하고, 사용자 승인 후 저장된 경험만 계정의 모든 세션에서 RAG로 공유한다.
+8. 경험 RAG의 모든 저장·검색에는 로그인 세션에서 얻은 `user_id` 필터를 강제한다.
 
 ---
 
@@ -48,7 +52,7 @@ AI_langchain.py
 
 | ID | 상태 | AI 역할 | 주요 입력 | 주요 출력 | 구현 위치 | 완료 조건 |
 |---|---|---|---|---|---|---|
-| AI-110 | `[~]` | 대화형 챗봇 | 대화 문맥, 새 메시지, 첨부 ID, 저장 경험·근거 검색 결과 | 답변, 인용, 후속 행동, 스트리밍 이벤트 | `chatbot_ai.py` | 일반 대화·문맥·스트리밍 구현 완료. 저장 경험 RAG·첨부 본문·인용 연결 대기 |
+| AI-110 | `[~]` | 대화형 챗봇 | 현재 세션 문맥, 새 메시지, 첨부 ID, 현재 사용자의 저장 경험·근거 검색 결과 | 답변, 인용, 후속 행동, 스트리밍 이벤트 | `chatbot_ai.py` | 세션 간 대화 원문을 섞지 않고 사용자별 저장 경험 RAG·첨부 본문·인용 연결 |
 | AI-120 | `[~]` | 경험정리 AI | 대화 범위 또는 직접 입력 텍스트·파일 | `ExperienceDraft[]` 0..N개, 원본 근거, 누락 정보 | `experience_ai.py` | strict 함수 호출과 공통 스키마 변환 완료. 대화·파일 본문 수집 파이프라인 연결 대기 |
 | AI-130 | `[~]` | 공고 요구사항 구조화 | 공고 원문·첨부 파일 | `JobRequirement[]` | `job_analysis_ai.py` | strict 함수 호출과 원문 인용 위치 검증 완료. 실제 첨부 본문 수집 연결 대기 |
 | AI-140 | `[~]` | 요구사항별 경험 추천 | 요구사항, 확정 Experience 검색 문서 | `RequirementExperienceLink[]` | `job_analysis_ai.py` | retriever 주입·후보 제한·추천 근거 검증 완료. 실제 Chroma 인덱스 연결 대기 |
@@ -63,8 +67,8 @@ AI_langchain.py
 | AI-002 | `[x]` | 경험·근거·공고 스키마 작성 및 역할별 분리 | `schemas/common.py`, `evidence.py`, `experience.py`, `job.py` | 경험 초안, 근거, 공고 요구사항, 추천 연결을 각 소유 모듈에서 검증 |
 | AI-003 | `[x]` | 스키마 패키지와 공개 import 경계 구성 | `schemas/__init__.py`, `schemas/experience_job.py` | 공개 import와 이전 통합 import 경로 모두 호환 |
 | AI-004 | `[x]` | 챗봇·라우팅 스키마 작성 | `schemas/chat.py`, `schemas/routing.py` | 요청·응답·인용·SSE 이벤트·라우팅 판정 계약 |
-| AI-005 | `[ ]` | 오류 코드·API 응답 envelope 확정 | `schemas/common.py`, 백엔드 API 계약 | HTTP 상태, retryable, 부분 성공, 사용자 메시지 규칙 확정 |
-| AI-006 | `[ ]` | 스키마 버전과 예제 fixture 고정 | `schemas/`, `tests/fixtures/` | 정상·빈 결과·부분 성공·오류 JSON 예제 및 버전 상수 |
+| AI-005 | `[~]` | 오류 코드·API 응답 envelope 확정 | `schemas/common.py`, `AI_FRONTEND_CONTRACT_MAPPING.md`, 백엔드 API 계약 | 변환 규칙 문서화 완료. API Adapter 구현과 계약 테스트 대기 |
+| AI-006 | `[~]` | 스키마 버전과 예제 fixture 고정 | `schemas/`, `AI_FRONTEND_CONTRACT_MAPPING.md`, `tests/fixtures/` | 버전 필드와 fixture 요구사항 문서화 완료. 실제 JSON fixture 작성 대기 |
 
 현재 검증: 스키마 단위 테스트 18개, Python 컴파일, 공개/영역별 import, JSON Schema 생성 통과.
 
@@ -77,8 +81,8 @@ AI_langchain.py
 | AI-210 | `[ ]` | 첨부 파일 파싱 | PDF/TXT → 페이지·문단·offset가 있는 원문 | `experience_ai.py`, `job_analysis_ai.py` | 파일 원문과 인용 위치를 재현 가능 |
 | AI-211 | `[ ]` | 중복 파일 판정 | filename, size, SHA-256 → duplicate 상태 | `experience_ai.py`, 백엔드 저장 API | 동일 해시는 재사용하고 수정본은 별도 버전 처리 |
 | AI-220 | `[ ]` | EvidenceChunk 생성·임베딩 | 원본 대화·텍스트·파일 → 검색 chunk | `experience_ai.py` | 원본 ID·page·offset가 보존되고 중복 임베딩 방지 |
-| AI-230 | `[~]` | Experience Search Document 생성·임베딩 | 확정 Experience → 검색용 문서 | `schemas/retrieval.py`, `job_analysis_ai.py` | 확정·근거 보유 경험만 문서화하고 Chroma 추가·수정·삭제·해시 캐시 검증 완료. 실제 저장소 이벤트 연결 대기 |
-| AI-240 | `[?]` | LLM 모델 생성 | `load_dotenv → ChatOpenAI` | 역할별 AI 파일 | 레퍼런스와 같은 모델 생성 방식 구현, 실제 API 호출 확인 대기 |
+| AI-230 | `[~]` | Experience Search Document 생성·임베딩 | 사용자별 확정 Experience → 검색용 문서 | `schemas/retrieval.py`, `job_analysis_ai.py` | `user_id` 메타데이터와 필터를 강제하고 확정·근거 보유 경험만 문서화. 생성·수정·삭제 저장소 이벤트 연결 대기 |
+| AI-240 | `[?]` | LLM 모델 생성 | `load_dotenv → ChatOpenAI` | 역할별 AI 파일 | 역할별 모델 생성 방식 구현, 실제 API 호출 확인 대기 |
 | AI-250 | `[ ]` | Vector Store 연결 | 임베딩 문서 ↔ 검색 결과 | `job_analysis_ai.py` | 인덱스 버전과 필터 조건을 응답에 기록 |
 | AI-260 | `[ ]` | 저장 데이터 연결 | 대화·근거·경험·공고 조회/저장 | `AI_langchain.py`, 백엔드 저장 API | AI 실행과 실제 저장 경계를 구분 |
 
@@ -100,7 +104,7 @@ AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은
 
 | ID | 상태 | 파이프라인 | 실행 흐름 | 주요 계약 |
 |---|---|---|---|---|
-| AI-310 | `[~]` | 커리어 챗 | 문맥 수집 → 필요 시 RAG → 챗봇 → 스트리밍 응답 | 기본 챗봇 체인과 스트리밍 구현 완료. Repository·RAG·API 연결 대기 |
+| AI-310 | `[~]` | 커리어 챗 | 현재 세션 문맥 수집 → 사용자별 확정 경험 RAG → 챗봇 → 스트리밍 응답 | 세션 원문 격리, 계정 공통 경험 검색, 참고 경험 표시와 API 연결 대기 |
 | AI-320 | `[ ]` | 대화내용으로 경험 정리 | 마지막 성공 범위 계산 → 대화·첨부 수집 → 경험정리 AI | `ExperienceExtractionRequest`, `ExtractionRun`, `ExperienceExtractionResult` |
 | AI-330 | `[ ]` | 경험 관리의 `+ 경험 추가` | 직접 텍스트·첨부 수집 → 공통 경험정리 AI | AI-320과 같은 경험 결과 계약 |
 | AI-340 | `[ ]` | 채용공고 분석 | 공고 파싱 → 요구사항 구조화 → 경험 RAG → 요구사항별 추천 | `JobAnalysisRequest`, `JobAnalysisResult` |

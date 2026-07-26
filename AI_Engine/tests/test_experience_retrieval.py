@@ -12,6 +12,8 @@ from langchain_core.embeddings import Embeddings
 from pydantic import ValidationError
 
 from AI_Engine.job_analysis_ai import (
+    DEFAULT_EXPERIENCE_EMBEDDING_MODEL,
+    DEFAULT_EXPERIENCE_INDEX_VERSION,
     JobAnalysisAI,
     JobAnalysisAIInputError,
     build_experience_search_documents,
@@ -71,6 +73,16 @@ def confirmed_experience(
 
 
 class ExperienceSearchDocumentTests(unittest.TestCase):
+    def test_default_embedding_and_index_versions_move_together(self) -> None:
+        self.assertEqual(
+            DEFAULT_EXPERIENCE_EMBEDDING_MODEL,
+            "text-embedding-3-small",
+        )
+        self.assertEqual(
+            DEFAULT_EXPERIENCE_INDEX_VERSION,
+            "experience-index-v2",
+        )
+
     def test_frontend_experience_becomes_search_document(self) -> None:
         documents = build_experience_search_documents(
             [

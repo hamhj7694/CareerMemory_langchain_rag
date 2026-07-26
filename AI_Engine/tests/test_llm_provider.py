@@ -1,0 +1,80 @@
+"""Gemini와 OpenAI Provider 선택 규칙 테스트."""
+
+from __future__ import annotations
+
+import os
+import unittest
+from unittest.mock import patch
+
+from langchain_google_genai import (
+    ChatGoogleGenerativeAI,
+    GoogleGenerativeAIEmbeddings,
+)
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+from AI_Engine.llm_provider import (
+    GeminiStructuredClient,
+    create_chat_model,
+    create_embeddings,
+    create_structured_client,
+    get_ai_provider,
+    get_chat_model_name,
+    get_experience_index_version,
+)
+
+
+class LLMProviderTests(unittest.TestCase):
+    def test_gemini_is_default_provider(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(get_ai_provider(), "gemini")
+
+    def test_invalid_provider_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "gemini.*openai"):
+            get_ai_provider("unknown")
+
+    def test_gemini_components_are_created(self) -> None:
+        environment = {
+            "GEMINI_API_KEY": "test-key",
+            "GEMINI_MODEL": "gemini-test",
+            "GEMINI_EMBEDDING_MODEL": "gemini-embedding-test",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertIsInstance(
+                create_chat_model(provider="gemini"),
+                ChatGoogleGenerativeAI,
+            )
+            self.assertIsInstance(
+                create_embeddings(provider="gemini"),
+                GoogleGenerativeAIEmbeddings,
+            )
+            self.assertIsInstance(
+                create_structured_client("gemini"),
+                GeminiStructuredClient,
+            )
+
+    def test_openai_components_remain_available(self) -> None:
+        environment = {
+            "OPENAI_API_KEY": "test-key",
+            "OPENAI_MODEL": "gpt-test",
+            "OPENAI_EMBEDDING_MODEL": "embedding-test",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertIsInstance(
+                create_chat_model(provider="openai"),
+                ChatOpenAI,
+            )
+            self.assertIsInstance(
+                create_embeddings(provider="openai"),
+                OpenAIEmbeddings,
+            )
+            self.assertEqual(get_chat_model_name("openai"), "gpt-test")
+
+    def test_embedding_indexes_are_separated_by_provider(self) -> None:
+        self.assertNotEqual(
+            get_experience_index_version("gemini"),
+            get_experience_index_version("openai"),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

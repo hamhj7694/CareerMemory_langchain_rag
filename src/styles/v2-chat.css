@@ -25,6 +25,31 @@
 .v2-message--assistant { justify-self: start; }
 .v2-message__meta { margin-bottom: var(--space-1); color: var(--color-text-subtle); font-size: var(--text-caption); font-weight: 650; }
 .v2-message p { margin: 0; white-space: pre-wrap; word-break: keep-all; }
+.v2-message__markdown { line-height: 1.7; overflow-wrap: anywhere; word-break: keep-all; }
+.v2-message__markdown > :first-child { margin-top: 0; }
+.v2-message__markdown > :last-child { margin-bottom: 0; }
+.v2-message__markdown p { margin: 0 0 var(--space-3); white-space: normal; }
+.v2-message__markdown h1,
+.v2-message__markdown h2,
+.v2-message__markdown h3,
+.v2-message__markdown h4 { margin: var(--space-5) 0 var(--space-2); line-height: 1.4; }
+.v2-message__markdown h1 { font-size: var(--text-h2); }
+.v2-message__markdown h2 { font-size: var(--text-h3); }
+.v2-message__markdown h3,
+.v2-message__markdown h4 { font-size: var(--text-body); }
+.v2-message__markdown ul,
+.v2-message__markdown ol { margin: var(--space-2) 0 var(--space-4); padding-left: 1.4rem; }
+.v2-message__markdown li + li { margin-top: var(--space-1); }
+.v2-message__markdown strong { color: var(--color-text); font-weight: 800; }
+.v2-message__markdown a { color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px; }
+.v2-message__markdown blockquote { margin: var(--space-3) 0; padding: var(--space-2) var(--space-4); border-left: 3px solid var(--color-ai); color: var(--color-text-muted); background: var(--color-ai-subtle); }
+.v2-message__markdown code { padding: 2px 5px; border-radius: 4px; background: var(--color-surface-subtle); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .92em; }
+.v2-message__markdown pre { margin: var(--space-3) 0; padding: var(--space-4); overflow-x: auto; border-radius: var(--radius-sm); background: #172033; color: #f5f7fb; }
+.v2-message__markdown pre code { padding: 0; color: inherit; background: transparent; }
+.v2-message__markdown table { width: 100%; margin: var(--space-3) 0; border-collapse: collapse; font-size: var(--text-body-sm); }
+.v2-message__markdown th,
+.v2-message__markdown td { padding: var(--space-2); border: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+.v2-message__markdown th { background: var(--color-surface-subtle); }
 .v2-message__failed{display:block;margin-top:var(--space-2);color:var(--color-danger);font-size:var(--text-caption)}
 .v2-message__files, .v2-message__links { margin-top: var(--space-3); display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .v2-message__files span, .v2-message__links button { padding: 4px 9px; border: 1px solid var(--color-border); border-radius: 999px; color: var(--color-text-muted); background: var(--color-surface); font-size: var(--text-caption); }

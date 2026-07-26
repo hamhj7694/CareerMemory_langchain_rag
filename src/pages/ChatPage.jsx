@@ -128,25 +128,63 @@ export function ChatPage({ onSend }) {
       } else {
         if (!conversationId.current) conversationId.current = (await v2ChatApi.createConversation({ title: (content || files[0]?.name || '새 대화').slice(0, 28) })).id;
         const uploaded = files.length ? await v2ChatApi.uploadAttachments(files) : [];
-        const message = await v2ChatApi.sendMessage(conversationId.current, {
+        let completedMessage = null;
+        for await (const event of v2ChatApi.streamMessage(conversationId.current, {
           content,
           intent: mode,
           attachment_ids: uploaded.map(({ id }) => id),
-        });
-        const rawProposal = message.proposal_ids?.[0] ? await v2ChatApi.getProposal(message.proposal_ids[0]) : null;
-        response = {
-          message: message.content,
-          messageId: message.id,
-          userMessageId: message.request_message_id,
-          proposal: toProposalView(rawProposal),
-          proposalIds: message.proposal_ids ?? [],
-        };
+        })) {
+          if (event.type === 'message.accepted') {
+            setMessages((current) => [
+              ...current.map((message) => message.id === userMessage.id
+                ? { ...message, id: event.user_message.id, status: 'sent' }
+                : message),
+              {
+                id: event.assistant_message_id,
+                role: 'assistant',
+                content: '',
+                status: 'streaming',
+                proposalIds: [],
+              },
+            ]);
+          } else if (event.type === 'assistant.delta') {
+            setMessages((current) => current.map((message) => (
+              message.id === event.message_id
+                ? { ...message, content: `${message.content}${event.delta}` }
+                : message
+            )));
+          } else if (event.type === 'proposal.created') {
+            const streamedProposal = toProposalView(event.proposal);
+            if (streamedProposal) {
+              setProposals((current) => ({
+                ...current,
+                [streamedProposal.id]: streamedProposal,
+              }));
+            }
+          } else if (event.type === 'message.completed') {
+            completedMessage = event.message;
+            setMessages((current) => current.map((message) => (
+              message.id === event.message.id
+                ? { ...toUiMessage(event.message), status: 'completed' }
+                : message
+            )));
+          } else if (event.type === 'message.failed') {
+            throw new Error(event.error?.message || 'AI 답변 생성에 실패했습니다.');
+          }
+        }
+        if (!completedMessage) throw new Error('스트리밍이 완료되기 전에 연결이 종료되었습니다.');
+        response = { streamed: true };
         if (!routeConversationId) {
           movedToConversation = true;
           navigate(`/chat/${conversationId.current}`, { replace: true });
         }
       }
       if (movedToConversation) return;
+      if (response.streamed) {
+        await refreshConversations();
+        await refreshExtractionStatus();
+        return;
+      }
       setMessages((current) => current.map((message) => message.id === userMessage.id
         ? { ...message, id: response.userMessageId || message.id, status: 'sent' }
         : message));
@@ -298,12 +336,17 @@ export function ChatPage({ onSend }) {
   const renameConversation = async (conversation) => {
     const title = window.prompt('대화 제목 변경', conversation.title || '새 대화');
     if (!title?.trim() || title.trim() === conversation.title) return;
-    await v2ChatApi.updateConversation(conversation.id, { title: title.trim() });
+    await v2ChatApi.updateConversation(conversation.id, {
+      title: title.trim(),
+      base_version: conversation.version,
+    });
     await refreshConversations();
   };
   const deleteConversation = async (conversation) => {
     if (!window.confirm(`‘${conversation.title || '새 대화'}’ 대화를 삭제할까요?`)) return;
-    await v2ChatApi.deleteConversation(conversation.id);
+    await v2ChatApi.deleteConversation(conversation.id, {
+      version: conversation.version,
+    });
     if (conversation.id === conversationId.current) startNewConversation();
     await refreshConversations();
   };

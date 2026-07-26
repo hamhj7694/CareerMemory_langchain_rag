@@ -1,4 +1,5 @@
 import { InlineProposalCard } from './InlineProposalCard.jsx';
+import { MarkdownMessage } from './MarkdownMessage.jsx';
 
 const STARTERS = [
   { mode: 'experience', title: '프로젝트 경험 정리', description: '정리되지 않은 이야기를 경력 자산으로 만들어요.' },
@@ -22,7 +23,9 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
   return <div className="v2-message-list" aria-live="polite">
     {messages.map((message) => <article key={message.id} className={`v2-message v2-message--${message.role}`}>
       <div className="v2-message__meta">{message.role === 'assistant' ? 'Career Memory' : '나'}</div>
-      <p>{message.content}</p>
+      {message.role === 'assistant'
+        ? <MarkdownMessage content={message.content} />
+        : <p>{message.content}</p>}
       {message.status === 'failed' && <small className="v2-message__failed">전송되지 않았습니다. 입력창에서 다시 전송해 주세요.</small>}
       {message.attachments?.length > 0 && <div className="v2-message__files">{message.attachments.map((file) => <span key={file}>▧ {file}</span>)}</div>}
       {message.evidence?.length > 0 && !message.proposalIds?.length && <div className="v2-message__links">

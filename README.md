@@ -22,6 +22,27 @@ npm.cmd test
 npm.cmd run build
 ```
 
+## AI 엔진 개발 환경
+
+AI 엔진은 Python 3.11 이상을 사용한다. 프로젝트별 가상환경을 만든 뒤
+루트의 `requirements.txt`를 설치한다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+`.env.example`을 참고해 루트에 `.env`를 만들고 서버에서만
+`OPENAI_API_KEY`를 사용한다. `.env`와 실제 API 키는 저장소에 커밋하지 않는다.
+
+AI 엔진 단위 테스트:
+
+```powershell
+python -m unittest discover -s AI_Engine\tests -v
+```
+
 ## 주요 문서
 
 - 제품 요구사항: `PRD.md`

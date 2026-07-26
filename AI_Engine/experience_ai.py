@@ -11,12 +11,19 @@ from typing import Any
 from uuid import uuid4
 
 # 2. OpenAI Responses API
-# 수업 레퍼런스의 strict function calling 방식으로 구조화 결과를 받는다.
+# strict function calling으로 경험 초안을 정해진 JSON 구조로 받는다.
 from dotenv import load_dotenv
-from openai import OpenAI
 from pydantic import ValidationError
 
-# 3. 프론트엔드·백엔드·AI가 함께 사용하는 데이터 계약
+# 3. .env에서 키 불러오기
+load_dotenv()
+
+from AI_Engine.llm_provider import (
+    create_structured_client,
+    get_chat_model_name,
+)
+
+# 4. 프론트엔드·백엔드·AI가 함께 사용하는 데이터 계약
 # AI 출력은 아래 Pydantic 스키마를 통과해야만 경험 초안으로 반환한다.
 from AI_Engine.schemas import (
     EvidenceCitation,
@@ -35,9 +42,6 @@ from AI_Engine.schemas import (
     SkillGroupCandidate,
 )
 
-# 3. .env에서 키 불러오기
-load_dotenv()
-
 # 5. 모델·프롬프트·스키마 버전
 # 저장된 초안이 어떤 구성으로 생성됐는지 추적할 수 있도록 실행 결과에 기록한다.
 DEFAULT_EXPERIENCE_MODEL = "gpt-4o-mini"
@@ -49,7 +53,7 @@ EXPERIENCE_SCHEMA_VERSION = "experience-schema-v1"
 EXPERIENCE_DRAFT_TOOL_NAME = "create_experience_drafts"
 
 # 7. 경험정리 AI 시스템 프롬프트
-# 레퍼런스에서 사용한 역할·목표·문맥·제약조건·형식 구조를 그대로 따른다.
+# 역할·목표·문맥·제약조건·출력 형식을 구분해 모델의 책임을 제한한다.
 EXPERIENCE_SYSTEM_PROMPT = """
 [역할 role]
 너는 Career Memory의 경험정리 AI야.
@@ -295,16 +299,20 @@ class ExperienceAI:
         self,
         client: Any | None = None,
         *,
-        model_version: str = DEFAULT_EXPERIENCE_MODEL,
+        model_version: str | None = None,
+        provider: str | None = None,
         prompt_version: str = EXPERIENCE_PROMPT_VERSION,
         schema_version: str = EXPERIENCE_SCHEMA_VERSION,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        # 실제 서비스에서는 기본 OpenAI 클라이언트를 사용하고,
+        # 실제 서비스에서는 활성 Provider의 구조화 출력 클라이언트를 사용하고,
         # 테스트에서는 같은 responses.create 모양의 가짜 클라이언트를 주입한다.
-        self.client = client or OpenAI()
-        self.model_version = _require_text(model_version, "model_version")
+        self.client = client or create_structured_client(provider)
+        self.model_version = _require_text(
+            model_version or get_chat_model_name(provider),
+            "model_version",
+        )
         self.prompt_version = _require_text(prompt_version, "prompt_version")
         self.schema_version = _require_text(schema_version, "schema_version")
         self.id_factory = id_factory or (lambda: str(uuid4()))
@@ -337,7 +345,10 @@ class ExperienceAI:
             model=self.model_version,
             input=self._build_model_input(request, analyzed_sources),
             tools=[EXPERIENCE_DRAFT_TOOL],
-            tool_choice="auto",
+            tool_choice={
+                "type": "function",
+                "name": EXPERIENCE_DRAFT_TOOL_NAME,
+            },
             instructions=EXPERIENCE_SYSTEM_PROMPT,
         )
 
@@ -629,11 +640,13 @@ class ExperienceAI:
 def create_experience_ai(
     *,
     client: Any | None = None,
-    model_version: str = DEFAULT_EXPERIENCE_MODEL,
+    model_version: str | None = None,
+    provider: str | None = None,
 ) -> ExperienceAI:
     return ExperienceAI(
         client=client,
         model_version=model_version,
+        provider=provider,
     )
 
 

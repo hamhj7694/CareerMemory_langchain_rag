@@ -278,6 +278,18 @@ class JobAnalysisSchemaTests(unittest.TestCase):
 
 
 class ChatAndRoutingSchemaTests(unittest.TestCase):
+    def test_chat_request_accepts_explicit_chat_mode(self) -> None:
+        request = ChatRequest(
+            client_request_id="request-chat",
+            conversation_id="conversation-1",
+            message_id="message-1",
+            sequence=1,
+            mode="chat",
+            content="내 경험을 바탕으로 질문에 답해 줘.",
+        )
+
+        self.assertEqual(request.mode, "chat")
+
     def test_chat_request_requires_content_or_attachment(self) -> None:
         with self.assertRaises(ValidationError):
             ChatRequest(

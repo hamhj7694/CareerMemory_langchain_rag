@@ -1,5 +1,7 @@
 import { AppError } from './AppError.js';
+import { apiConfig } from './config.js';
 import { mockV2Store as store, nextId, resetMockV2Store, snapshot, timestamp } from './v2/mockV2Store.js';
+import { v2ChatHttpApi } from './v2ChatHttpApi.js';
 import { fingerprintFile, sha256ArrayBuffer } from '../utils/fileFingerprint.js';
 
 const wait = (milliseconds = 80) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -341,8 +343,11 @@ export async function getConversation(conversationId) {
   return snapshot(find(store.conversations, conversationId, '대화'));
 }
 
-export async function updateConversation(conversationId, changes) {
+export async function updateConversation(conversationId, inputChanges) {
   const item = find(store.conversations, conversationId, '대화');
+  const changes = { ...inputChanges };
+  delete changes.base_version;
+  delete changes.client_request_id;
   Object.assign(item, changes, { updated_at: timestamp(), version: item.version + 1 });
   await wait();
   return snapshot(item);
@@ -967,6 +972,12 @@ export async function deleteExperience(experienceId, { version, confirm } = {}) 
   return { deleted_id: experienceId, recoverable: true };
 }
 
+// 일반 채팅의 실제 HTTP 전환 대상이다.
+// 경험정리·공고분석·첨부·경험관리 기능은 구현이 끝날 때까지 기존 Mock을 유지한다.
+const activeConversationApi = apiConfig.useMock
+  ? { createConversation, listConversations, getConversation, updateConversation, deleteConversation, listMessages, sendMessage }
+  : v2ChatHttpApi;
+
 export const v2ChatApi = {
   createConversation, listConversations, getConversation, updateConversation, deleteConversation,
   listMessages, sendMessage, streamMessage, getConversationExtractionStatus, extractConversationExperiences,
@@ -979,6 +990,7 @@ export const v2ChatApi = {
   getStructureDeletionImpact, getDomainDeletionImpact, getProjectDeletionImpact,
   bulkMoveExperiences, bulkDeleteExperiences, restoreDeleted, restoreExperience,
   reset: resetMockV2Store,
+  ...activeConversationApi,
 };
 
 export { resetMockV2Store };

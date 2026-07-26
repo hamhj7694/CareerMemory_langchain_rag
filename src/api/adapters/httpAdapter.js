@@ -1,5 +1,6 @@
 import { AppError, normalizeApiError } from '../AppError.js';
 import { toWireModel } from '../modelMapper.js';
+import { getCsrfToken } from '../../auth/authSession.js';
 
 function buildUrl(baseUrl, path, query) {
   const url = new URL(`${baseUrl}${path}`);
@@ -18,9 +19,16 @@ export function createHttpAdapter({ baseUrl, timeoutMs, fetchImpl = fetch }) {
       const isFormData = body instanceof FormData;
 
       try {
+        const csrfToken = getCsrfToken();
+        const csrfHeaders = method === 'GET' || !csrfToken
+          ? {}
+          : { 'X-CSRF-Token': csrfToken };
         const response = await fetchImpl(buildUrl(baseUrl, path, query), {
           method,
-          headers: isFormData ? headers : { 'Content-Type': 'application/json', ...headers },
+          credentials: 'include',
+          headers: isFormData
+            ? { ...csrfHeaders, ...headers }
+            : { 'Content-Type': 'application/json', ...csrfHeaders, ...headers },
           body: body === undefined ? undefined : isFormData ? body : JSON.stringify(toWireModel(body)),
           signal: combinedSignal,
         });

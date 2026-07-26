@@ -8,6 +8,7 @@ import { toExperience } from '../experience/model/experienceMapper.js';
 import { selectExperienceCard, selectExperiencePreview } from '../experience/model/experienceSelectors.js';
 import { buildSkillProfile, listExperienceRoles } from '../experience/model/skillModel.js';
 import { MemoryDetailPage } from '../../pages/MemoryDetailPage.jsx';
+import { getUserStorageKey } from '../../auth/authSession.js';
 import './memory-manager.css';
 
 const toView = (item) => toExperience(item);
@@ -22,7 +23,11 @@ const structureNameKey = (value) => String(value || '')
 const ORDER_STORAGE_KEY = 'career-memory.experience-structure-order.v1';
 const FAILED_EXPERIENCE_DRAFTS_KEY = 'career-memory.failed-experience-drafts.v1';
 const readStructureOrder = () => {
-  try { return { domains: [], projects: {}, experiences: {}, ...JSON.parse(window.localStorage.getItem(ORDER_STORAGE_KEY) || '{}') }; }
+  try {
+    const userKey = getUserStorageKey(ORDER_STORAGE_KEY);
+    const saved = window.localStorage.getItem(userKey);
+    return { domains: [], projects: {}, experiences: {}, ...JSON.parse(saved || '{}') };
+  }
   catch { return { domains: [], projects: {}, experiences: {} }; }
 };
 const sortBySavedOrder = (items, ids = []) => {
@@ -634,7 +639,7 @@ export function ExperienceManagerV3() {
         experiences: Object.fromEntries(Object.entries(structureOrder.experiences).map(([projectId, ids]) => [remapId(projectId), ids])),
       };
       setStructureOrder(savedOrder);
-      window.localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(savedOrder));
+      window.localStorage.setItem(getUserStorageKey(ORDER_STORAGE_KEY), JSON.stringify(savedOrder));
       setPendingOps([]); setUndoHistory([]); setRedoHistory([]); setEditMode(false); editSnapshotRef.current = null; await refresh();
       if (openExperienceFor) {
         const domainId = remapId(openExperienceFor.domainId);
@@ -707,7 +712,7 @@ export function ExperienceManagerV3() {
   const preserveFailedExperienceDrafts = (proposal, items) => {
     if (!items.length) return;
     try {
-      window.localStorage.setItem(FAILED_EXPERIENCE_DRAFTS_KEY, JSON.stringify({
+      window.localStorage.setItem(getUserStorageKey(FAILED_EXPERIENCE_DRAFTS_KEY), JSON.stringify({
         proposal_id: proposal?.id,
         saved_at: new Date().toISOString(),
         drafts: items,

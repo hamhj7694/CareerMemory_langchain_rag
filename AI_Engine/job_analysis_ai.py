@@ -15,11 +15,19 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_openai import OpenAIEmbeddings
-from openai import OpenAI
 from pydantic import ValidationError
 
-# 3. 공통 데이터 계약
+# 3. .env에서 키 불러오기
+load_dotenv()
+
+from AI_Engine.llm_provider import (
+    create_embeddings,
+    create_structured_client,
+    get_chat_model_name,
+    get_experience_index_version,
+)
+
+# 4. 공통 데이터 계약
 # AI 출력은 프론트엔드와 백엔드가 공유하는 공고 분석 스키마로 검증한다.
 from AI_Engine.schemas import (
     JobAnalysisRequest,
@@ -34,18 +42,13 @@ from AI_Engine.schemas import (
     RequirementExperienceLinkStatus,
 )
 
-
-# 4. 환경변수 불러오기
-# 프로젝트의 .env에 저장된 OPENAI_API_KEY를 OpenAI 클라이언트가 사용한다.
-load_dotenv()
-
 # 5. 모델·프롬프트·스키마·검색 인덱스 버전
 # 분석 결과와 추천 결과가 어떤 구성으로 생성됐는지 추적하기 위한 값이다.
 DEFAULT_JOB_ANALYSIS_MODEL = "gpt-4o-mini"
 JOB_ANALYSIS_PROMPT_VERSION = "job-analysis-prompt-v1"
 JOB_ANALYSIS_SCHEMA_VERSION = "job-analysis-schema-v1"
-DEFAULT_EXPERIENCE_INDEX_VERSION = "experience-index-v1"
-DEFAULT_EXPERIENCE_EMBEDDING_MODEL = "text-embedding-ada-002"
+DEFAULT_EXPERIENCE_INDEX_VERSION = "experience-index-v2"
+DEFAULT_EXPERIENCE_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EXPERIENCE_COLLECTION_NAME = "career_memory_experiences"
 
 # 6. 모델이 호출해야 하는 함수 이름
@@ -261,18 +264,22 @@ class JobAnalysisAI:
         client: Any | None = None,
         *,
         experience_retriever: Any | None = None,
-        model_version: str = DEFAULT_JOB_ANALYSIS_MODEL,
+        model_version: str | None = None,
+        provider: str | None = None,
         prompt_version: str = JOB_ANALYSIS_PROMPT_VERSION,
         schema_version: str = JOB_ANALYSIS_SCHEMA_VERSION,
-        index_version: str = DEFAULT_EXPERIENCE_INDEX_VERSION,
+        index_version: str | None = None,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        # 실제 실행에서는 OpenAI 클라이언트와 Chroma retriever를 사용하고,
+        # 실제 실행에서는 활성 Provider 클라이언트와 Chroma retriever를 사용하고,
         # 테스트에서는 같은 메서드 모양의 가짜 객체를 주입할 수 있다.
-        self.client = client or OpenAI()
+        self.client = client or create_structured_client(provider)
         self.experience_retriever = experience_retriever
-        self.model_version = _require_text(model_version, "model_version")
+        self.model_version = _require_text(
+            model_version or get_chat_model_name(provider),
+            "model_version",
+        )
         self.prompt_version = _require_text(
             prompt_version,
             "prompt_version",
@@ -282,7 +289,7 @@ class JobAnalysisAI:
             "schema_version",
         )
         self.index_version = _require_text(
-            index_version,
+            index_version or get_experience_index_version(provider),
             "index_version",
         )
         self.id_factory = id_factory or (lambda: str(uuid4()))
@@ -399,7 +406,10 @@ class JobAnalysisAI:
             model=self.model_version,
             input=self._build_requirement_input(request, source_texts),
             tools=[JOB_REQUIREMENT_TOOL],
-            tool_choice="auto",
+            tool_choice={
+                "type": "function",
+                "name": JOB_REQUIREMENT_TOOL_NAME,
+            },
             instructions=JOB_REQUIREMENT_SYSTEM_PROMPT,
         )
         raw_requirements = _function_array(
@@ -511,7 +521,7 @@ class JobAnalysisAI:
             ) from error
 
     # 12-7. 요구사항별 확정 경험 RAG 검색
-    # 레퍼런스의 retriever.invoke(query) 방식으로 관련 경험 문서를 가져온다.
+    # 주입된 Retriever에서 요구사항과 관련된 확정 경험 문서를 가져온다.
     def _retrieve_candidates(
         self,
         requirements: Sequence[JobRequirement],
@@ -634,7 +644,10 @@ class JobAnalysisAI:
                 + json.dumps(match_context, ensure_ascii=False)
             ),
             tools=[JOB_MATCH_TOOL],
-            tool_choice="auto",
+            tool_choice={
+                "type": "function",
+                "name": JOB_MATCH_TOOL_NAME,
+            },
             instructions=JOB_MATCH_SYSTEM_PROMPT,
         )
         raw_links = _function_array(
@@ -752,11 +765,10 @@ def sync_experience_vector_store(
     *,
     persist_directory: str | None = None,
     embeddings: Any | None = None,
+    provider: str | None = None,
     collection_name: str = DEFAULT_EXPERIENCE_COLLECTION_NAME,
 ) -> Chroma:
-    embedding_model = embeddings or OpenAIEmbeddings(
-        model=DEFAULT_EXPERIENCE_EMBEDDING_MODEL
-    )
+    embedding_model = embeddings or create_embeddings(provider=provider)
     vector_db = Chroma(
         collection_name=_require_text(
             collection_name,
@@ -822,8 +834,8 @@ def sync_experience_vector_store(
     return vector_db
 
 
-# 15. 공고 분석 AI용 확정 경험 retriever 생성
-# 레퍼런스와 같이 Chroma를 as_retriever로 변환해 요구사항 검색에 사용한다.
+# 15. 공고 분석 AI용 확정 경험 Retriever 생성
+# Chroma Vector Store를 요구사항별 유사 경험 검색기로 변환한다.
 def create_experience_retriever(
     experiences: Sequence[
         ExperienceSearchDocument | Mapping[str, Any]
@@ -831,6 +843,7 @@ def create_experience_retriever(
     *,
     persist_directory: str | None = None,
     embeddings: Any | None = None,
+    provider: str | None = None,
     collection_name: str = DEFAULT_EXPERIENCE_COLLECTION_NAME,
     search_k: int = 5,
 ) -> Any:
@@ -842,6 +855,7 @@ def create_experience_retriever(
         experiences,
         persist_directory=persist_directory,
         embeddings=embeddings,
+        provider=provider,
         collection_name=collection_name,
     )
     return vector_db.as_retriever(
@@ -858,14 +872,16 @@ def create_job_analysis_ai(
     *,
     client: Any | None = None,
     experience_retriever: Any | None = None,
-    model_version: str = DEFAULT_JOB_ANALYSIS_MODEL,
-    index_version: str = DEFAULT_EXPERIENCE_INDEX_VERSION,
+    model_version: str | None = None,
+    index_version: str | None = None,
+    provider: str | None = None,
 ) -> JobAnalysisAI:
     return JobAnalysisAI(
         client=client,
         experience_retriever=experience_retriever,
         model_version=model_version,
         index_version=index_version,
+        provider=provider,
     )
 
 

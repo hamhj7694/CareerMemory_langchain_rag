@@ -2,6 +2,9 @@
 
 이 문서는 프론트엔드와 사용자 담당 AI 엔진 사이의 살아 있는 계약 기록이다. PRD 7장이 초기 기준이며, 확정 변경은 여기에 먼저 기록한다.
 
+AI 내부 Pydantic DTO와 프론트 공개 API DTO 사이의 상세 변환 규칙은
+`../AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md`를 기준으로 한다.
+
 ## Endpoint 목록
 
 | 영역 | Method | Endpoint | 상태 |
@@ -46,6 +49,8 @@
 |---|---|---|---|---|
 | 2026-07-22 | FE-001 프론트 기준안 | 12 API DTO·오류·adapter·화면 모델 제안 | API Integration Agent | FE-002, FE-100 이후 |
 | 2026-07-22 | 상세 복구·문서 저장 API | 공고 GET, 문서 GET/PATCH 3개 추가 승인 | 사용자 | FE-002, FE-130, INT-402 |
+| 2026-07-26 | AI ↔ 프론트 변환 경계 | Experience 결과→Proposal, AI 스트림→V2 SSE, Job 분석→analyze/match, AI 오류→공개 오류 변환 규칙 고정 | 사용자·Codex | AI-005, AI-006, INT-401, INT-402 |
+| 2026-07-26 | 공고 요구사항 enum | AI의 `qualification/unknown`과 V1의 세부 type·`unspecified` 사이 변환 규칙 고정, 불명확한 값은 추측하지 않고 `unknown`으로 보존 | 사용자·Codex | AI-130, INT-402 |
 
 ## 열린 질문
 

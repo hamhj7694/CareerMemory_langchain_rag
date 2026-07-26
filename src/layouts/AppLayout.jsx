@@ -1,4 +1,5 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../auth/useAuth.js';
 
 const PAGE_TITLES = [
   { pattern: /^\/chat(?:\/[^/]+)?$/, title: '커리어 챗' },
@@ -15,6 +16,13 @@ function getPageTitle(pathname) {
 
 export function AppLayout() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  const signOut = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div className="app-shell">
@@ -32,6 +40,12 @@ export function AppLayout() {
         <div className="api-status" aria-label="API 연결 상태">
           <span aria-hidden="true">●</span>
           {import.meta.env.VITE_USE_MOCK !== 'false' ? 'Mock 데이터' : 'AI 엔진 연결'}
+        </div>
+        <div className="app-account">
+          <strong>{user?.display_name}</strong>
+          <span>{user?.username ? `@${user.username}` : user?.email}</span>
+          <NavLink to="/account">계정 설정</NavLink>
+          <button type="button" onClick={signOut}>로그아웃</button>
         </div>
       </aside>
       <section className="app-workspace">

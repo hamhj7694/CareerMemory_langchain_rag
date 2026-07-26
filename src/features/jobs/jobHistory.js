@@ -1,8 +1,12 @@
+import { getUserStorageKey } from '../../auth/authSession.js';
+
 const STORAGE_KEY = 'career-memory.job-analysis-history.v1';
 
 const read = () => {
   try {
-    const value = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '[]');
+    const userKey = getUserStorageKey(STORAGE_KEY);
+    const storedValue = window.localStorage.getItem(userKey);
+    const value = JSON.parse(storedValue || '[]');
     return Array.isArray(value) ? value : [];
   } catch {
     return [];
@@ -10,7 +14,7 @@ const read = () => {
 };
 
 const write = (items) => {
-  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items)); } catch { /* storage can be unavailable */ }
+  try { window.localStorage.setItem(getUserStorageKey(STORAGE_KEY), JSON.stringify(items)); } catch { /* storage can be unavailable */ }
   return items;
 };
 

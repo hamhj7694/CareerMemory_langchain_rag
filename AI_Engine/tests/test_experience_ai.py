@@ -189,7 +189,13 @@ class ExperienceAITests(unittest.TestCase):
 
         call = responses.calls[0]
         self.assertEqual(call["model"], "test-model-v1")
-        self.assertEqual(call["tool_choice"], "auto")
+        self.assertEqual(
+            call["tool_choice"],
+            {
+                "type": "function",
+                "name": EXPERIENCE_DRAFT_TOOL_NAME,
+            },
+        )
         self.assertEqual(call["tools"], [EXPERIENCE_DRAFT_TOOL])
         self.assertEqual(call["instructions"], EXPERIENCE_SYSTEM_PROMPT)
         self.assertIn("source_ref_id: source-manual-1", call["input"])
