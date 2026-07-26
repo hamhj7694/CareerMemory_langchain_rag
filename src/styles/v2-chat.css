@@ -57,6 +57,7 @@
 .v2-message--thinking span { width: 8px; height: 8px; display: inline-block; border-radius: 50%; background: var(--color-ai); animation: v2-pulse 1s ease-in-out infinite alternate; }
 @keyframes v2-pulse { to { opacity: .25; } }
 .v2-chat-notice { width:min(calc(100% - 48px),var(--chat-content-width));box-sizing:border-box;margin:0 auto var(--space-2);padding:var(--space-2) var(--space-3);border-radius:var(--radius-sm);color:var(--color-confirmed);background:var(--color-confirmed-subtle);font-size:var(--text-body-sm) }
+.v2-analysis-progress { width:min(calc(100% - 48px),var(--chat-content-width));box-sizing:border-box;margin:0 auto var(--space-3); }
 .v2-composer { width: min(calc(100% - 48px), var(--chat-content-width)); margin: 0 auto var(--space-5); padding: var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-popover); }
 .v2-composer:focus-within { border-color: var(--color-focus); }
 .v2-composer textarea { width: 100%; max-height: 180px; padding: var(--space-2); border: 0; resize: vertical; color: var(--color-text); background: transparent; line-height: 1.6; }
@@ -226,6 +227,7 @@
   .v2-starters button { min-height: 72px; }
   .v2-message { max-width: 92%; }
   .v2-composer { position: relative; bottom: auto; width: calc(100% - 24px); margin-bottom: var(--space-3); padding: var(--space-2); }
+  .v2-analysis-progress { width:calc(100% - 24px); }
   .v2-chat-notice{width:calc(100% - 24px)}
   .v2-mode-switch { max-width: calc(100% - 88px); overflow-x: auto; }
   .v2-mode-switch button { white-space: nowrap; }

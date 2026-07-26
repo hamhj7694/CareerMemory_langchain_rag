@@ -377,7 +377,7 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
   if (status === 'loading') return <div className="memory-detail"><LoadingState label="경험 상세를 불러오는 중입니다." /></div>;
   if (status === 'error') return <div className="memory-detail"><ErrorState title="경험을 찾을 수 없습니다" description="대상이 없거나 잘못된 주소일 수 있습니다." onRetry={load} /><Link className="ui-button ui-button--secondary" to="/memory">경험 목록으로</Link></div>;
 
-  const period = [item.period?.start, item.period?.end].filter(Boolean).join(' · ');
+  const careerRole = item.role?.trim() || '역할 미입력';
 
   return (
     <article className="memory-detail">
@@ -391,7 +391,8 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
         <div>
           <span className="eyebrow">{isNew ? '새 경험 작성' : '사용자 확정 경험'}</span>
           <h2>{isNew ? '새 경험' : item.title}</h2>
-          <p>{[item.domainName, item.projectName, item.organization, period].filter(Boolean).join(' · ')}</p>
+          {/* 상세 제목 아래에는 경험이 속한 분류와 사용자의 실제 담당 역할을 보여 줍니다. */}
+          <p>{[item.domainName, careerRole].filter(Boolean).join(' · ')}</p>
         </div>
         <div>
           {!isNew && <button className="ui-button ui-button--secondary" onClick={openSources}>원본 근거 관리</button>}

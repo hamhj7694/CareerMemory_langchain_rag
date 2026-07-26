@@ -632,7 +632,13 @@ export function ChatPage({ onSend }) {
       <div className="v2-conversation__scroll" ref={scrollArea}>
         <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : mode === 'job' ? '채용공고 요구사항과 보유 경험을 분석하고 있어요.' : mode === 'experience' ? '경험을 분석하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />
       </div>
-      <AnalysisProgress active={busy && ['experience', 'job'].includes(mode)} hasFiles={analysisHasFiles} kind={mode === 'job' ? 'job' : 'experience'} />
+      <div className="v2-analysis-progress">
+        <AnalysisProgress
+          active={extracting || (busy && ['experience', 'job'].includes(mode))}
+          hasFiles={!extracting && analysisHasFiles}
+          kind={!extracting && mode === 'job' ? 'job' : 'experience'}
+        />
+      </div>
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
       <ChatComposer mode={mode} onModeChange={setMode} text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} />
     </section>
