@@ -325,10 +325,37 @@ class ConversationApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 501)
+        self.assertEqual(
+            response.json()["error"]["message"],
+            (
+                "경험 정리 기능은 아직 메시지 API에 연결되지 않았습니다. "
+                "현재는 자동, 일반 질문, 조언을 사용할 수 있습니다."
+            ),
+        )
         history = self.client.get(
             f"/api/v2/conversations/{conversation['id']}/messages"
         ).json()
         self.assertEqual(history["total_count"], 0)
+
+    def test_unavailable_job_analysis_uses_user_friendly_message(
+        self,
+    ) -> None:
+        conversation = self.create_conversation().json()
+
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "공고를 분석해줘",
+                "intent": "job",
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 501)
+        self.assertEqual(
+            response.json()["error"]["message"],
+            "공고 분석 기능은 아직 제공되지 않아요!",
+        )
 
     def test_update_conversation_checks_and_increases_version(self) -> None:
         conversation = self.create_conversation(title="변경 전").json()

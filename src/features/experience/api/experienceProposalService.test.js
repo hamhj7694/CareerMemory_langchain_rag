@@ -1,35 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { buildLocalExperienceAnalysis, markProposalExperienceSaved } from './experienceProposalService.js';
+import { buildExperienceAnalysisFromResult } from './experienceProposalService.js';
 
-describe('experience proposal service', () => {
-  it('returns the same proposal contract that a future AI adapter must follow', () => {
-    const result = buildLocalExperienceAnalysis({
-      content: '서비스 지표를 분석했습니다.',
-      fileNames: ['성과.txt'],
-      uploadedAttachments: [{
-        id: 'ATT-1',
-        filename: '성과.txt',
-        mime_type: 'text/plain',
-        size_bytes: 20,
-        created_at: '2026-07-25T00:00:00.000Z',
-        raw_text: '전환율을 개선했습니다.',
+describe('buildExperienceAnalysisFromResult', () => {
+  it('AI가 반환한 경험만 제안으로 만들고 원본 근거를 연결한다', () => {
+    const result = {
+      run: { id: 'RUN-1', completed_at: '2026-07-26T00:00:00Z' },
+      sources: [{
+        id: 'SRC-1',
+        type: 'manual_text',
+        title: '사용자 직접 입력',
+        text: '전환율을 개선했다.',
       }],
-      domain: { id: 'DOM-1', name: '직장 경험' },
-      project: { id: 'PROJ-1', name: '서비스 개선' },
-      context: { domainId: 'DOM-1', projectId: 'PROJ-1' },
-    });
+      experience_drafts: [{
+        draft_id: 'DRAFT-1',
+        domain: { name: '직장 경험' },
+        project: { name: '서비스 개선' },
+        title: '전환율 개선',
+        summary: '전환율을 개선한 경험',
+        source_ref_ids: ['SRC-1'],
+      }],
+    };
 
-    expect(result.draft).toMatchObject({ domainName: '직장 경험', projectName: '서비스 개선' });
-    expect(result.proposal.kind).toBe('experience');
-    expect(result.proposal.experiences).toHaveLength(2);
-    expect(result.proposal.experiences[0].source_ref_ids).toHaveLength(2);
-  });
+    const analysis = buildExperienceAnalysisFromResult({ result });
 
-  it('marks only the approved draft as saved without changing sibling drafts', () => {
-    const proposal = { version: 1, experiences: [{ draft_id: 'D-1' }, { draft_id: 'D-2' }], rawPayload: {} };
-    const next = markProposalExperienceSaved(proposal, 1, { id: 'EXP-2', created_at: '2026-07-25T00:00:00.000Z' });
-
-    expect(next.experiences[0].approved).toBeUndefined();
-    expect(next.experiences[1]).toMatchObject({ approved: true, savedExperienceId: 'EXP-2' });
+    expect(analysis.proposal.experiences).toHaveLength(1);
+    expect(analysis.proposal.experiences[0].title).toBe('전환율 개선');
+    expect(analysis.proposal.experiences[0].source_refs[0].id).toBe('SRC-1');
   });
 });

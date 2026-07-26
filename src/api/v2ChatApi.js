@@ -2,6 +2,7 @@ import { AppError } from './AppError.js';
 import { apiConfig } from './config.js';
 import { mockV2Store as store, nextId, resetMockV2Store, snapshot, timestamp } from './v2/mockV2Store.js';
 import { v2ChatHttpApi } from './v2ChatHttpApi.js';
+import { experienceLibraryHttpApi } from './experienceLibraryHttpApi.js';
 import { fingerprintFile, sha256ArrayBuffer } from '../utils/fileFingerprint.js';
 
 const wait = (milliseconds = 80) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -978,6 +979,16 @@ const activeConversationApi = apiConfig.useMock
   ? { createConversation, listConversations, getConversation, updateConversation, deleteConversation, listMessages, sendMessage }
   : v2ChatHttpApi;
 
+// 개발 서버에서는 경험 데이터를 사용자별 DB API에서 읽고 저장합니다.
+// 테스트 모드만 기존 인메모리 구현을 사용하여 외부 서버 없이 검증합니다.
+const activeExperienceApi = apiConfig.useMock
+  ? {
+      listExperiences, getExperience, createExperience, updateExperience,
+      deleteExperience, listStructure, createDomain, updateDomain, deleteDomain,
+      createProject, updateProject, deleteProject, bulkMoveExperiences,
+    }
+  : experienceLibraryHttpApi;
+
 export const v2ChatApi = {
   createConversation, listConversations, getConversation, updateConversation, deleteConversation,
   listMessages, sendMessage, streamMessage, getConversationExtractionStatus, extractConversationExperiences,
@@ -991,6 +1002,7 @@ export const v2ChatApi = {
   bulkMoveExperiences, bulkDeleteExperiences, restoreDeleted, restoreExperience,
   reset: resetMockV2Store,
   ...activeConversationApi,
+  ...activeExperienceApi,
 };
 
 export { resetMockV2Store };

@@ -106,7 +106,7 @@ AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은
 |---|---|---|---|---|
 | AI-310 | `[~]` | 커리어 챗 | 현재 세션 문맥 수집 → 사용자별 확정 경험 RAG → 챗봇 → 스트리밍 응답 | 세션 원문 격리, 계정 공통 경험 검색, 참고 경험 표시와 API 연결 대기 |
 | AI-320 | `[ ]` | 대화내용으로 경험 정리 | 마지막 성공 범위 계산 → 대화·첨부 수집 → 경험정리 AI | `ExperienceExtractionRequest`, `ExtractionRun`, `ExperienceExtractionResult` |
-| AI-330 | `[ ]` | 경험 관리의 `+ 경험 추가` | 직접 텍스트·첨부 수집 → 공통 경험정리 AI | AI-320과 같은 경험 결과 계약 |
+| AI-330 | `[~]` | 경험 관리의 `+ 경험 추가` | 직접 텍스트·첨부 수집 → 공통 경험정리 AI | 텍스트 직접 입력은 실제 Gemini/FastAPI와 경험 제안 화면 연결 완료. 파일 파싱과 확정 저장 API 연결 대기 |
 | AI-340 | `[ ]` | 채용공고 분석 | 공고 파싱 → 요구사항 구조화 → 경험 RAG → 요구사항별 추천 | `JobAnalysisRequest`, `JobAnalysisResult` |
 | AI-350 | `[ ]` | 자동 모드 라우팅 | 요청 문맥 분석 → 체인 판정 → 낮은 확신은 chat fallback | `AIRouteRequest`, `AIRouteDecision` |
 | AI-360 | `[ ]` | AI 조립 진입점 | Adapter·Retriever·Validator·Chain 생성과 의존성 주입 | `AI_langchain.py` |
@@ -132,7 +132,7 @@ AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은
 |---|---|---|---|
 | `POST /ai/chat` | `ChatRequest` | `ChatStreamEvent` / `ChatResponse` | SSE |
 | `POST /ai/experience-extractions/conversation` | `ExperienceExtractionRequest` | `ExperienceExtractionResult` | JSON 또는 작업 상태 |
-| `POST /ai/experience-extractions/direct-input` | `ExperienceExtractionRequest` | `ExperienceExtractionResult` | JSON 또는 작업 상태 |
+| `POST /api/v2/experience-extractions/direct-input` | `ExperienceExtractionRequest` | `ExperienceExtractionResult` | JSON. 텍스트 직접 입력 연결 완료 |
 | `POST /ai/job-analyses` | `JobAnalysisRequest` | `JobAnalysisResult` | JSON 또는 작업 상태 |
 
 ---
@@ -148,6 +148,11 @@ AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은
 | AI-QA-550 | `[ ]` | 라우터 평가 | 자동 모드 혼합 의도와 낮은 확신 fallback 검증 |
 | AI-QA-560 | `[ ]` | API 계약 테스트 | snake_case ↔ camelCase mapper, 오류, SSE 재연결 검증 |
 | AI-QA-570 | `[ ]` | 프론트엔드 E2E | 초안 검토·개별/전체 저장·삭제·공고 매칭까지 회귀 통과 |
+
+현재 연결 메모:
+
+- 직접 입력 → Gemini 경험정리 → 초안 검토 → 개별/전체 저장 → 사용자별 DB 조회 경로를 연결했다.
+- 경험 CRUD API와 프론트 단위 테스트까지 통과했으며, 브라우저 수동 E2E 확인 후 관련 항목을 `[x]`로 확정한다.
 
 ---
 

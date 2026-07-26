@@ -82,6 +82,14 @@ API가 마지막 성공 분석 이후의 범위를 계산하고 AI 요청을 만
 
 API Adapter는 저장소에서 대화 본문과 파싱된 첨부 본문을 조회하여 `ExperienceAI.organize()`의 원본 입력으로 주입한다.
 
+현재 구현 상태:
+
+- `POST /api/v2/experience-extractions/direct-input`에서 텍스트 직접 입력을 실제 경험정리 AI로 실행한다.
+- 반환된 `ExperienceExtractionResult`는 프론트 Adapter가 기존 경험 구조화 제안 화면 모델로 변환한다.
+- AI 결과에 없는 가짜 추가 초안은 생성하지 않는다.
+- PDF/TXT 첨부는 업로드·본문 파싱 API가 연결되기 전까지 사용자에게 미제공 상태를 안내한다.
+- 초안의 최종 저장은 아직 경험 Mock 저장소를 사용하므로 배포용 영구 저장으로 간주하지 않는다.
+
 ### 3.2 출력 변환
 
 | AI `ExperienceExtractionResult` | 공개 API `Proposal` |
@@ -362,7 +370,7 @@ AI 또는 프론트 연동 코드를 변경할 때 다음 순서로 확인한다
 ## 8. 아직 구현이 필요한 항목
 
 - Backend AI/API Adapter
-- Proposal 저장과 멱등성 처리
+- Proposal 전체 저장의 멱등성 처리
 - SSE 이벤트 저장·heartbeat·재연결
 - `JobAnalysisResult`의 analyze/match projection
 - AI 오류 예외의 공개 오류 envelope 변환
@@ -370,3 +378,14 @@ AI 또는 프론트 연동 코드를 변경할 때 다음 순서로 확인한다
 - AI DTO ↔ 공개 API DTO 계약 테스트
 
 이 문서는 변환 계약을 고정하며 위 항목의 구현 완료를 의미하지 않는다.
+
+---
+
+## 9. 경험정리 AI 저장 연결 현황
+
+- `POST /api/v2/experience-extractions/direct-input`이 Gemini 경험 초안을 반환한다.
+- 사용자가 초안 검토 화면에서 저장하면 `POST /api/v2/experiences`가 호출된다.
+- 확정된 경험, 경험 분류, 프로젝트·활동은 로그인 사용자 ID와 함께 DB에 저장된다.
+- 경험 목록과 상세 화면은 `/api/v2/experiences`와 `/api/v2/experience-structure`에서 실제 DB 값을 읽는다.
+- 다른 사용자의 경험은 목록·상세·수정·삭제 API에서 조회할 수 없다.
+- 예시 경험 fixture는 자동 테스트에서만 사용하며 개발·배포 화면에는 노출하지 않는다.

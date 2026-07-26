@@ -7,6 +7,7 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
   const [files, setFiles] = useState([]);
   const [fileError, setFileError] = useState('');
   const [fileNotice, setFileNotice] = useState('');
+  const [analysisError, setAnalysisError] = useState('');
   const [checkingFiles, setCheckingFiles] = useState(false);
 
   if (!open) return null;
@@ -31,12 +32,17 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
   const submit = async (event) => {
     event.preventDefault();
     if (!canAnalyze || busy) return;
-    await onAnalyze({ content: content.trim(), files });
-    setContent(''); setFiles([]); setFileError(''); setFileNotice('');
+    setAnalysisError('');
+    try {
+      await onAnalyze({ content: content.trim(), files });
+      setContent(''); setFiles([]); setFileError(''); setFileNotice('');
+    } catch (reason) {
+      setAnalysisError(reason?.message || '경험을 정리하지 못했습니다. 다시 시도해 주세요.');
+    }
   };
   const close = () => {
     if (busy || checkingFiles) return;
-    setContent(''); setFiles([]); setFileError(''); setFileNotice('');
+    setContent(''); setFiles([]); setFileError(''); setFileNotice(''); setAnalysisError('');
     onClose();
   };
 
@@ -47,7 +53,7 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
           <div>
             <span className="mv2-kicker">EXPERIENCE AI</span>
             <h2 id="experience-intake-title">경험정리 AI</h2>
-            <p>경험을 자유롭게 적거나 파일을 넣으면 기존 경험 구조로 정리합니다.</p>
+            <p>경험을 자유롭게 적으면 AI가 핵심 내용과 역할, 행동, 성과를 분석합니다.</p>
           </div>
           <button type="button" className="mv2-icon-button" onClick={close} aria-label="닫기" disabled={busy || checkingFiles}>×</button>
         </header>
@@ -65,7 +71,8 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
             {files.length > 0 && <ul className="mv2-experience-intake__files">{files.map((file) => <li key={evidenceFileKey(file)}><span><strong>{file.name}</strong><small>{evidenceFileStatusLabel(file)}</small></span><button type="button" onClick={() => setFiles((current) => current.filter((item) => item !== file))} aria-label={`${file.name} 제거`}>×</button></li>)}</ul>}
             {fileError && <p className="mv2-experience-intake__file-error" role="alert">{fileError}</p>}
             {fileNotice && <p className="mv2-experience-intake__file-notice" role="status">{fileNotice}</p>}
-            <p className="mv2-experience-intake__notice">현재는 목데이터 분석으로 초안을 만들며, AI 엔진 연결 후 실제 분석 결과로 대체됩니다.</p>
+            {analysisError && <p className="mv2-experience-intake__file-error" role="alert">{analysisError}</p>}
+            <p className="mv2-experience-intake__notice">입력한 원문에서 확인되는 내용만 AI가 경험 초안으로 정리합니다.</p>
           </div>
           <footer>
             <button type="button" className="mv2-button mv2-button--secondary" onClick={close} disabled={busy || checkingFiles}>취소</button>

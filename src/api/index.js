@@ -6,3 +6,4 @@ export { sourceApi } from './sourceApi.js';
 export { coverLetterApi } from './coverLetterApi.js';
 export { AppError } from './AppError.js';
 export { v2ChatApi } from './v2ChatApi.js';
+export { experienceExtractionApi } from './experienceExtractionApi.js';

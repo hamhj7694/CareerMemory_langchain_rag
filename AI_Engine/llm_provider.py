@@ -144,6 +144,7 @@ class GeminiStructuredClient:
             model=model,
             api_key=_required_api_key("GEMINI_API_KEY"),
             max_tokens=4_000,
+            temperature=0,
         )
         structured_model = model_client.with_structured_output(
             dict(schema),

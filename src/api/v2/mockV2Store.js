@@ -5,12 +5,15 @@ let sequence = 100;
 const id = (prefix) => `${prefix}-${++sequence}`;
 const clone = (value) => structuredClone(value);
 
+// 예시 경험은 단위 테스트의 고정 fixture로만 사용합니다.
+// 실제 개발 화면과 배포 화면에서는 빈 목록에서 시작해 DB 데이터만 보여 줍니다.
+const fixtureExperiences = import.meta.env.MODE === 'test' ? initialExperiences : [];
 const domainIds = new Map();
 const projectIds = new Map();
 const seedDomains = [];
 const seedProjects = [];
 
-initialExperiences.forEach((item) => {
+fixtureExperiences.forEach((item) => {
   if (!domainIds.has(item.domain)) {
     const domainId = `DOM-SEED-${domainIds.size + 1}`;
     domainIds.set(item.domain, domainId);
@@ -24,7 +27,7 @@ initialExperiences.forEach((item) => {
   }
 });
 
-const seedExperiences = initialExperiences.map((item) => ({
+const seedExperiences = fixtureExperiences.map((item) => ({
   id: item.id,
   title: item.title,
   summary: item.summary || '',

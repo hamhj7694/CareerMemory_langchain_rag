@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { experienceExtractionApi } from '../../api/experienceExtractionApi.js';
 import { v2ChatApi } from '../../api/v2ChatApi.js';
-import { buildLocalExperienceAnalysis, discardPendingProposalAttachments, markProposalExperienceSaved, saveProposalExperience } from '../experience/api/experienceProposalService.js';
+import { buildExperienceAnalysisFromResult, discardPendingProposalAttachments, markProposalExperienceSaved, saveProposalExperience } from '../experience/api/experienceProposalService.js';
 import { ExperienceIntakeModal } from '../experience/components/ExperienceIntakeModal.jsx';
 import { ExperienceProposalModal } from '../experience/components/ExperienceProposalModal.jsx';
 import { toExperience } from '../experience/model/experienceMapper.js';
@@ -671,8 +672,12 @@ export function ExperienceManagerV3() {
   };
   const analyzeExperience = async ({ content, files }) => {
     setExperienceIntakeBusy(true);
+    setError('');
     try {
-      const uploadedAttachments = files.length ? await v2ChatApi.uploadAttachments(files) : [];
+      if (files.length) {
+        throw new Error('파일을 이용한 경험 정리는 아직 제공되지 않아요!');
+      }
+
       // The structure may have been created immediately before opening this modal.
       // Resolve the context from the latest API snapshot instead of a possibly stale
       // React state value so the first draft receives the selected domain/project.
@@ -681,19 +686,25 @@ export function ExperienceManagerV3() {
       const domain = contextDomains.find((entry) => entry.id === newExperienceContext.domainId);
       const project = domain?.projects?.find((entry) => entry.id === newExperienceContext.projectId);
       if (contextDomains !== domains) setDomains(contextDomains);
-      const analysis = buildLocalExperienceAnalysis({
-        content,
-        fileNames: files.map((file) => file.name),
-        uploadedAttachments,
+      const result = await experienceExtractionApi.analyzeDirectInput({
+        text: content,
+      });
+      if (!result.experience_drafts?.length) {
+        throw new Error('입력한 내용에서 정리할 경험을 찾지 못했어요. 상황, 행동, 결과를 조금 더 자세히 적어 주세요.');
+      }
+      const analysis = buildExperienceAnalysisFromResult({
+        result,
         domain,
         project,
-        context: newExperienceContext,
       });
       setNewExperienceDraft(analysis.draft);
       setExperienceProposal(analysis.proposal);
       setExperienceProposalEditing(false);
       setExperienceIntakeOpen(false);
       setExperiencePreviewOpen(true);
+    } catch (reason) {
+      setError(reason?.message || '경험을 정리하지 못했습니다. 다시 시도해 주세요.');
+      throw reason;
     } finally {
       setExperienceIntakeBusy(false);
     }
@@ -819,9 +830,9 @@ export function ExperienceManagerV3() {
   return <div className={`mv2-manager mv2-manager--v3 ${selected ? 'has-preview' : ''} ${editMode ? 'is-edit-mode' : ''}`}>
     <main>
       <section className="mv2-library-header" aria-labelledby="experience-library-title">
-        <header className="mv2-page-header"><div><span className="mv2-kicker">EXPERIENCE LIBRARY</span><div className="mv2-title-row"><h1 id="experience-library-title">경험 관리</h1>{editMode && <span className="mv2-edit-mode-badge">구조 편집 중</span>}</div><p>정리된 경험을 분류하고 직접 수정·관리하세요.</p></div><div className="mv2-header-actions">{editMode ? <><button type="button" className="mv2-button mv2-button--secondary mv2-edit-cancel" onClick={cancelEditMode} disabled={savingStructure}>취소</button><button type="button" className="mv2-button mv2-button--primary mv2-edit-save" onClick={() => saveStructure()} disabled={!pendingOps.length || savingStructure}>{savingStructure ? '저장 중…' : '변경사항 저장'}</button></> : <><button type="button" className="mv2-button mv2-button--primary mv2-add-experience" onClick={openNewExperience}>+ 경험 추가</button><button type="button" className="mv2-button mv2-button--secondary mv2-structure-edit" onClick={beginEditMode}>경험 구조 편집</button></>}</div></header>
+        <header className="mv2-page-header"><div><span className="mv2-kicker">EXPERIENCE LIBRARY</span><div className="mv2-title-row"><h1 id="experience-library-title">경험 관리</h1>{editMode && <span className="mv2-edit-mode-badge">구조 편집 중</span>}</div><p>AI로 경험을 분석하고, 정리된 경험을 직접 수정·관리하세요.</p></div><div className="mv2-header-actions">{editMode ? <><button type="button" className="mv2-button mv2-button--secondary mv2-edit-cancel" onClick={cancelEditMode} disabled={savingStructure}>취소</button><button type="button" className="mv2-button mv2-button--primary mv2-edit-save" onClick={() => saveStructure()} disabled={!pendingOps.length || savingStructure}>{savingStructure ? '저장 중…' : '변경사항 저장'}</button></> : <><button type="button" className="mv2-button mv2-button--primary mv2-add-experience" onClick={openNewExperience}>+ 경험 분석하기</button><button type="button" className="mv2-button mv2-button--secondary mv2-structure-edit" onClick={beginEditMode}>경험 구조 편집</button></>}</div></header>
         <section className="mv2-summary" aria-label="커리어 자산 요약"><button onClick={clearSearch}><strong>{experiences.length}</strong><span>전체 경험</span><small>정리된 경험 보기</small></button><button onClick={() => setAssetModal('evidence')}><strong>{evidenceTotal}</strong><span>경험 근거</span><small>원본 리스트 보기</small></button><button onClick={() => setAssetModal('skills')}><strong>{skillTotal}</strong><span>내 역량</span><small>직군 · 직업 · 역량 보기</small></button></section>
-        <section className="mv2-discovery-panel" aria-label="경험 검색"><div className="mv2-toolbar"><label className="mv2-search"><span className="mv2-search__label">경험 검색</span><input value={query} onChange={(event) => { setSkillGroupFilter(''); setQuery(event.target.value); }} placeholder="경험, 프로젝트·활동, 역량 검색" /></label></div></section>
+        <section className="mv2-discovery-panel" aria-label="경험 검색"><div className="mv2-toolbar"><label className="mv2-search"><span className="mv2-search__label">경험 검색</span><input value={query} onChange={(event) => { setSkillGroupFilter(''); setQuery(event.target.value); }} placeholder="경험, 프로젝트·활동, 역량 검색" /></label><button type="button" className="mv2-button mv2-button--secondary mv2-search-reset" onClick={clearSearch} disabled={!query && !skillGroupFilter}>검색 초기화</button></div></section>
       </section>
       {status === 'loading' && <p className="mv2-sync-status">경험 구조를 불러오는 중입니다…</p>}
       {!editMode && error && <div className="mv2-sync-error" role="alert"><span>{error}</span><button onClick={status === 'error' ? refresh : () => setError('')}>{status === 'error' ? '다시 시도' : '닫기'}</button></div>}
@@ -842,7 +853,7 @@ export function ExperienceManagerV3() {
         </section>;
       })}</div>
       {status === 'ready' && hasFilters && displayDomains.length === 0 && <section className="mv2-search-empty" role="status"><h2>조건에 맞는 경험이 없습니다.</h2><p>검색어나 필터 조건을 변경해 보세요.</p><button onClick={clearSearch}>검색·필터 초기화</button></section>}
-      {status === 'ready' && domains.length === 0 && <section className="mv2-empty"><h2>첫 경험 분류를 만들어 보세요</h2><p>직장 경험, 교육·학습, 대외 활동처럼 경험을 나눌 기준을 추가할 수 있습니다.</p>{editMode ? <button className="mv2-button" onClick={addDomain}>+ 경험 분류 만들기</button> : <button className="mv2-button" onClick={beginEditMode}>편집 시작</button>}</section>}
+      {status === 'ready' && domains.length === 0 && <section className="mv2-empty"><h2>첫 경험을 AI로 분석해 보세요</h2><p>경험을 자유롭게 입력해 보세요!<br/>AI가 핵심 내용을 분석해 정리해 드려요!</p>{editMode ? <button className="mv2-button" onClick={addDomain}>+ 경험 분류 만들기</button> : <button className="mv2-button" onClick={openNewExperience}>경험 분석하기</button>}</section>}
       {editMode && <div className="mv2-edit-dock">{error && <div className="mv2-sync-error" role="alert"><span>{error}</span><button onClick={() => setError('')}>닫기</button></div>}<div className="mv2-edit-bar" role="status"><div className="mv2-edit-history" aria-label="편집 이력"><EditHistoryButton type="undo" disabled={!undoHistory.length || savingStructure} onClick={undoEdit} /><EditHistoryButton type="redo" disabled={!redoHistory.length || savingStructure} onClick={redoEdit} /></div><span>{pendingOps.length ? `저장하지 않은 변경 ${pendingOps.length}건` : '편집 모드 · 경험 Bar, Card를 드래그 앤 드롭해 보세요!'}</span><button type="button" className="mv2-button mv2-button--primary" onClick={addDomain} disabled={savingStructure}>+ 경험 구조 추가하기</button></div></div>}
     </main>
     {selected && <aside ref={previewRef} style={previewPosition || undefined} className={`mv2-preview ${previewPosition ? '' : 'is-positioning'}`} role="dialog" aria-label={`${selected.title} 간단 상세`}><header><div><span className="mv2-kicker">경험</span><h2>{selected.title}</h2><p>{selected.projectName}</p></div><button className="mv2-icon-button" onClick={() => { setSelectedExperienceId(null); setPreviewPosition(null); previewAnchorRef.current = null; }} aria-label="닫기">×</button></header><section><h3>요약</h3><p>{selected.summary || '입력된 요약이 없습니다.'}</p></section><section><h3>역량</h3><div className="mv2-skills">{selected.skills.map((skill) => <span key={skill}>{skill}</span>)}</div></section><footer><Link className="mv2-button mv2-button--secondary" to={`/memory/${selected.id}`}>상세 보기</Link></footer></aside>}

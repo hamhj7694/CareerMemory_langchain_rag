@@ -59,6 +59,27 @@ class FakeClient:
         self.responses = responses
 
 
+class SequentialFakeResponses(FakeResponses):
+    """호출 순서마다 서로 다른 구조화 결과를 반환한다."""
+
+    def __init__(self, payloads) -> None:
+        super().__init__()
+        self.payloads = list(payloads)
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        payload = self.payloads.pop(0)
+        return SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="function_call",
+                    name=EXPERIENCE_DRAFT_TOOL_NAME,
+                    arguments=json.dumps(payload, ensure_ascii=False),
+                )
+            ]
+        )
+
+
 class IncrementingIdFactory:
     def __init__(self) -> None:
         self.value = 0
@@ -132,6 +153,16 @@ class ExperiencePromptAndToolTests(unittest.TestCase):
             set(draft_schema["properties"]),
             set(draft_schema["required"]),
         )
+        self.assertNotIn(
+            "maxItems",
+            draft_schema["properties"]["facts"],
+        )
+
+    def test_prompt_requests_short_verifiable_facts(self) -> None:
+        self.assertIn("짧은 핵심 사실", EXPERIENCE_SYSTEM_PROMPT)
+        self.assertIn("짧은 개조식 구절", EXPERIENCE_SYSTEM_PROMPT)
+        self.assertIn("개수에 관계없이 빠짐없이 분리", EXPERIENCE_SYSTEM_PROMPT)
+        self.assertIn("고객 문의 120건 분석", EXPERIENCE_SYSTEM_PROMPT)
 
 
 class ExperienceAITests(unittest.TestCase):
@@ -208,6 +239,23 @@ class ExperienceAITests(unittest.TestCase):
         result = ai.organize(self.request)
 
         self.assertEqual(result.experience_drafts, [])
+
+    def test_direct_text_is_reviewed_once_when_first_result_is_empty(
+        self,
+    ) -> None:
+        responses = SequentialFakeResponses(
+            [
+                {"experience_drafts": []},
+                {"experience_drafts": [valid_raw_draft()]},
+            ]
+        )
+        ai = self.create_ai(responses)
+
+        result = ai.organize(self.request)
+
+        self.assertEqual(len(result.experience_drafts), 1)
+        self.assertEqual(len(responses.calls), 2)
+        self.assertIn("[재검토 지시]", responses.calls[1]["input"])
         self.assertEqual(result.run.status, "succeeded")
 
     def test_multiple_experience_drafts_are_preserved(self) -> None:
@@ -229,6 +277,27 @@ class ExperienceAITests(unittest.TestCase):
         self.assertNotEqual(
             result.experience_drafts[0].draft_id,
             result.experience_drafts[1].draft_id,
+        )
+
+    def test_invalid_fact_shape_is_requested_once_more(self) -> None:
+        malformed = valid_raw_draft()
+        malformed["facts"][0]["quote"] = None
+        responses = SequentialFakeResponses(
+            [
+                {"experience_drafts": [malformed]},
+                {"experience_drafts": [valid_raw_draft()]},
+            ]
+        )
+        ai = self.create_ai(responses)
+
+        result = ai.organize(self.request)
+
+        self.assertEqual(len(result.experience_drafts), 1)
+        self.assertEqual(len(responses.calls), 2)
+        self.assertIn("[형식 재검토 지시]", responses.calls[1]["input"])
+        self.assertEqual(
+            result.experience_drafts[0].facts,
+            ["지원 완료율 18% 향상"],
         )
 
     def test_extracted_file_text_can_be_used_as_evidence(self) -> None:

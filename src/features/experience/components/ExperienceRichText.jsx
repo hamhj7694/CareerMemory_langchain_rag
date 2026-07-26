@@ -104,5 +104,16 @@ export function ExperienceRichText({ text, empty = defaultEmptyText }) {
 }
 
 export function ExperienceRichList({ items, empty = defaultEmptyText }) {
-  return <ExperienceRichText text={(items ?? []).join('\n')} empty={empty} />;
+  // API의 actions/results/facts는 문자열 배열이므로 각 값을 Markdown 불릿으로 바꿔 렌더링한다.
+  // 모델이 이미 목록 기호를 반환한 경우에는 기호를 중복해서 붙이지 않는다.
+  const markdownList = (items ?? [])
+    .map((item) => {
+      const text = String(item ?? '').trim();
+      if (!text) return '';
+      return /^([-*+]|\d+[.)])\s+/.test(text) ? text : `- ${text}`;
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  return <ExperienceRichText text={markdownList} empty={empty} />;
 }

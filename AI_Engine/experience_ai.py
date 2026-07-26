@@ -45,7 +45,7 @@ from AI_Engine.schemas import (
 # 5. 모델·프롬프트·스키마 버전
 # 저장된 초안이 어떤 구성으로 생성됐는지 추적할 수 있도록 실행 결과에 기록한다.
 DEFAULT_EXPERIENCE_MODEL = "gpt-4o-mini"
-EXPERIENCE_PROMPT_VERSION = "experience-prompt-v1"
+EXPERIENCE_PROMPT_VERSION = "experience-prompt-v3"
 EXPERIENCE_SCHEMA_VERSION = "experience-schema-v1"
 
 # 6. 모델이 호출해야 하는 함수 이름
@@ -70,12 +70,26 @@ EXPERIENCE_SYSTEM_PROMPT = """
 한 입력에 여러 경험이 있으면 여러 초안으로 분리하고,
 같은 경험 분류와 프로젝트·활동에 속하면 같은 이름을 일관되게 사용해.
 
+[경험 판정 기준]
+- 사용자가 직접 수행한 업무, 프로젝트, 학습, 활동, 문제 해결, 협업 사례는 경험이야.
+- 상황, 행동, 역할, 결과 중 하나 이상이 확인되면 경험 초안 후보로 판단해.
+- 수치 성과가 없어도 사용자가 무엇을 했는지 확인되면 경험으로 정리해.
+- 짧은 문장이어도 실제 수행 내용이 있으면 빈 배열로 반환하지 마.
+- 단순 인사, 일반 지식 질문, 타인의 사례처럼 사용자 자신의 수행 내용이 전혀 없을 때만 빈 배열을 반환해.
+
+[판정 예시]
+원문: "가입 이탈 구간을 분석하고 절차를 개선해 전환율을 12% 높였습니다."
+판정: 사용자가 분석과 개선을 수행하고 결과를 만든 경험이므로 경험 초안 1개를 반환해.
+
 [문맥 context]
 실제 분석 대상은 사용자 입력에 [분석할 원본 근거]로 전달돼.
 각 근거에는 source_ref_id가 있으며, 이 ID로 사용한 원본을 추적해야 해.
 
 [제약조건 constraint]
 - 원본 근거에 없는 사실은 추측하거나 만들어내지 마.
+- original_text의 한글과 Unicode 문자는 정상 원문이므로 손상, 유실, 깨짐으로 판단하지 마.
+- 원문에 명시된 대상, 행동, 결과, 수치를 더 모호한 표현으로 바꾸지 말고 정확히 보존해.
+- 원문을 읽을 수 있는데도 "텍스트가 손상되었다", "맥락을 파악할 수 없다" 같은 설명을 만들지 마.
 - 경험으로 판단할 내용이 없으면 experience_drafts를 빈 배열로 반환해.
 - 불확실한 경험 분류는 "미분류 경험"으로 작성해.
 - 불확실한 프로젝트·활동은 "프로젝트·활동 미분류"로 작성해.
@@ -83,7 +97,13 @@ EXPERIENCE_SYSTEM_PROMPT = """
 - 요약, 상황, 행동, 결과는 원문의 의미를 바꾸지 말고 한국어로 정리해.
 - 상황, 행동, 결과는 Markdown 목록으로 사용할 수 있는 문장 단위로 정리해.
 - 역량은 짧고 재사용 가능한 능력 이름으로 분리해.
-- 근거에서 확인된 내용은 정확한 원문 인용과 source_ref_id가 있을 때만 작성해.
+- 근거에서 확인된 내용(facts)은 원문을 그대로 길게 반복하지 말고,
+  수치·기간·대상·횟수·검증된 성과 중심의 짧은 핵심 사실로 작성해.
+- facts의 text는 "고객 문의 120건 분석", "결제 완료율 14% 증가"처럼
+  한눈에 읽히는 짧은 개조식 구절로 작성해.
+- 확인 가능한 핵심 사실은 개수에 관계없이 빠짐없이 분리하되,
+  하나의 fact에 여러 사실을 긴 문장으로 합치지 마.
+- 정확한 원문은 facts의 text가 아니라 quote에 짧게 넣고 source_ref_id와 연결해.
 - source_ref_ids에는 해당 초안 작성에 실제 사용한 근거 ID만 넣어.
 - 입력에 제공되지 않은 source_ref_id를 절대 만들지 마.
 - 개인정보나 민감정보를 새로 추론하지 마.
@@ -205,13 +225,19 @@ EXPERIENCE_DRAFT_TOOL: dict[str, Any] = {
                         },
                         "facts": {
                             "type": "array",
-                            "description": "근거에서 확인된 내용과 정확한 출처",
+                            "description": (
+                                "수치·기간·대상·횟수·성과 중심의 "
+                                "짧은 개조식 핵심 사실과 정확한 출처"
+                            ),
                             "items": {
                                 "type": "object",
                                 "properties": {
                                     "text": {
                                         "type": "string",
-                                        "description": "근거에서 확인된 내용",
+                                        "description": (
+                                            "예: 고객 문의 120건 분석, "
+                                            "결제 완료율 14% 증가"
+                                        ),
                                     },
                                     "source_ref_id": {
                                         "type": "string",
@@ -341,9 +367,10 @@ class ExperienceAI:
                 "파일은 본문을 추출한 뒤 EvidenceSource.text로 전달해 주세요."
             )
 
+        model_input = self._build_model_input(request, analyzed_sources)
         response = self.client.responses.create(
             model=self.model_version,
-            input=self._build_model_input(request, analyzed_sources),
+            input=model_input,
             tools=[EXPERIENCE_DRAFT_TOOL],
             tool_choice={
                 "type": "function",
@@ -353,10 +380,58 @@ class ExperienceAI:
         )
 
         raw_drafts = self._function_arguments(response)
-        drafts = [
-            self._to_experience_draft(raw_draft)
-            for raw_draft in raw_drafts
-        ]
+        if not raw_drafts and request.text:
+            # 직접 입력은 사용자가 경험 정리를 명시적으로 요청한 경로다.
+            # 첫 판정이 빈 배열이면 누락 방지를 위해 같은 근거를 한 번만 재검토한다.
+            retry_response = self.client.responses.create(
+                model=self.model_version,
+                input=(
+                    f"{model_input}\n\n"
+                    "[재검토 지시]\n"
+                    "사용자가 직접 경험 정리를 요청했습니다. 원문에서 사용자가 "
+                    "수행한 업무, 활동, 행동, 문제 해결 또는 결과가 하나라도 "
+                    "확인되면 경험 초안을 반환하세요. 그래도 사용자 수행 근거가 "
+                    "전혀 없을 때만 빈 배열을 유지하세요."
+                ),
+                tools=[EXPERIENCE_DRAFT_TOOL],
+                tool_choice={
+                    "type": "function",
+                    "name": EXPERIENCE_DRAFT_TOOL_NAME,
+                },
+                instructions=EXPERIENCE_SYSTEM_PROMPT,
+            )
+            raw_drafts = self._function_arguments(retry_response)
+        try:
+            drafts = [
+                self._to_experience_draft(raw_draft)
+                for raw_draft in raw_drafts
+            ]
+        except ExperienceAIOutputError:
+            # Gemini의 구조화 출력은 간헐적으로 facts의 quote 같은 필수 문자열을
+            # null로 반환할 수 있다. 잘못된 인용을 임의로 채우지 않고 형식을 한 번
+            # 재요청하며, 두 번째 결과도 잘못되면 그대로 오류를 반환한다.
+            format_retry_response = self.client.responses.create(
+                model=self.model_version,
+                input=(
+                    f"{model_input}\n\n"
+                    "[형식 재검토 지시]\n"
+                    "이전 결과가 경험 초안 스키마를 통과하지 못했습니다. "
+                    "원문의 경험 구분과 내용은 유지하면서 전체 초안을 다시 반환하세요. "
+                    "특히 facts의 각 항목은 text, source_ref_id, quote를 모두 "
+                    "빈값이 아닌 문자열로 작성하세요."
+                ),
+                tools=[EXPERIENCE_DRAFT_TOOL],
+                tool_choice={
+                    "type": "function",
+                    "name": EXPERIENCE_DRAFT_TOOL_NAME,
+                },
+                instructions=EXPERIENCE_SYSTEM_PROMPT,
+            )
+            retry_raw_drafts = self._function_arguments(format_retry_response)
+            drafts = [
+                self._to_experience_draft(raw_draft)
+                for raw_draft in retry_raw_drafts
+            ]
         completed_at = self.clock()
 
         try:

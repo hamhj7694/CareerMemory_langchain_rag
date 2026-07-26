@@ -65,7 +65,7 @@ function proposalFromDraft(draft, uploadedAttachments, originalText) {
   };
   return createLocalExperienceProposal({
     id: `LOCAL-PROPOSAL-${Date.now()}`,
-    title: '경험 구조화 제안',
+    title: '경험 AI 분석 결과',
     experiences: [experience, mockExperience],
   });
 }
@@ -95,6 +95,47 @@ export function buildLocalExperienceAnalysis({ content, fileNames, uploadedAttac
     status: 'draft',
   });
   return { draft, proposal: proposalFromDraft(draft, uploadedAttachments, originalText) };
+}
+
+/**
+ * 실제 경험정리 AI 결과를 기존 경험 구조화 제안 화면이 사용하는 형태로 변환한다.
+ * 원본 근거는 초안마다 복사하지 않고 source_ref_id를 기준으로 연결한다.
+ */
+export function buildExperienceAnalysisFromResult({ result, domain, project }) {
+  const sourceById = new Map((result.sources || []).map((source) => [
+    source.id,
+    {
+      ...source,
+      source_type: source.type,
+      captured_at: result.run?.completed_at,
+      linked_facts: [],
+    },
+  ]));
+  const experiences = (result.experience_drafts || []).map((draft) => ({
+    ...draft,
+    domain: domain
+      ? { id: domain.id, name: domain.name }
+      : draft.domain,
+    project: project
+      ? {
+          id: project.id,
+          name: project.name,
+          organization: project.organization || draft.project?.organization || '',
+        }
+      : draft.project,
+    source_refs: (draft.source_ref_ids || [])
+      .map((sourceId) => sourceById.get(sourceId))
+      .filter(Boolean),
+  }));
+
+  return {
+    draft: experiences[0] || null,
+    proposal: createLocalExperienceProposal({
+      id: result.run?.id || `AI-PROPOSAL-${Date.now()}`,
+      title: '경험 AI 분석 결과',
+      experiences,
+    }),
+  };
 }
 
 export async function saveProposalExperience(item) {

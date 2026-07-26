@@ -14,6 +14,8 @@ function toUiMessage(message) {
     sequence: message.sequence,
     role: message.role,
     content: message.content,
+    status: message.status,
+    error: message.error,
     attachments: message.attachment_refs?.map((attachment) => attachment.filename || attachment.id) ?? message.attachment_ids ?? [],
     evidence: message.citations?.map((citation, index) => ({
       id: citation.source_ref_id ?? `${message.id}-${index}`,
@@ -27,6 +29,8 @@ export function ChatPage({ onSend }) {
   const { conversationId: routeConversationId } = useParams();
   const navigate = useNavigate();
   const conversationId = useRef(routeConversationId ?? null);
+  // 사용자가 새 대화를 직접 선택한 경우에는 최신 대화 자동 열기를 한 번 건너뛴다.
+  const keepNewConversationOpen = useRef(false);
   const scrollArea = useRef(null);
   const [mode, setMode] = useState('auto');
   const [text, setText] = useState('');
@@ -60,7 +64,32 @@ export function ChatPage({ onSend }) {
       return null;
     }
   };
-  useEffect(() => { refreshConversations(); }, []);
+  useEffect(() => {
+    let active = true;
+
+    const openLatestConversation = async () => {
+      try {
+        const items = (await v2ChatApi.listConversations()).items;
+        if (!active) return;
+        setConversations(items);
+
+        // 주소에 대화 ID가 없는 최초 진입이라면 가장 최근 대화를 연다.
+        // 저장된 대화가 없거나 사용자가 새 대화를 누른 경우에는 빈 채팅을 유지한다.
+        if (!routeConversationId && keepNewConversationOpen.current) {
+          keepNewConversationOpen.current = false;
+          return;
+        }
+        if (!routeConversationId && items[0]?.id) {
+          navigate(`/chat/${items[0].id}`, { replace: true });
+        }
+      } catch (error) {
+        if (active) setNotice(error?.message ?? '대화 기록을 불러오지 못했습니다.');
+      }
+    };
+
+    openLatestConversation();
+    return () => { active = false; };
+  }, [routeConversationId, navigate]);
 
   useEffect(() => {
     const area = scrollArea.current;
@@ -76,7 +105,7 @@ export function ChatPage({ onSend }) {
       setNotice('');
       try {
         await v2ChatApi.getConversation(routeConversationId);
-        const result = await v2ChatApi.listMessages(routeConversationId);
+        let result = await v2ChatApi.listMessages(routeConversationId);
         if (!active) return;
         setMessages(result.items.map(toUiMessage));
         const proposalIds = result.items.flatMap((message) => message.proposal_ids ?? []).reverse();
@@ -90,6 +119,18 @@ export function ChatPage({ onSend }) {
         if (active) {
           setProposals(restoredProposals);
           await refreshExtractionStatus(routeConversationId);
+        }
+
+        // 다른 화면에 있는 동안 생성 중이던 답변이 있다면
+        // DB에 저장되는 중간 내용과 완료 상태를 주기적으로 다시 불러온다.
+        const isGenerating = (message) => (
+          message?.role === 'assistant'
+          && ['queued', 'processing', 'streaming'].includes(message.status)
+        );
+        while (active && isGenerating(result.items.at(-1))) {
+          await new Promise((resolve) => setTimeout(resolve, 750));
+          result = await v2ChatApi.listMessages(routeConversationId);
+          if (active) setMessages(result.items.map(toUiMessage));
         }
       } catch (error) {
         if (active) {
@@ -115,6 +156,7 @@ export function ChatPage({ onSend }) {
   const submit = async () => {
     const content = text.trim();
     if (busy || (!content && files.length === 0)) return;
+    let submittedConversationId = conversationId.current;
     const submittedFiles = [...files];
     const attachments = files.map((file) => file.name);
     const userMessage = { id: makeId(), role: 'user', content: content || '첨부한 자료를 확인해 주세요.', attachments, status: 'sending' };
@@ -127,6 +169,7 @@ export function ChatPage({ onSend }) {
         response = await onSend({ mode, content, files });
       } else {
         if (!conversationId.current) conversationId.current = (await v2ChatApi.createConversation({ title: (content || files[0]?.name || '새 대화').slice(0, 28) })).id;
+        submittedConversationId = conversationId.current;
         const uploaded = files.length ? await v2ChatApi.uploadAttachments(files) : [];
         let completedMessage = null;
         for await (const event of v2ChatApi.streamMessage(conversationId.current, {
@@ -135,27 +178,31 @@ export function ChatPage({ onSend }) {
           attachment_ids: uploaded.map(({ id }) => id),
         })) {
           if (event.type === 'message.accepted') {
-            setMessages((current) => [
-              ...current.map((message) => message.id === userMessage.id
-                ? { ...message, id: event.user_message.id, status: 'sent' }
-                : message),
-              {
-                id: event.assistant_message_id,
-                role: 'assistant',
-                content: '',
-                status: 'streaming',
-                proposalIds: [],
-              },
-            ]);
+            if (conversationId.current === submittedConversationId) {
+              setMessages((current) => [
+                ...current.map((message) => message.id === userMessage.id
+                  ? { ...message, id: event.user_message.id, status: 'sent' }
+                  : message),
+                {
+                  id: event.assistant_message_id,
+                  role: 'assistant',
+                  content: '',
+                  status: 'streaming',
+                  proposalIds: [],
+                },
+              ]);
+            }
           } else if (event.type === 'assistant.delta') {
-            setMessages((current) => current.map((message) => (
-              message.id === event.message_id
-                ? { ...message, content: `${message.content}${event.delta}` }
-                : message
-            )));
+            if (conversationId.current === submittedConversationId) {
+              setMessages((current) => current.map((message) => (
+                message.id === event.message_id
+                  ? { ...message, content: `${message.content}${event.delta}` }
+                  : message
+              )));
+            }
           } else if (event.type === 'proposal.created') {
             const streamedProposal = toProposalView(event.proposal);
-            if (streamedProposal) {
+            if (streamedProposal && conversationId.current === submittedConversationId) {
               setProposals((current) => ({
                 ...current,
                 [streamedProposal.id]: streamedProposal,
@@ -163,18 +210,20 @@ export function ChatPage({ onSend }) {
             }
           } else if (event.type === 'message.completed') {
             completedMessage = event.message;
-            setMessages((current) => current.map((message) => (
-              message.id === event.message.id
-                ? { ...toUiMessage(event.message), status: 'completed' }
-                : message
-            )));
+            if (conversationId.current === submittedConversationId) {
+              setMessages((current) => current.map((message) => (
+                message.id === event.message.id
+                  ? { ...toUiMessage(event.message), status: 'completed' }
+                  : message
+              )));
+            }
           } else if (event.type === 'message.failed') {
             throw new Error(event.error?.message || 'AI 답변 생성에 실패했습니다.');
           }
         }
         if (!completedMessage) throw new Error('스트리밍이 완료되기 전에 연결이 종료되었습니다.');
         response = { streamed: true };
-        if (!routeConversationId) {
+        if (!routeConversationId && conversationId.current === submittedConversationId) {
           movedToConversation = true;
           navigate(`/chat/${conversationId.current}`, { replace: true });
         }
@@ -194,10 +243,12 @@ export function ChatPage({ onSend }) {
       await refreshConversations();
       await refreshExtractionStatus();
     } catch (error) {
-      setText((current) => current || content);
-      setFiles((current) => current.length ? current : submittedFiles);
-      setMessages((current) => current.map((message) => message.id === userMessage.id ? { ...message, status: 'failed' } : message));
-      setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: error?.message ?? '응답을 만들지 못했어요. 입력은 보존되었으니 다시 시도해 주세요.' }]);
+      if (conversationId.current === submittedConversationId) {
+        setText((current) => current || content);
+        setFiles((current) => current.length ? current : submittedFiles);
+        setMessages((current) => current.map((message) => message.id === userMessage.id ? { ...message, status: 'failed' } : message));
+        setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: error?.message ?? '응답을 만들지 못했어요. 입력은 보존되었으니 다시 시도해 주세요.' }]);
+      }
     } finally { setBusy(false); setMode('auto'); }
   };
 
@@ -331,8 +382,19 @@ export function ChatPage({ onSend }) {
   const startNewConversation = () => {
     conversationId.current = null;
     setMessages([]); setProposals({}); setNotice(''); setMode('auto'); setExtractionStatus(null);
-    if (routeConversationId) navigate('/chat');
+    if (routeConversationId) {
+      keepNewConversationOpen.current = true;
+      navigate('/chat');
+    }
   };
+  const latestMessage = messages.at(-1);
+  const showThinking = extracting || (
+    busy
+    && !(
+      latestMessage?.role === 'assistant'
+      && ['completed', 'failed'].includes(latestMessage.status)
+    )
+  );
   const renameConversation = async (conversation) => {
     const title = window.prompt('대화 제목 변경', conversation.title || '새 대화');
     if (!title?.trim() || title.trim() === conversation.title) return;
@@ -371,7 +433,7 @@ export function ChatPage({ onSend }) {
         </div>
       </header>
       <div className="v2-conversation__scroll" ref={scrollArea}>
-        <MessageThread messages={messages} proposals={proposals} busy={busy || extracting} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />
+        <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />
       </div>
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
       <ChatComposer mode={mode} onModeChange={setMode} text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} />

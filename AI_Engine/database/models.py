@@ -80,6 +80,10 @@ class User(Base):
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="user",
     )
+    experience_domains: Mapped[list["ExperienceDomain"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     sessions: Mapped[list["AuthSession"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -285,9 +289,92 @@ class Message(Base):
     )
 
 
+# 8. 경험 관리 테이블
+class ExperienceDomain(Base):
+    __tablename__ = "experience_domains"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_experience_domains_user_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    user: Mapped[User] = relationship(back_populates="experience_domains")
+    projects: Mapped[list["ExperienceProject"]] = relationship(
+        back_populates="domain", cascade="all, delete-orphan"
+    )
+
+
+class ExperienceProject(Base):
+    __tablename__ = "experience_projects"
+    __table_args__ = (
+        UniqueConstraint("domain_id", "name", name="uq_experience_projects_domain_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    domain_id: Mapped[str] = mapped_column(
+        ForeignKey("experience_domains.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    organization: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    domain: Mapped[ExperienceDomain] = relationship(back_populates="projects")
+    experiences: Mapped[list["Experience"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class Experience(Base):
+    __tablename__ = "experiences"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("experience_projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    situation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    actions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    results: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    role: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    skills: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    facts: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    period: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    missing_information: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    source_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    source_refs: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="confirmed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    project: Mapped[ExperienceProject] = relationship(back_populates="experiences")
+
+
 __all__ = [
     "AuthSession",
     "Conversation",
+    "Experience",
+    "ExperienceDomain",
+    "ExperienceProject",
     "Message",
     "User",
     "utc_now",

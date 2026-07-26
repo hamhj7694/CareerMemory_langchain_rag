@@ -7,6 +7,7 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
   const [draft, setDraft] = useState(() => proposal ? structuredClone(proposal) : {});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [collapsedDomains, setCollapsedDomains] = useState(() => new Set());
 
   if (!proposal) return null;
   const activeDraft = draft && typeof draft === 'object' ? draft : proposal;
@@ -109,10 +110,32 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
 
   const experienceDrafts = Array.isArray(activeDraft.experiences) ? activeDraft.experiences : [activeDraft];
   const pendingExperienceCount = experienceDrafts.filter((item) => !item.approved).length;
+  const domainGroups = experienceDrafts.reduce((groups, item, index) => {
+    const domainName = String(item.domain || '미분류 경험').trim() || '미분류 경험';
+    const domainKey = domainName.normalize('NFKC').replace(/\s+/g, ' ').toLocaleLowerCase('ko-KR');
+    const current = groups.find((group) => group.key === domainKey);
+    if (current) current.entries.push({ item, index });
+    else groups.push({ key: domainKey, name: domainName, entries: [{ item, index }] });
+    return groups;
+  }, []);
+  const toggleDomain = (domainKey) => {
+    setCollapsedDomains((current) => {
+      const next = new Set(current);
+      if (next.has(domainKey)) next.delete(domainKey);
+      else next.add(domainKey);
+      return next;
+    });
+  };
   return <section className="v2-inline-proposal is-experience">
     <div className="v2-inline-proposal__heading"><span>경험 초안 · {experienceDrafts.length}개{activeDraft.analysisScope && <small>대화 {activeDraft.analysisScope.message_count}개 · 파일 {activeDraft.analysisScope.attachment_count}개 기준</small>}</span><em>{editing ? '수정 모드' : 'AI 초안'}</em></div>
     {experienceDrafts.length
-      ? <div className="v2-experience-draft-list">{experienceDrafts.map((item, index) => <ExperienceDraftEditor key={`${item.draft_id || item.sourceIndex || 'draft'}-${index}`} collapseKey={`${proposal.id}:${item.draft_id || item.sourceIndex || `draft-${index}`}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>
+      ? <div className="v2-experience-draft-list">{domainGroups.map((group) => {
+          const domainCollapsed = collapsedDomains.has(group.key);
+          return <section className={`v2-draft-domain-group ${domainCollapsed ? 'is-collapsed' : ''}`} key={group.key}>
+            <header onClick={() => toggleDomain(group.key)}><span>경험 분류</span><strong>{group.name}</strong><small>{group.entries.length}개 프로젝트·활동</small><button type="button" aria-label={`${group.name} ${domainCollapsed ? '펼치기' : '접기'}`} aria-expanded={!domainCollapsed} onClick={(event) => { event.stopPropagation(); toggleDomain(group.key); }}>{domainCollapsed ? '⌄' : '⌃'}</button></header>
+            {!domainCollapsed && <div>{group.entries.map(({ item, index }) => <ExperienceDraftEditor key={`${item.draft_id || item.sourceIndex || 'draft'}-${index}`} grouped collapseKey={`${proposal.id}:${item.draft_id || item.sourceIndex || `draft-${index}`}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>}
+          </section>;
+        })}</div>
       : <div className="v2-draft-zero-state"><strong>정리할 경험 후보를 찾지 못했습니다.</strong><p>대화에 프로젝트, 역할, 행동이나 결과를 조금 더 구체적으로 남긴 뒤 다시 정리해 주세요.</p><button type="button" onClick={() => onReject(proposal)}>초안 닫기</button></div>}
     {error && <p className="v2-proposal-error" role="alert">{error}</p>}
     {showBatchActions && experienceDrafts.length > 0 && <footer className="v2-draft-batch-footer">

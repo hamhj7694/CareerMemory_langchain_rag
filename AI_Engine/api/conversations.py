@@ -5,6 +5,8 @@ from __future__ import annotations
 # 1. Python 기본 기능
 import os
 import json
+import queue
+import threading
 from functools import lru_cache
 from uuid import uuid4
 
@@ -13,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 # 3. 데이터베이스 모델과 공개 API 스키마
 from AI_Engine.database.connection import get_database_session
@@ -75,11 +77,23 @@ def convert_intent_to_chat_mode(intent: str) -> ChatMode:
         return ChatMode.AUTO
     if intent in {"question", "advice"}:
         return ChatMode.CHAT
+
+    if intent == "job":
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="공고 분석 기능은 아직 제공되지 않아요!",
+        )
+
+    # API 내부에서는 영문 값을 사용하지만 사용자에게는 화면의 한글 명칭으로 안내한다.
+    intent_labels = {
+        "experience": "경험 정리",
+    }
+    requested_intent = intent_labels.get(intent, intent)
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=(
-            f"{intent} 기능은 아직 메시지 API에 연결되지 않았습니다. "
-            "현재는 auto, question, advice를 사용할 수 있습니다."
+            f"{requested_intent} 기능은 아직 메시지 API에 연결되지 않았습니다. "
+            "현재는 자동, 일반 질문, 조언을 사용할 수 있습니다."
         ),
     )
 
@@ -645,6 +659,101 @@ def stream_message(
             if message.content.strip() or message.attachment_ids
         ],
     )
+    resolved_intent = (
+        request.intent
+        if request.intent in {"question", "advice"}
+        else "question"
+    )
+
+    # 브라우저가 새로고침되거나 다른 화면으로 이동해 SSE 연결이 끊겨도
+    # AI 생성과 DB 저장이 계속되도록 별도의 작업 스레드와 DB 세션을 사용한다.
+    worker_events: queue.SimpleQueue[tuple[str, object]] = queue.SimpleQueue()
+    worker_session_factory = sessionmaker(
+        bind=database.get_bind(),
+        autoflush=False,
+        expire_on_commit=False,
+    )
+
+    def generate_answer_in_background() -> None:
+        answer_parts: list[str] = []
+        with worker_session_factory() as worker_database:
+            saved_assistant = worker_database.get(Message, assistant_id)
+            saved_conversation = worker_database.get(
+                Conversation,
+                conversation.id,
+            )
+            if saved_assistant is None or saved_conversation is None:
+                worker_events.put(
+                    (
+                        "error",
+                        {
+                            "code": "message_not_found",
+                            "message": "저장된 AI 답변 작업을 찾지 못했습니다.",
+                            "retryable": True,
+                        },
+                    )
+                )
+                return
+
+            try:
+                for ai_event in chatbot.stream(ai_request):
+                    if ai_event.type == "token":
+                        delta = ai_event.text_delta or ""
+                        if not delta:
+                            continue
+                        answer_parts.append(delta)
+
+                        # 중간 답변도 저장하므로 다른 화면에서 돌아왔을 때
+                        # 지금까지 생성된 내용을 다시 확인할 수 있다.
+                        saved_assistant.content = "".join(answer_parts)
+                        worker_database.commit()
+                        worker_events.put(("token", delta))
+                    elif ai_event.type == "error":
+                        saved_assistant.status = "failed"
+                        saved_assistant.error = ai_event.error.model_dump(
+                            mode="json"
+                        )
+                        saved_assistant.completed_at = utc_now()
+                        worker_database.commit()
+                        worker_events.put(
+                            ("error", saved_assistant.error)
+                        )
+                        return
+
+                saved_assistant.content = "".join(answer_parts)
+                saved_assistant.status = "completed"
+                saved_assistant.resolved_intents = [resolved_intent]
+                saved_assistant.completed_at = utc_now()
+                saved_conversation.last_message_preview = (
+                    saved_assistant.content[:300]
+                )
+                saved_conversation.version += 1
+                worker_database.commit()
+                worker_database.refresh(saved_assistant)
+                worker_events.put(
+                    (
+                        "completed",
+                        MessageResponse.model_validate(
+                            saved_assistant
+                        ).model_dump(mode="json"),
+                    )
+                )
+            except Exception:
+                saved_assistant.status = "failed"
+                saved_assistant.error = {
+                    "code": "chat_model_error",
+                    "message": "AI 답변을 생성하지 못했습니다.",
+                    "retryable": True,
+                }
+                saved_assistant.completed_at = utc_now()
+                worker_database.commit()
+                worker_events.put(("error", saved_assistant.error))
+
+    threading.Thread(
+        target=generate_answer_in_background,
+        name=f"chat-{assistant_id}",
+        daemon=True,
+    ).start()
 
     def generate_events():
         public_sequence = 1
@@ -661,11 +770,6 @@ def stream_message(
             },
         )
         public_sequence += 1
-        resolved_intent = (
-            request.intent
-            if request.intent in {"question", "advice"}
-            else "question"
-        )
         yield format_sse_event(
             "intent.resolved",
             public_sequence,
@@ -677,13 +781,15 @@ def stream_message(
         )
         public_sequence += 1
 
-        answer_parts: list[str] = []
-        for ai_event in chatbot.stream(ai_request):
-            if ai_event.type == "token":
-                delta = ai_event.text_delta or ""
-                if not delta:
-                    continue
-                answer_parts.append(delta)
+        while True:
+            try:
+                event_type, payload = worker_events.get(timeout=1)
+            except queue.Empty:
+                # 연결 상태를 확인할 수 있도록 주기적으로 SSE 주석을 보낸다.
+                yield ": heartbeat\n\n"
+                continue
+
+            if event_type == "token":
                 yield format_sse_event(
                     "assistant.delta",
                     public_sequence,
@@ -691,17 +797,11 @@ def stream_message(
                         "type": "assistant.delta",
                         "sequence": public_sequence,
                         "message_id": assistant_id,
-                        "delta": delta,
+                        "delta": payload,
                     },
                 )
                 public_sequence += 1
-            elif ai_event.type == "error":
-                assistant_message.status = "failed"
-                assistant_message.error = ai_event.error.model_dump(
-                    mode="json"
-                )
-                assistant_message.completed_at = utc_now()
-                database.commit()
+            elif event_type == "error":
                 yield format_sse_event(
                     "message.failed",
                     public_sequence,
@@ -709,30 +809,21 @@ def stream_message(
                         "type": "message.failed",
                         "sequence": public_sequence,
                         "message_id": assistant_id,
-                        "error": assistant_message.error,
+                        "error": payload,
                     },
                 )
                 return
-
-        assistant_message.content = "".join(answer_parts)
-        assistant_message.status = "completed"
-        assistant_message.resolved_intents = [resolved_intent]
-        assistant_message.completed_at = utc_now()
-        conversation.last_message_preview = assistant_message.content[:300]
-        conversation.version += 1
-        database.commit()
-        database.refresh(assistant_message)
-        yield format_sse_event(
-            "message.completed",
-            public_sequence,
-            {
-                "type": "message.completed",
-                "sequence": public_sequence,
-                "message": MessageResponse.model_validate(
-                    assistant_message
-                ).model_dump(mode="json"),
-            },
-        )
+            elif event_type == "completed":
+                yield format_sse_event(
+                    "message.completed",
+                    public_sequence,
+                    {
+                        "type": "message.completed",
+                        "sequence": public_sequence,
+                        "message": payload,
+                    },
+                )
+                return
 
     return StreamingResponse(
         generate_events(),
