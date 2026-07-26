@@ -81,13 +81,28 @@ def initialize_database() -> None:
                         "ADD COLUMN user_id VARCHAR(50)"
                     )
                 )
-                connection.execute(
-                    text(
-                        "CREATE INDEX IF NOT EXISTS "
-                        "ix_conversations_user_id "
-                        "ON conversations (user_id)"
-                    )
+
+        conversation_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("conversations")
+        }
+        missing_conversation_columns = {
+            "last_successful_extraction_sequence": "INTEGER NOT NULL DEFAULT 0",
+            "last_extraction_at": "DATETIME",
+        }
+        with engine.begin() as connection:
+            for column_name, column_type in missing_conversation_columns.items():
+                if column_name not in conversation_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE conversations ADD COLUMN {column_name} {column_type}"
+                    ))
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS "
+                    "ix_conversations_user_id "
+                    "ON conversations (user_id)"
                 )
+            )
 
         user_columns = {
             column["name"]

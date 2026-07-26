@@ -19,6 +19,7 @@ ERROR_CODE_BY_STATUS = {
     404: "NOT_FOUND",
     409: "VERSION_CONFLICT",
     422: "VALIDATION_ERROR",
+    429: "AI_QUOTA_EXCEEDED",
     501: "NOT_IMPLEMENTED",
     502: "AI_PROVIDER_ERROR",
 }
@@ -80,7 +81,7 @@ def register_error_handlers(app: FastAPI) -> None:
             ),
             message=message,
             request_id=get_request_id(request),
-            retryable=error.status_code in {502, 503, 504},
+            retryable=error.status_code in {429, 502, 503, 504},
         )
 
     @app.exception_handler(RequestValidationError)

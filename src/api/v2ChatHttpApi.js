@@ -202,6 +202,24 @@ export async function* streamMessage(conversationId, input = {}) {
   }
 }
 
+// 9. 마지막 성공한 정리 이후의 실제 대화 메시지 개수를 조회한다.
+export function getConversationExtractionStatus(conversationId) {
+  return http.request({
+    path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/experience-extraction-status`,
+  });
+}
+
+// 10. 최근 사용자 대화를 기존 ExperienceAI로 분석해 복원 가능한 제안 카드를 만든다.
+export function extractConversationExperiences(conversationId, input = {}) {
+  return http.request({
+    path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/experience-extractions`,
+    method: 'POST',
+    body: {
+      client_request_id: input.client_request_id || input.clientRequestId || createRequestId(),
+    },
+  });
+}
+
 export const v2ChatHttpApi = {
   createConversation,
   listConversations,
@@ -211,4 +229,6 @@ export const v2ChatHttpApi = {
   listMessages,
   sendMessage,
   streamMessage,
+  getConversationExtractionStatus,
+  extractConversationExperiences,
 };

@@ -28,9 +28,22 @@ class FakeExperienceAI:
     def __init__(self) -> None:
         self.requests = []
 
-    def organize(self, request):
+    def organize(self, request, *, sources=()):
         self.requests.append(request)
-        source_id = f"source-{request.manual_input_id}"
+        manual_source_id = f"source-{request.manual_input_id or request.client_request_id}"
+        registered_sources = list(sources)
+        if request.text:
+            registered_sources.insert(
+                0,
+                EvidenceSource(
+                    id=manual_source_id,
+                    type="manual_text",
+                    title="사용자 직접 입력",
+                    manual_input_id=request.manual_input_id or request.client_request_id,
+                    text=request.text,
+                ),
+            )
+        source_ids = [source.id for source in registered_sources]
         now = datetime.now(timezone.utc)
         return ExperienceExtractionResult(
             run=ExtractionRun(
@@ -51,19 +64,11 @@ class FakeExperienceAI:
                     project=ProjectActivityDraft(name="서비스 개선"),
                     title="전환율 개선",
                     summary="사용자 전환율을 개선한 경험",
-                    source_ref_ids=[source_id],
+                    source_ref_ids=source_ids,
                 )
             ],
-            sources=[
-                EvidenceSource(
-                    id=source_id,
-                    type="manual_text",
-                    title="사용자 직접 입력",
-                    manual_input_id=request.manual_input_id,
-                    text=request.text,
-                )
-            ],
-            analyzed_source_ids=[source_id],
+            sources=registered_sources,
+            analyzed_source_ids=source_ids,
         )
 
 
@@ -118,6 +123,38 @@ class ExperienceExtractionApiTests(unittest.TestCase):
         self.assertEqual(
             response.json()["error"]["message"],
             "파일을 이용한 경험 정리는 아직 제공되지 않아요!",
+        )
+
+    def test_text_and_txt_file_are_analyzed_together(self) -> None:
+        response = self.client.post(
+            "/api/v2/experience-extractions/direct-input-files",
+            data={
+                "client_request_id": str(uuid4()),
+                "text": "저는 운영 대시보드 기획을 맡았습니다.",
+            },
+            files={
+                "files": (
+                    "result.txt",
+                    "보고서 작성 시간이 4시간에서 1시간으로 줄었습니다.".encode(),
+                    "text/plain",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload["sources"]), 2)
+        self.assertEqual(
+            {source["type"] for source in payload["sources"]},
+            {"manual_text", "file"},
+        )
+        self.assertIn(
+            "보고서 작성 시간이",
+            next(
+                source["text"]
+                for source in payload["sources"]
+                if source["type"] == "file"
+            ),
         )
 
 

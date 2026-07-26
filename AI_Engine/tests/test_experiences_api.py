@@ -130,6 +130,83 @@ class ExperiencesApiTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual(client.get("/api/v2/experiences").json()["items"], [])
 
+    def test_draft_trash_is_user_scoped_and_can_be_permanently_deleted(self) -> None:
+        owner = TestClient(app)
+        other = TestClient(app)
+        owner_csrf = self.register(owner, "trash_owner")
+        self.register(other, "trash_other")
+
+        created = owner.post(
+            "/api/v2/experience-draft-trash",
+            headers={"X-CSRF-Token": owner_csrf},
+            json={
+                "status": "deleted",
+                "reason": "사용자가 삭제한 초안",
+                "draft": {
+                    "title": "장바구니 개선",
+                    "domain": "기획·운영",
+                    "project": "결제 개선",
+                    "actions": ["고객 문의 분석"],
+                },
+                "original_text": "",
+            },
+        )
+
+        self.assertEqual(created.status_code, 201)
+        item_id = created.json()["id"]
+        self.assertEqual(
+            owner.get("/api/v2/experience-draft-trash").json()["total_count"],
+            1,
+        )
+        self.assertEqual(
+            other.get("/api/v2/experience-draft-trash").json()["items"],
+            [],
+        )
+
+        deleted = owner.request(
+            "DELETE",
+            f"/api/v2/experience-draft-trash/{item_id}",
+            headers={"X-CSRF-Token": owner_csrf},
+            json={"confirm": True},
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(
+            owner.get("/api/v2/experience-draft-trash").json()["items"],
+            [],
+        )
+
+    def test_failed_draft_trash_keeps_original_file_for_reanalysis(self) -> None:
+        client = TestClient(app)
+        csrf = self.register(client, "trash_file_owner")
+
+        created = client.post(
+            "/api/v2/experience-draft-trash/with-files",
+            headers={"X-CSRF-Token": csrf},
+            data={
+                "status": "failed",
+                "reason": "AI 형식 검증 실패",
+                "draft_json": "{}",
+                "original_text": "직접 입력한 경험",
+            },
+            files={
+                "files": (
+                    "experience.txt",
+                    "파일에 작성한 경험".encode("utf-8"),
+                    "text/plain",
+                ),
+            },
+        )
+
+        self.assertEqual(created.status_code, 201)
+        item = created.json()
+        self.assertEqual(item["files"][0]["filename"], "experience.txt")
+        downloaded = client.get(
+            f"/api/v2/experience-draft-trash/{item['id']}/files/"
+            f"{item['files'][0]['id']}"
+        )
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(downloaded.content.decode("utf-8"), "파일에 작성한 경험")
+
 
 if __name__ == "__main__":
     unittest.main()

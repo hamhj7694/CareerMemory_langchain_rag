@@ -8,7 +8,7 @@ const STARTERS = [
   { mode: 'job', title: '채용공고와 비교', description: '공고 요구사항과 내 경험을 근거별로 비교해요.' },
 ];
 
-export function MessageThread({ messages, proposals, busy, busyLabel = '답변을 준비하고 있어요.', onStarter, onEvidence, onApproveProposal, onRejectProposal, onDiscardRemainingProposalExperiences, onChangeProposal, onRemoveProposalExperience }) {
+export function MessageThread({ messages, proposals, busy, busyLabel = '답변을 준비하고 있어요.', onStarter, onEvidence, onOpenJobAnalysis, onApproveProposal, onRejectProposal, onDiscardRemainingProposalExperiences, onChangeProposal, onRemoveProposalExperience }) {
   if (messages.length === 0) return <div className="v2-chat-empty">
     <span className="v2-chat-empty__mark" aria-hidden="true">CM</span>
     <h1>당신의 경험을 이야기해 주세요</h1>
@@ -20,10 +20,22 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
     </div>
   </div>;
 
+  // 스트리밍을 시작하면 내용이 비어 있는 AI 메시지가 먼저 만들어집니다.
+  // 이 메시지와 별도의 로딩 메시지를 함께 표시하면 이름이 두 번 나오므로,
+  // 빈 스트리밍 메시지 자체에 진행 문구를 보여 줍니다.
+  const streamingMessageId = busy
+    ? messages.findLast((message) => (
+        message.role === 'assistant'
+        && message.status === 'streaming'
+      ))?.id
+    : null;
+
   return <div className="v2-message-list" aria-live="polite">
     {messages.map((message) => <article key={message.id} className={`v2-message v2-message--${message.role}`}>
       <div className="v2-message__meta">{message.role === 'assistant' ? 'Career Memory' : '나'}</div>
-      {message.role === 'assistant'
+      {message.id === streamingMessageId && !message.content
+        ? <p className="v2-message--thinking" role="status"><span /> {busyLabel}</p>
+        : message.role === 'assistant'
         ? <MarkdownMessage content={message.content} />
         : <p>{message.content}</p>}
       {message.status === 'failed' && <small className="v2-message__failed">전송되지 않았습니다. 입력창에서 다시 전송해 주세요.</small>}
@@ -31,6 +43,7 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
       {message.evidence?.length > 0 && !message.proposalIds?.length && <div className="v2-message__links">
         {message.evidence.map((item) => <button type="button" key={item.id} onClick={() => onEvidence(item)}>근거 {item.label}</button>)}
       </div>}
+      {message.jobAnalysisId && <div className="v2-message__links"><button type="button" onClick={() => onOpenJobAnalysis(message.jobAnalysisId)}>공고 분석 결과 보기</button></div>}
       {message.proposalIds?.map((proposalId) => {
         const proposal = proposals[proposalId];
         if (!proposal) return null;
@@ -39,6 +52,6 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
         return <InlineProposalCard key={proposalId} proposal={proposal} onApprove={onApproveProposal} onReject={onRejectProposal} onDiscardRemainingExperiences={onDiscardRemainingProposalExperiences} onChange={onChangeProposal} onRemoveExperience={onRemoveProposalExperience} showBatchActions />;
       })}
     </article>)}
-    {busy && <article className="v2-message v2-message--assistant v2-message--thinking" role="status"><div className="v2-message__meta">Career Memory</div><p><span /> {busyLabel}</p></article>}
+    {busy && !streamingMessageId && <article className="v2-message v2-message--assistant v2-message--thinking" role="status"><div className="v2-message__meta">Career Memory</div><p><span /> {busyLabel}</p></article>}
   </div>;
 }

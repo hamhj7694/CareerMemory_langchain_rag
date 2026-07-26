@@ -34,6 +34,11 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+경험정리 AI에서 이미지와 스캔 PDF를 로컬 OCR로 읽으려면 서버 PC에
+Tesseract OCR과 `kor`, `eng` 언어 모델이 필요하다. Windows 기본 탐색 경로는
+`C:\Program Files\Tesseract-OCR\tesseract.exe`다. 일반 텍스트 PDF는
+PyMuPDF가 직접 읽으므로 Tesseract를 호출하지 않는다.
+
 `.env.example`을 참고해 루트에 `.env`를 만들고 서버에서만
 `OPENAI_API_KEY`를 사용한다. `.env`와 실제 API 키는 저장소에 커밋하지 않는다.
 

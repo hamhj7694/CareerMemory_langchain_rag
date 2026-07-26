@@ -60,11 +60,11 @@ export function ChatComposer({ mode, onModeChange, text, onTextChange, files, on
         ].map(([value, label]) => <button type="button" key={value} aria-pressed={mode === value} onClick={() => onModeChange(value)}>{label}</button>)}
       </div>
       <div className="v2-composer__actions">
-        <input ref={fileInput} className="sr-only" type="file" multiple accept=".pdf,.txt,application/pdf,text/plain" onChange={addFiles} />
+        <input ref={fileInput} className="sr-only" type="file" multiple accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,image/png,image/jpeg,image/webp" onChange={addFiles} />
         <button type="button" className="v2-icon-button" onClick={() => fileInput.current?.click()} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} aria-label="파일 첨부">{checkingFiles ? '…' : '＋'}</button>
         <button type="button" className="v2-send-button" onClick={onSubmit} disabled={busy || checkingFiles || (!text.trim() && files.length === 0)} aria-label="메시지 보내기">{busy || checkingFiles ? '…' : '↑'}</button>
       </div>
     </div>
-    <small className="v2-composer__hint">Enter로 전송 · PDF/TXT 최대 5개 · 파일당 25MiB</small>
+    <small className="v2-composer__hint">Enter로 전송 · PDF/TXT/이미지 최대 5개 · 전체 14MB</small>
   </div>;
 }

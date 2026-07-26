@@ -77,17 +77,20 @@ def create_chat_model(
 ) -> Any:
     active_provider = get_ai_provider(provider)
     selected_model = model_name or get_chat_model_name(active_provider)
+    # 일반 채팅 답변 길이는 구조화 분석 결과와 별도로 조절한다.
+    # 이후 대화 요약 엔진을 추가해도 용도별 한도가 서로 영향을 주지 않는다.
+    chat_output_tokens = int(os.getenv("AI_CHAT_MAX_TOKENS", "4000"))
     if active_provider == "gemini":
         return ChatGoogleGenerativeAI(
             model=selected_model,
             api_key=_required_api_key("GEMINI_API_KEY"),
-            max_tokens=1_000,
+            max_tokens=chat_output_tokens,
         )
     return ChatOpenAI(
         model=selected_model,
         api_key=_required_api_key("OPENAI_API_KEY"),
         temperature=0,
-        max_completion_tokens=1_000,
+        max_completion_tokens=chat_output_tokens,
     )
 
 
@@ -140,10 +143,16 @@ class GeminiStructuredClient:
         if not isinstance(schema, Mapping):
             raise ValueError("구조화 출력 도구에 JSON 스키마가 필요합니다.")
 
+        # 여러 경험을 한 번에 정리하면 경험별 상황·행동·성과·근거가 모두
+        # JSON으로 반환되어 4,000토큰을 쉽게 넘을 수 있다. 응답이 중간에
+        # 잘려 스키마 오류가 나지 않도록 구조화 출력 전용 한도를 넉넉히 둔다.
+        structured_output_tokens = int(
+            os.getenv("AI_STRUCTURED_OUTPUT_MAX_TOKENS", "32000")
+        )
         model_client = ChatGoogleGenerativeAI(
             model=model,
             api_key=_required_api_key("GEMINI_API_KEY"),
-            max_tokens=4_000,
+            max_tokens=structured_output_tokens,
             temperature=0,
         )
         structured_model = model_client.with_structured_output(

@@ -1,10 +1,10 @@
 import { fingerprintFile } from '../../../utils/fileFingerprint.js';
 
 export const EVIDENCE_FILE_LIMITS = {
-  acceptedTypes: ['application/pdf', 'text/plain'],
+  acceptedTypes: ['application/pdf', 'text/plain', 'image/png', 'image/jpeg', 'image/webp'],
   maxCount: 5,
-  maxFileBytes: 25 * 1024 * 1024,
-  maxTotalBytes: 100 * 1024 * 1024,
+  maxFileBytes: 10 * 1024 * 1024,
+  maxTotalBytes: 14 * 1024 * 1024,
 };
 
 export const evidenceFileKey = (item) => item.selectionId || item.contentHash || `${item.name}-${item.size}-${item.lastModified || 0}`;
@@ -14,7 +14,7 @@ export const evidenceFileStatusLabel = (item) => item.duplicateStatus === 'reuse
     ? '동일 이름 · 새 버전'
     : '새 파일';
 
-const isAccepted = (file) => EVIDENCE_FILE_LIMITS.acceptedTypes.includes(file.type) || /\.(pdf|txt)$/i.test(file.name || '');
+const isAccepted = (file) => EVIDENCE_FILE_LIMITS.acceptedTypes.includes(file.type) || /\.(pdf|txt|png|jpe?g|webp)$/i.test(file.name || '');
 const clientId = (file, contentHash) => `${contentHash}:${file.name}:${file.size}`;
 
 export async function mergeEvidenceFileSelections(currentFiles, incomingFiles, preflight) {
@@ -26,8 +26,8 @@ export async function mergeEvidenceFileSelections(currentFiles, incomingFiles, p
   const errors = [];
   const notices = [];
 
-  if (unsupported.length) errors.push(`PDF/TXT가 아닌 파일 ${unsupported.length}개`);
-  if (oversized.length) errors.push(`25MiB를 넘는 파일 ${oversized.length}개`);
+  if (unsupported.length) errors.push(`PDF/TXT/이미지가 아닌 파일 ${unsupported.length}개`);
+  if (oversized.length) errors.push(`10MiB를 넘는 파일 ${oversized.length}개`);
 
   const descriptors = await Promise.all(candidates.map(async (file) => {
     const contentHash = await fingerprintFile(file);
@@ -64,7 +64,7 @@ export async function mergeEvidenceFileSelections(currentFiles, incomingFiles, p
       break;
     }
     if (totalBytes + descriptor.size_bytes > EVIDENCE_FILE_LIMITS.maxTotalBytes) {
-      errors.push('전체 용량 100MiB 초과');
+      errors.push('전체 용량 14MiB 초과');
       continue;
     }
 

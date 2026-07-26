@@ -19,9 +19,12 @@ AI 내부 Pydantic DTO와 프론트 공개 API DTO 사이의 상세 변환 규�
 | RAG | POST | `/api/chat/experiences` | FE-001 기준안·AI 확인 필요 |
 | 공고 | POST | `/api/jobs/analyze` | FE-001 기준안·AI 확인 필요 |
 | 공고 | POST | `/api/jobs/{jobId}/match` | FE-001 기준안·AI 확인 필요 |
+| 공고 | GET | `/api/jobs` | 사용자별 분석 기록 목록 연결 완료 |
 | 자소서 | POST | `/api/cover-letters/generate` | FE-001 기준안·AI 확인 필요 |
 | 자소서 | POST | `/api/cover-letters/revise` | FE-001 기준안·AI 확인 필요 |
 | 공고 | GET | `/api/jobs/{jobId}` | 사용자 추가 승인·상세 계약은 FE-002 fixture 기준 |
+| 공고 | DELETE | `/api/jobs/{jobId}` | 사용자 소유 분석 기록 삭제 연결 완료 |
+| 공고 | PUT/DELETE | `/api/jobs/{jobId}/requirements/{requirementId}/experience-links/{experienceId}` | 수동 경험 연결 저장 완료 |
 | 자소서 | GET | `/api/documents/{documentId}` | 사용자 추가 승인·상세 계약은 FE-002 fixture 기준 |
 | 자소서 | PATCH | `/api/documents/{documentId}` | 사용자 추가 승인·상세 계약은 FE-002 fixture 기준 |
 | 원본 | PATCH | `/api/sources/{sourceId}` | 텍스트 원본 수정 |
@@ -51,6 +54,7 @@ AI 내부 Pydantic DTO와 프론트 공개 API DTO 사이의 상세 변환 규�
 | 2026-07-22 | 상세 복구·문서 저장 API | 공고 GET, 문서 GET/PATCH 3개 추가 승인 | 사용자 | FE-002, FE-130, INT-402 |
 | 2026-07-26 | AI ↔ 프론트 변환 경계 | Experience 결과→Proposal, AI 스트림→V2 SSE, Job 분석→analyze/match, AI 오류→공개 오류 변환 규칙 고정 | 사용자·Codex | AI-005, AI-006, INT-401, INT-402 |
 | 2026-07-26 | 공고 요구사항 enum | AI의 `qualification/unknown`과 V1의 세부 type·`unspecified` 사이 변환 규칙 고정, 불명확한 값은 추측하지 않고 `unknown`으로 보존 | 사용자·Codex | AI-130, INT-402 |
+| 2026-07-26 | 채용공고 실제 API 연결 | 사용자별 분석 DB 저장, 상세 복원, 요구사항별 경험 RAG, 수동 연결과 삭제를 실제 API로 전환 | 사용자·Codex | AI-140, AI-250, AI-340 |
 
 ## 열린 질문
 

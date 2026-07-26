@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { experienceExtractionApi } from '../../api/experienceExtractionApi.js';
+import { experienceTrashApi } from '../../api/experienceTrashApi.js';
 import { v2ChatApi } from '../../api/v2ChatApi.js';
 import { buildExperienceAnalysisFromResult, discardPendingProposalAttachments, markProposalExperienceSaved, saveProposalExperience } from '../experience/api/experienceProposalService.js';
 import { ExperienceIntakeModal } from '../experience/components/ExperienceIntakeModal.jsx';
@@ -22,7 +23,6 @@ const structureNameKey = (value) => String(value || '')
   .replace(/\s+/g, ' ')
   .toLocaleLowerCase('ko-KR');
 const ORDER_STORAGE_KEY = 'career-memory.experience-structure-order.v1';
-const FAILED_EXPERIENCE_DRAFTS_KEY = 'career-memory.failed-experience-drafts.v1';
 const readStructureOrder = () => {
   try {
     const userKey = getUserStorageKey(ORDER_STORAGE_KEY);
@@ -235,6 +235,7 @@ export function ExperienceManagerV3() {
   const [experiencePreviewOpen, setExperiencePreviewOpen] = useState(false);
   const [experiencePreviewBusy, setExperiencePreviewBusy] = useState(false);
   const [experienceProposalEditing, setExperienceProposalEditing] = useState(false);
+  const [trashCount, setTrashCount] = useState(0);
   const [structureOrder, setStructureOrder] = useState(readStructureOrder);
   const editSnapshotRef = useRef(null);
   const selectedExperience = experiences.find((item) => item.id === selectedExperienceId) || null;
@@ -242,10 +243,29 @@ export function ExperienceManagerV3() {
 
   const refresh = async () => {
     setStatus('loading'); setError('');
-    try { const data = await loadLibrary(); setExperiences(data.experiences); setDomains(data.domains); setStatus('ready'); }
+    try {
+      const [data, trash] = await Promise.all([loadLibrary(), experienceTrashApi.list()]);
+      setExperiences(data.experiences); setDomains(data.domains); setTrashCount(trash.total_count); setStatus('ready');
+    }
     catch (reason) { setError(reason.message || '경험을 불러오지 못했습니다.'); setStatus('error'); }
   };
-  useEffect(() => { let active = true; loadLibrary().then((data) => { if (active) { setExperiences(data.experiences); setDomains(data.domains); setStatus('ready'); } }, (reason) => { if (active) { setError(reason.message || '경험을 불러오지 못했습니다.'); setStatus('error'); } }); return () => { active = false; }; }, []);
+  useEffect(() => {
+    let active = true;
+    Promise.all([loadLibrary(), experienceTrashApi.list()]).then(([data, trash]) => {
+      if (active) {
+        setExperiences(data.experiences);
+        setDomains(data.domains);
+        setTrashCount(trash.total_count);
+        setStatus('ready');
+      }
+    }, (reason) => {
+      if (active) {
+        setError(reason.message || '경험을 불러오지 못했습니다.');
+        setStatus('error');
+      }
+    });
+    return () => { active = false; };
+  }, []);
   useEffect(() => {
     const protect = (event) => { if (pendingOps.length) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', protect);
@@ -674,10 +694,6 @@ export function ExperienceManagerV3() {
     setExperienceIntakeBusy(true);
     setError('');
     try {
-      if (files.length) {
-        throw new Error('파일을 이용한 경험 정리는 아직 제공되지 않아요!');
-      }
-
       // The structure may have been created immediately before opening this modal.
       // Resolve the context from the latest API snapshot instead of a possibly stale
       // React state value so the first draft receives the selected domain/project.
@@ -688,6 +704,7 @@ export function ExperienceManagerV3() {
       if (contextDomains !== domains) setDomains(contextDomains);
       const result = await experienceExtractionApi.analyzeDirectInput({
         text: content,
+        files,
       });
       if (!result.experience_drafts?.length) {
         throw new Error('입력한 내용에서 정리할 경험을 찾지 못했어요. 상황, 행동, 결과를 조금 더 자세히 적어 주세요.');
@@ -703,6 +720,17 @@ export function ExperienceManagerV3() {
       setExperienceIntakeOpen(false);
       setExperiencePreviewOpen(true);
     } catch (reason) {
+      const failedInput = {
+        status: 'failed',
+        reason: reason?.message || '경험 분석에 실패했습니다.',
+        draft: {},
+        original_text: content,
+      };
+      if (files?.length) {
+        await experienceTrashApi.createWithFiles(failedInput, files).catch(() => null);
+      } else {
+        await experienceTrashApi.create(failedInput).catch(() => null);
+      }
       setError(reason?.message || '경험을 정리하지 못했습니다. 다시 시도해 주세요.');
       throw reason;
     } finally {
@@ -715,20 +743,24 @@ export function ExperienceManagerV3() {
     if (hasUnsaved && !window.confirm('저장하지 않은 내용은 삭제됩니다. 정말 닫을까요?')) return;
     setExperiencePreviewBusy(true);
     try {
+      const pendingDrafts = (experienceProposal?.experiences || []).filter((item) => !item.approved);
+      await Promise.all(pendingDrafts.map((draft) => experienceTrashApi.create({
+        status: 'deleted',
+        reason: '분석 결과 창을 닫아 보관된 초안',
+        draft,
+      })));
       await discardPendingProposalAttachments(experienceProposal);
       setExperiencePreviewOpen(false); setExperienceProposal(null); setExperienceProposalEditing(false);
     } finally { setExperiencePreviewBusy(false); }
   };
   const updateExperiencePreview = async (panel) => { setExperienceProposal(panel); return panel; };
-  const preserveFailedExperienceDrafts = (proposal, items) => {
+  const preserveFailedExperienceDrafts = async (items, reason = '') => {
     if (!items.length) return;
-    try {
-      window.localStorage.setItem(getUserStorageKey(FAILED_EXPERIENCE_DRAFTS_KEY), JSON.stringify({
-        proposal_id: proposal?.id,
-        saved_at: new Date().toISOString(),
-        drafts: items,
-      }));
-    } catch { /* storage may be unavailable; the visible error still explains the failure */ }
+    await Promise.all(items.map((draft) => experienceTrashApi.create({
+      status: 'failed',
+      reason: reason || '내 경험으로 저장하지 못한 초안',
+      draft,
+    })));
   };
   const approveExperiencePreview = async (proposal) => {
     const requestedDraftId = proposal.selection?.draft_id;
@@ -758,6 +790,11 @@ export function ExperienceManagerV3() {
       ? { ...current, version: (current.version || 0) + 1, experiences, rawPayload: { ...(current.rawPayload || {}), experiences } }
       : null;
     if (removed) {
+      await experienceTrashApi.create({
+        status: 'deleted',
+        reason: '사용자가 분석 결과에서 삭제한 초안',
+        draft: removed,
+      });
       const remainingSourceIds = new Set(experiences.flatMap((item) => item.source_ref_ids || item.source_ids || []));
       const removedFileIds = (removed.source_refs || []).filter((source) => source.source_type === 'file' || source.kind === 'file').map((source) => source.id).filter(Boolean);
       await Promise.all([...new Set(removedFileIds)].filter((id) => !remainingSourceIds.has(id)).map((id) => v2ChatApi.deleteAttachment(id).catch(() => null)));
@@ -776,6 +813,12 @@ export function ExperienceManagerV3() {
     if (experiencePreviewBusy) return;
     setExperiencePreviewBusy(true);
     try {
+      const pendingDrafts = (experienceProposal?.experiences || []).filter((item) => !item.approved);
+      await Promise.all(pendingDrafts.map((draft) => experienceTrashApi.create({
+        status: 'deleted',
+        reason: '사용자가 나머지 초안을 삭제함',
+        draft,
+      })));
       await discardPendingProposalAttachments(experienceProposal);
     } finally {
       setExperiencePreviewOpen(false);
@@ -808,7 +851,7 @@ export function ExperienceManagerV3() {
        const failedDrafts = results.flatMap((result, resultIndex) => result.status === 'rejected' ? [pending[resultIndex].item] : []);
        setExperienceProposal(nextProposal);
        await refresh().catch((reason) => setError(reason.message || '저장 후 목록을 갱신하지 못했습니다.'));
-       if (failedDrafts.length) preserveFailedExperienceDrafts(current, failedDrafts);
+       if (failedDrafts.length) await preserveFailedExperienceDrafts(failedDrafts, failures.join(' · '));
       if (failures.length) throw new Error(`${failures.length}개 초안을 저장하지 못했습니다. 실패한 초안을 확인하고 다시 시도해 주세요.`);
       await refresh();
       setExperiencePreviewOpen(false);
@@ -830,7 +873,7 @@ export function ExperienceManagerV3() {
   return <div className={`mv2-manager mv2-manager--v3 ${selected ? 'has-preview' : ''} ${editMode ? 'is-edit-mode' : ''}`}>
     <main>
       <section className="mv2-library-header" aria-labelledby="experience-library-title">
-        <header className="mv2-page-header"><div><span className="mv2-kicker">EXPERIENCE LIBRARY</span><div className="mv2-title-row"><h1 id="experience-library-title">경험 관리</h1>{editMode && <span className="mv2-edit-mode-badge">구조 편집 중</span>}</div><p>AI로 경험을 분석하고, 정리된 경험을 직접 수정·관리하세요.</p></div><div className="mv2-header-actions">{editMode ? <><button type="button" className="mv2-button mv2-button--secondary mv2-edit-cancel" onClick={cancelEditMode} disabled={savingStructure}>취소</button><button type="button" className="mv2-button mv2-button--primary mv2-edit-save" onClick={() => saveStructure()} disabled={!pendingOps.length || savingStructure}>{savingStructure ? '저장 중…' : '변경사항 저장'}</button></> : <><button type="button" className="mv2-button mv2-button--primary mv2-add-experience" onClick={openNewExperience}>+ 경험 분석하기</button><button type="button" className="mv2-button mv2-button--secondary mv2-structure-edit" onClick={beginEditMode}>경험 구조 편집</button></>}</div></header>
+        <header className="mv2-page-header"><div><span className="mv2-kicker">EXPERIENCE LIBRARY</span><div className="mv2-title-row"><h1 id="experience-library-title">경험 관리</h1>{editMode && <span className="mv2-edit-mode-badge">구조 편집 중</span>}</div><p>AI로 경험을 분석하고, 정리된 경험을 직접 수정·관리하세요.</p></div><div className="mv2-header-actions">{editMode ? <><button type="button" className="mv2-button mv2-button--secondary mv2-edit-cancel" onClick={cancelEditMode} disabled={savingStructure}>취소</button><button type="button" className="mv2-button mv2-button--primary mv2-edit-save" onClick={() => saveStructure()} disabled={!pendingOps.length || savingStructure}>{savingStructure ? '저장 중…' : '변경사항 저장'}</button></> : <><button type="button" className="mv2-button mv2-button--primary mv2-add-experience" onClick={openNewExperience}>+ 경험 분석하기</button><button type="button" className="mv2-button mv2-button--secondary mv2-structure-edit" onClick={beginEditMode}>경험 구조 편집</button><Link className="mv2-trash-link" to="/memory/trash" aria-label={`쓰레기통${trashCount ? `, 초안 ${trashCount}개` : ''}`} title="쓰레기통"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>{trashCount > 0 && <span>{trashCount > 99 ? '99+' : trashCount}</span>}</Link></>}</div></header>
         <section className="mv2-summary" aria-label="커리어 자산 요약"><button onClick={clearSearch}><strong>{experiences.length}</strong><span>전체 경험</span><small>정리된 경험 보기</small></button><button onClick={() => setAssetModal('evidence')}><strong>{evidenceTotal}</strong><span>경험 근거</span><small>원본 리스트 보기</small></button><button onClick={() => setAssetModal('skills')}><strong>{skillTotal}</strong><span>내 역량</span><small>직군 · 직업 · 역량 보기</small></button></section>
         <section className="mv2-discovery-panel" aria-label="경험 검색"><div className="mv2-toolbar"><label className="mv2-search"><span className="mv2-search__label">경험 검색</span><input value={query} onChange={(event) => { setSkillGroupFilter(''); setQuery(event.target.value); }} placeholder="경험, 프로젝트·활동, 역량 검색" /></label><button type="button" className="mv2-button mv2-button--secondary mv2-search-reset" onClick={clearSearch} disabled={!query && !skillGroupFilter}>검색 초기화</button></div></section>
       </section>

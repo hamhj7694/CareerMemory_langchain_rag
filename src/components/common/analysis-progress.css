@@ -1,0 +1,20 @@
+.analysis-progress{display:grid;gap:var(--space-3);padding:var(--space-4);border:1px solid #b8cbf3;border-radius:var(--radius-md);background:linear-gradient(135deg,#f8faff 0%,#f1f6ff 100%)}
+.analysis-progress__heading{display:flex;align-items:center;gap:var(--space-3)}
+.analysis-progress__heading>div{min-width:0;flex:1}
+.analysis-progress__heading strong{display:block;color:var(--color-text)}
+.analysis-progress__heading p{margin:2px 0 0;color:var(--color-primary);font-size:var(--text-body-sm)}
+.analysis-progress__heading time{color:var(--color-text-muted);font-size:var(--text-caption);font-variant-numeric:tabular-nums}
+.analysis-progress__spinner{width:18px;height:18px;flex:0 0 auto;border:2px solid #c9d7f3;border-top-color:var(--color-primary);border-radius:50%;animation:analysis-progress-spin .8s linear infinite}
+.analysis-progress__track{height:8px;overflow:hidden;border-radius:999px;background:#dce6f8}
+.analysis-progress__track>span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--color-primary),#688ee0);transition:width .5s ease}
+.analysis-progress__steps{display:flex;gap:var(--space-3);padding:0;margin:0;list-style:none;color:var(--color-text-subtle);font-size:var(--text-caption)}
+.analysis-progress__steps li{min-width:0;display:flex;align-items:center;gap:5px}
+.analysis-progress__steps li>span{width:18px;height:18px;flex:0 0 auto;display:grid;place-items:center;border:1px solid var(--color-border-strong);border-radius:50%;font-size:10px;background:#fff}
+.analysis-progress__steps .is-active{color:var(--color-primary);font-weight:700}
+.analysis-progress__steps .is-active>span{border-color:var(--color-primary);color:#fff;background:var(--color-primary)}
+.analysis-progress__steps .is-done{color:var(--color-confirmed)}
+.analysis-progress__steps .is-done>span{border-color:var(--color-confirmed);color:#fff;background:var(--color-confirmed)}
+.analysis-progress__slow{margin:0;padding-top:var(--space-2);border-top:1px solid #dce6f8;color:var(--color-text-muted);font-size:var(--text-caption)}
+@keyframes analysis-progress-spin{to{transform:rotate(360deg)}}
+@media(max-width:700px){.analysis-progress__steps{display:grid;grid-template-columns:1fr}.analysis-progress__steps li:not(.is-active):not(.is-done){display:none}}
+@media(prefers-reduced-motion:reduce){.analysis-progress__spinner{animation:none}.analysis-progress__track>span{transition:none}}

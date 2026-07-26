@@ -2,6 +2,10 @@
 python-dotenv>=1.0,<2.0
 fastapi>=0.116,<1.0
 uvicorn[standard]>=0.35,<1.0
+python-multipart>=0.0.20,<1.0
+pytesseract>=0.3.13,<1.0
+Pillow>=10.0,<13.0
+PyMuPDF>=1.24,<2.0
 sqlalchemy>=2.0,<3.0
 pwdlib[argon2]>=0.3,<1.0
 openai>=2.0,<3.0

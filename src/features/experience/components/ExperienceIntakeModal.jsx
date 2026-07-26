@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { v2ChatApi } from '../../../api/v2ChatApi.js';
+import { AnalysisProgress } from '../../../components/common/AnalysisProgress.jsx';
 import { EVIDENCE_FILE_LIMITS, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../../evidence/model/evidenceFileSelection.js';
 
 export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }) {
@@ -65,13 +66,14 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
             </label>
             <label className="mv2-file-picker">
               <span>파일 근거 추가</span>
-              <input type="file" multiple accept=".pdf,.txt,application/pdf,text/plain" onChange={addFiles} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} />
-              <small>{checkingFiles ? '기존 근거와 중복 여부를 확인하고 있습니다…' : 'PDF·TXT를 최대 5개까지 선택할 수 있습니다.'}</small>
+              <input type="file" multiple accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,image/png,image/jpeg,image/webp" onChange={addFiles} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} />
+              <small>{checkingFiles ? '기존 근거와 중복 여부를 확인하고 있습니다…' : 'PDF·TXT·이미지를 최대 5개, 전체 14MB까지 선택할 수 있습니다. 이미지 글자는 로컬 OCR로 읽습니다.'}</small>
             </label>
             {files.length > 0 && <ul className="mv2-experience-intake__files">{files.map((file) => <li key={evidenceFileKey(file)}><span><strong>{file.name}</strong><small>{evidenceFileStatusLabel(file)}</small></span><button type="button" onClick={() => setFiles((current) => current.filter((item) => item !== file))} aria-label={`${file.name} 제거`}>×</button></li>)}</ul>}
             {fileError && <p className="mv2-experience-intake__file-error" role="alert">{fileError}</p>}
             {fileNotice && <p className="mv2-experience-intake__file-notice" role="status">{fileNotice}</p>}
             {analysisError && <p className="mv2-experience-intake__file-error" role="alert">{analysisError}</p>}
+            <AnalysisProgress active={busy} hasFiles={files.length > 0} kind="experience" />
             <p className="mv2-experience-intake__notice">입력한 원문에서 확인되는 내용만 AI가 경험 초안으로 정리합니다.</p>
           </div>
           <footer>

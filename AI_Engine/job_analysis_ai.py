@@ -364,7 +364,20 @@ class JobAnalysisAI:
             attachment_texts=attachment_texts,
         )
 
-    # 12-3. 분석 가능한 공고 원문 준비
+    # 12-3. 기존 요구사항을 최신 확정 경험과 다시 매칭
+    # 공고 요구사항을 다시 추출하지 않고, 선택된 요구사항의 RAG 검색과 추천만 갱신한다.
+    def rematch_requirements(
+        self,
+        requirements: Sequence[JobRequirement],
+    ) -> list[RequirementExperienceLink]:
+        if self.experience_retriever is None or not requirements:
+            return []
+        candidates_by_requirement = self._retrieve_candidates(requirements)
+        if not any(candidates_by_requirement.values()):
+            return []
+        return self._match_experiences(requirements, candidates_by_requirement)
+
+    # 12-4. 분석 가능한 공고 원문 준비
     # 직접 입력 공고와 본문 추출이 끝난 첨부 파일만 모델 문맥에 포함한다.
     @staticmethod
     def _prepare_source_texts(

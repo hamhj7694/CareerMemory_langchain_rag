@@ -6,6 +6,7 @@ import { JobDetailPage } from './pages/JobDetailPage.jsx';
 import { JobsPage } from './pages/JobsPage.jsx';
 import { MemoryDetailPage } from './pages/MemoryDetailPage.jsx';
 import { MemoryManagerPage } from './pages/MemoryManagerPage.jsx';
+import { ExperienceTrashPage } from './pages/ExperienceTrashPage.jsx';
 import { NotFoundPage } from './pages/NotFoundPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
 import { RegisterPage } from './pages/RegisterPage.jsx';
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
           { path: 'chat/:conversationId', element: <ChatPage /> },
           { path: 'memory', element: <MemoryManagerPage /> },
           { path: 'memory/new', element: <MemoryDetailPage /> },
+          { path: 'memory/trash', element: <ExperienceTrashPage /> },
           { path: 'memory/:experienceId', element: <MemoryDetailPage /> },
           { path: 'jobs', element: <JobsPage /> },
           { path: 'jobs/:jobId', element: <JobDetailPage /> },

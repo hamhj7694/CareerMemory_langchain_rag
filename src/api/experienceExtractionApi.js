@@ -4,7 +4,8 @@ import { createHttpAdapter } from './adapters/httpAdapter.js';
 const http = createHttpAdapter({
   baseUrl: apiConfig.baseUrl,
   // 경험 구조화는 일반 API보다 오래 걸릴 수 있어 별도 제한 시간을 사용한다.
-  timeoutMs: Math.max(apiConfig.timeoutMs, 90_000),
+  // PDF·이미지 글자 추출 뒤 경험 구조화를 연속 실행하므로 충분한 처리 시간을 둔다.
+  timeoutMs: Math.max(apiConfig.timeoutMs, 180_000),
 });
 
 function createRequestId() {
@@ -13,7 +14,18 @@ function createRequestId() {
 }
 
 export const experienceExtractionApi = {
-  analyzeDirectInput({ text, clientRequestId } = {}) {
+  analyzeDirectInput({ text, files = [], clientRequestId } = {}) {
+    if (files.length) {
+      const body = new FormData();
+      body.append('client_request_id', clientRequestId || createRequestId());
+      body.append('text', text || '');
+      files.forEach((item) => body.append('files', item.file || item));
+      return http.request({
+        path: '/api/v2/experience-extractions/direct-input-files',
+        method: 'POST',
+        body,
+      });
+    }
     return http.request({
       path: '/api/v2/experience-extractions/direct-input',
       method: 'POST',

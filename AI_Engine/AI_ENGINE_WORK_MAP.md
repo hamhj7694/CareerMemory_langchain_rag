@@ -53,9 +53,9 @@ AI_langchain.py
 | ID | 상태 | AI 역할 | 주요 입력 | 주요 출력 | 구현 위치 | 완료 조건 |
 |---|---|---|---|---|---|---|
 | AI-110 | `[~]` | 대화형 챗봇 | 현재 세션 문맥, 새 메시지, 첨부 ID, 현재 사용자의 저장 경험·근거 검색 결과 | 답변, 인용, 후속 행동, 스트리밍 이벤트 | `chatbot_ai.py` | 세션 간 대화 원문을 섞지 않고 사용자별 저장 경험 RAG·첨부 본문·인용 연결 |
-| AI-120 | `[~]` | 경험정리 AI | 대화 범위 또는 직접 입력 텍스트·파일 | `ExperienceDraft[]` 0..N개, 원본 근거, 누락 정보 | `experience_ai.py` | strict 함수 호출과 공통 스키마 변환 완료. 대화·파일 본문 수집 파이프라인 연결 대기 |
+| AI-120 | `[~]` | 경험정리 AI | 대화 범위 또는 직접 입력 텍스트·파일 | `ExperienceDraft[]` 0..N개, 원본 근거, 누락 정보 | `experience_ai.py`, `experience_file_text.py` | 직접 입력 텍스트와 PDF·TXT·이미지 통합 분석 완료. 대화 첨부 본문 연결 대기 |
 | AI-130 | `[~]` | 공고 요구사항 구조화 | 공고 원문·첨부 파일 | `JobRequirement[]` | `job_analysis_ai.py` | strict 함수 호출과 원문 인용 위치 검증 완료. 실제 첨부 본문 수집 연결 대기 |
-| AI-140 | `[~]` | 요구사항별 경험 추천 | 요구사항, 확정 Experience 검색 문서 | `RequirementExperienceLink[]` | `job_analysis_ai.py` | retriever 주입·후보 제한·추천 근거 검증 완료. 실제 Chroma 인덱스 연결 대기 |
+| AI-140 | `[x]` | 요구사항별 경험 추천 | 요구사항, 확정 Experience 검색 문서 | `RequirementExperienceLink[]` | `job_analysis_ai.py`, `api/jobs.py` | 로그인 사용자별 Chroma 인덱스, 후보 제한, 추천 근거 검증과 DB 저장 연결 완료 |
 
 ---
 
@@ -78,13 +78,13 @@ AI_langchain.py
 
 | ID | 상태 | 작업 | 입력 → 출력 | 구현 위치 | 완료 조건 |
 |---|---|---|---|---|---|
-| AI-210 | `[ ]` | 첨부 파일 파싱 | PDF/TXT → 페이지·문단·offset가 있는 원문 | `experience_ai.py`, `job_analysis_ai.py` | 파일 원문과 인용 위치를 재현 가능 |
+| AI-210 | `[~]` | 첨부 파일 파싱 | PDF·TXT·PNG·JPG·WEBP → 검토·인용 가능한 원문 | `job_file_text.py`, `experience_file_text.py` | 경험 파일은 PyMuPDF·Tesseract 로컬 처리, 채용공고 파일은 Gemini 처리. 세부 인용 위치 보존 대기 |
 | AI-211 | `[ ]` | 중복 파일 판정 | filename, size, SHA-256 → duplicate 상태 | `experience_ai.py`, 백엔드 저장 API | 동일 해시는 재사용하고 수정본은 별도 버전 처리 |
 | AI-220 | `[ ]` | EvidenceChunk 생성·임베딩 | 원본 대화·텍스트·파일 → 검색 chunk | `experience_ai.py` | 원본 ID·page·offset가 보존되고 중복 임베딩 방지 |
 | AI-230 | `[~]` | Experience Search Document 생성·임베딩 | 사용자별 확정 Experience → 검색용 문서 | `schemas/retrieval.py`, `job_analysis_ai.py` | `user_id` 메타데이터와 필터를 강제하고 확정·근거 보유 경험만 문서화. 생성·수정·삭제 저장소 이벤트 연결 대기 |
 | AI-240 | `[?]` | LLM 모델 생성 | `load_dotenv → ChatOpenAI` | 역할별 AI 파일 | 역할별 모델 생성 방식 구현, 실제 API 호출 확인 대기 |
-| AI-250 | `[ ]` | Vector Store 연결 | 임베딩 문서 ↔ 검색 결과 | `job_analysis_ai.py` | 인덱스 버전과 필터 조건을 응답에 기록 |
-| AI-260 | `[ ]` | 저장 데이터 연결 | 대화·근거·경험·공고 조회/저장 | `AI_langchain.py`, 백엔드 저장 API | AI 실행과 실제 저장 경계를 구분 |
+| AI-250 | `[x]` | Vector Store 연결 | 임베딩 문서 ↔ 검색 결과 | `job_analysis_ai.py`, `api/jobs.py` | 사용자별 컬렉션으로 확정·근거 보유 경험을 동기화하고 검색 |
+| AI-260 | `[~]` | 저장 데이터 연결 | 대화·근거·경험·공고 조회/저장 | `api/`, 백엔드 저장 API | 경험·공고의 사용자별 저장 연결 완료. 첨부 원문 저장 연결 대기 |
 
 원본 근거와 파생 문서는 분리한다.
 
@@ -98,6 +98,18 @@ AI_langchain.py
 
 AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은 원본 ID 또는 확정 경험 ID로 추적할 수 있어야 한다.
 
+채용공고 상세의 `최신 경험으로 다시 매칭`은 공고 요구사항을 다시 추출하지 않고,
+현재 로그인 사용자의 최신 확정 경험을 Chroma에 다시 색인한 뒤 요구사항별 RAG 검색과
+AI 추천 연결만 갱신한다. 사용자가 직접 만든 연결과 재매칭 대상이 아닌 요구사항의 연결은 보존한다.
+
+커리어 챗 입력창의 `경험 정리` 모드는 경험 관리와 같은 ExperienceAI를 사용한다.
+텍스트와 PDF·TXT·이미지를 함께 분석하고, 사용자 메시지와 검토용 경험 제안을 해당 대화에
+저장한다. 제안 수정·부분 저장·삭제 상태도 assistant 메시지의 actions에 보관해 새로고침 후 복원한다.
+
+커리어 챗 입력창의 `공고 분석` 모드는 공고 파일 본문 추출 후 JobAnalysisAI를 호출한다.
+요구사항 추출과 최신 확정 경험 RAG 매칭 결과를 사용자별 공고 분석 DB에 저장하고,
+현재 대화에는 해당 분석 결과 페이지를 다시 열 수 있는 action을 남긴다.
+
 ---
 
 ## 6. LangChain 파이프라인 작업
@@ -105,13 +117,18 @@ AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은
 | ID | 상태 | 파이프라인 | 실행 흐름 | 주요 계약 |
 |---|---|---|---|---|
 | AI-310 | `[~]` | 커리어 챗 | 현재 세션 문맥 수집 → 사용자별 확정 경험 RAG → 챗봇 → 스트리밍 응답 | 세션 원문 격리, 계정 공통 경험 검색, 참고 경험 표시와 API 연결 대기 |
-| AI-320 | `[ ]` | 대화내용으로 경험 정리 | 마지막 성공 범위 계산 → 대화·첨부 수집 → 경험정리 AI | `ExperienceExtractionRequest`, `ExtractionRun`, `ExperienceExtractionResult` |
-| AI-330 | `[~]` | 경험 관리의 `+ 경험 추가` | 직접 텍스트·첨부 수집 → 공통 경험정리 AI | 텍스트 직접 입력은 실제 Gemini/FastAPI와 경험 제안 화면 연결 완료. 파일 파싱과 확정 저장 API 연결 대기 |
-| AI-340 | `[ ]` | 채용공고 분석 | 공고 파싱 → 요구사항 구조화 → 경험 RAG → 요구사항별 추천 | `JobAnalysisRequest`, `JobAnalysisResult` |
+| AI-320 | `[x]` | 대화내용으로 경험 정리 | 마지막 성공 범위 계산 → 사용자 대화 수집 → 경험정리 AI → 채팅 안 초안 검토 | `GET /api/v2/conversations/{id}/experience-extraction-status`, `POST /api/v2/conversations/{id}/experience-extractions` |
+| AI-330 | `[x]` | 경험 관리의 `+ 경험 추가` | 직접 텍스트·첨부 수집 → 공통 경험정리 AI | 텍스트와 PDF·TXT·이미지 근거 통합 분석, 제안 검토와 확정 저장 연결 완료 |
+| AI-340 | `[x]` | 채용공고 분석 | 공고 본문 → 요구사항 구조화 → 사용자별 경험 RAG → 요구사항별 추천 → DB 저장 | `JobAnalysisRequest`, `JobAnalysisResult`, `api/jobs.py` |
 | AI-350 | `[ ]` | 자동 모드 라우팅 | 요청 문맥 분석 → 체인 판정 → 낮은 확신은 chat fallback | `AIRouteRequest`, `AIRouteDecision` |
 | AI-360 | `[ ]` | AI 조립 진입점 | Adapter·Retriever·Validator·Chain 생성과 의존성 주입 | `AI_langchain.py` |
 
 `AI-320`과 `AI-330`은 입력 수집 Adapter만 다르고 동일한 경험정리 체인을 재사용한다.
+
+`AI-320`은 마지막으로 정리에 성공한 메시지 다음부터 새로 작성한 사용자 메시지만 분석한다.
+AI 답변은 경험의 사실 근거로 사용하지 않으며, `공고 분석` 모드로 입력한 공고 내용도 제외한다.
+생성된 경험 초안은 assistant 메시지의 action에 함께 저장되므로 새로고침하거나 대화를 다시 열어도
+검토 상태를 복원할 수 있다. 초안을 거절하면 해당 대화 범위는 다음 정리에서 다시 분석할 수 있다.
 
 ---
 
@@ -131,7 +148,8 @@ AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은
 | API | 요청 스키마 | 응답 스키마 | 전송 |
 |---|---|---|---|
 | `POST /ai/chat` | `ChatRequest` | `ChatStreamEvent` / `ChatResponse` | SSE |
-| `POST /ai/experience-extractions/conversation` | `ExperienceExtractionRequest` | `ExperienceExtractionResult` | JSON 또는 작업 상태 |
+| `GET /api/v2/conversations/{id}/experience-extraction-status` | 대화 ID | 미분석 메시지 수·마지막 성공 범위 | JSON |
+| `POST /api/v2/conversations/{id}/experience-extractions` | `client_request_id` | 메시지·경험 초안·분석 범위 | JSON. 상단 대화내용 정리 연결 완료 |
 | `POST /api/v2/experience-extractions/direct-input` | `ExperienceExtractionRequest` | `ExperienceExtractionResult` | JSON. 텍스트 직접 입력 연결 완료 |
 | `POST /ai/job-analyses` | `JobAnalysisRequest` | `JobAnalysisResult` | JSON 또는 작업 상태 |
 
@@ -152,6 +170,7 @@ AI 요약은 원본 근거를 대체하지 않으며, 모든 사실과 추천은
 현재 연결 메모:
 
 - 직접 입력 → Gemini 경험정리 → 초안 검토 → 개별/전체 저장 → 사용자별 DB 조회 경로를 연결했다.
+- 삭제·저장 실패 초안 → 사용자별 쓰레기통 → 수정·내 경험 저장·완전 삭제 경로를 연결했다.
 - 경험 CRUD API와 프론트 단위 테스트까지 통과했으며, 브라우저 수동 E2E 확인 후 관련 항목을 `[x]`로 확정한다.
 
 ---

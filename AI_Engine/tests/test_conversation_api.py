@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 from AI_Engine.database.connection import Base, get_database_session
 from AI_Engine.database import models  # noqa: F401
 from AI_Engine.api.conversations import get_chatbot_ai
+from AI_Engine.api.experience_extractions import get_experience_ai
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.router import app
 
@@ -419,6 +420,136 @@ class ConversationApiTests(unittest.TestCase):
         with self.session_factory() as database:
             message_count = database.query(models.Message).count()
         self.assertEqual(message_count, 0)
+
+    def test_experience_mode_saves_messages_and_restorable_proposal(self) -> None:
+        conversation = self.create_conversation().json()
+        draft = SimpleNamespace(model_dump=lambda mode: {
+            "draft_id": "draft-1",
+            "domain": {"name": "서비스 기획"},
+            "project": {"name": "결제 개선"},
+            "title": "결제 전환율 개선",
+            "summary": "결제 단계를 개선했습니다.",
+            "situation": "결제 이탈이 많았습니다.",
+            "actions": ["이탈 데이터를 분석했습니다."],
+            "results": ["완료율이 증가했습니다."],
+            "role": "서비스 기획자",
+            "skills": ["데이터 분석"],
+            "facts": ["결제 완료율 증가"],
+            "source_ref_ids": [],
+        })
+        fake_ai = SimpleNamespace(organize=lambda request, sources: SimpleNamespace(
+            experience_drafts=[draft],
+            sources=[],
+            run={"id": "run-1"},
+        ))
+        app.dependency_overrides[get_experience_ai] = lambda: fake_ai
+        try:
+            response = self.client.post(
+                f"/api/v2/conversations/{conversation['id']}/experience-analysis",
+                data={
+                    "client_request_id": str(uuid4()),
+                    "text": "결제 단계를 개선했습니다.",
+                },
+            )
+        finally:
+            app.dependency_overrides.pop(get_experience_ai, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["proposal"]["type"], "create_experiences")
+        messages = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/messages"
+        ).json()["items"]
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["resolved_intents"], ["experience"])
+        self.assertEqual(
+            messages[1]["actions"][0]["type"],
+            "experience_proposal",
+        )
+
+    def test_job_mode_records_result_link_in_conversation(self) -> None:
+        conversation = self.create_conversation().json()
+        with self.session_factory() as database:
+            database.add(models.JobAnalysisRecord(
+                id="job-chat-1",
+                user_id=self.current_user.id,
+                client_request_id="job-analysis-request",
+                posting_content="서비스 기획자 채용",
+                requirements=[{"id": "requirement-1"}],
+            ))
+            database.commit()
+
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/job-analysis-record",
+            json={
+                "client_request_id": str(uuid4()),
+                "job_id": "job-chat-1",
+                "content": "서비스 기획자 공고를 분석해 줘.",
+                "filenames": ["채용공고.png"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        assistant = response.json()["assistant_message"]
+        self.assertEqual(assistant["resolved_intents"], ["job"])
+        self.assertEqual(
+            assistant["actions"][0],
+            {"type": "open_job_analysis", "job_id": "job-chat-1"},
+        )
+        messages = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/messages"
+        ).json()["items"]
+        self.assertEqual(len(messages), 2)
+
+    def test_recent_conversation_is_analyzed_once_with_experience_ai(self) -> None:
+        conversation = self.create_conversation().json()
+        self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "고객 문의를 분석해 응답 시간을 줄였습니다.",
+                "intent": "auto",
+                "client_request_id": str(uuid4()),
+            },
+        )
+        before = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/experience-extraction-status"
+        ).json()
+        self.assertEqual(before["unprocessed_message_count"], 1)
+
+        draft = SimpleNamespace(model_dump=lambda mode: {
+            "draft_id": "conversation-draft-1",
+            "domain": {"name": "고객 경험"},
+            "project": {"name": "문의 개선"},
+            "title": "고객 문의 응답 개선",
+            "summary": "문의 응답 시간을 줄였습니다.",
+            "source_ref_ids": [],
+        })
+        run = SimpleNamespace(
+            message_ids=[],
+            model_dump=lambda mode: {
+                "id": "conversation-run-1",
+                "message_ids": [],
+            },
+        )
+        fake_ai = SimpleNamespace(organize=lambda request, sources: SimpleNamespace(
+            experience_drafts=[draft],
+            sources=[],
+            run=run,
+        ))
+        app.dependency_overrides[get_experience_ai] = lambda: fake_ai
+        try:
+            analyzed = self.client.post(
+                f"/api/v2/conversations/{conversation['id']}/experience-extractions",
+                json={"client_request_id": str(uuid4())},
+            )
+        finally:
+            app.dependency_overrides.pop(get_experience_ai, None)
+
+        self.assertEqual(analyzed.status_code, 200)
+        self.assertEqual(analyzed.json()["proposal"]["type"], "create_experiences")
+        after = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/experience-extraction-status"
+        ).json()
+        self.assertEqual(after["unprocessed_message_count"], 0)
 
     def test_unknown_conversation_returns_not_found(self) -> None:
         response = self.client.get(

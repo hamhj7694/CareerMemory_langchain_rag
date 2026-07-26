@@ -34,3 +34,19 @@
 @media(max-width:1100px){.jobs-entry{grid-template-columns:1fr}.jobs-entry>.feature-heading,.jobs-entry .job-form,.jobs-entry .job-history{grid-column:1}.jobs-entry .job-form{grid-row:2}.jobs-entry .job-history{grid-row:3;margin-top:var(--space-4)}}
 .jobs-entry .job-history-card__main{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:var(--space-4);row-gap:var(--space-2);min-height:0}.jobs-entry .job-history-card__meta{grid-column:1/-1}.jobs-entry .job-history-card p{grid-column:1;min-height:0;margin:0}.jobs-entry .job-history-card__summary{grid-column:2;align-self:center;white-space:nowrap}
 @media(max-width:520px){.jobs-entry .job-history-card__main{grid-template-columns:1fr}.jobs-entry .job-history-card p,.jobs-entry .job-history-card__summary{grid-column:1}.jobs-entry .job-history-card__summary{margin-top:var(--space-1)}}
+.job-file-input{display:grid;gap:var(--space-3);padding:var(--space-4);border:1px dashed var(--color-border-strong);border-radius:var(--radius-md);background:var(--color-surface-subtle)}
+.job-file-input__heading{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)}
+.job-file-input__heading>span{font-weight:800}.job-file-input__heading>span small{font-weight:500;color:var(--color-text-subtle)}
+.job-file-input__heading>small,.job-file-input>p{color:var(--color-text-muted);font-size:var(--text-caption)}
+.job-file-input>p{margin:0}
+.job-file-input__picker{display:flex!important;align-items:center;gap:var(--space-3);margin:0!important}
+.job-file-input__picker input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.job-file-input__picker>span{display:inline-flex;align-items:center;min-height:38px;padding:0 var(--space-4);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:#fff;color:var(--color-primary);font-size:var(--text-body-sm);font-weight:700;cursor:pointer}
+.job-file-input__picker:focus-within>span,.job-file-input__picker>span:hover{border-color:var(--color-primary);background:var(--color-primary-subtle)}
+.job-file-input__picker>em{color:var(--color-text-muted);font-size:var(--text-body-sm);font-style:normal}
+.job-file-input__selected{display:grid;gap:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--color-border)}
+.job-file-input__selected ul{display:grid;gap:var(--space-1);margin:0;padding:0;list-style:none}
+.job-file-input__selected li{display:flex;justify-content:space-between;gap:var(--space-3);padding:6px 8px;border-radius:4px;background:#fff;font-size:var(--text-body-sm)}
+.job-file-input__selected li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.job-file-input__selected li small{color:var(--color-text-subtle);white-space:nowrap}
+.job-file-input__selected>div{display:flex;justify-content:flex-end;gap:var(--space-2)}
+@media(max-width:700px){.job-file-input__heading{align-items:flex-start;flex-direction:column}.job-file-input__picker{align-items:flex-start!important;flex-direction:column}.job-file-input__selected>div{flex-direction:column}.job-file-input__selected button{width:100%}}

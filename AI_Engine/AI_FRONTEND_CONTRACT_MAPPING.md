@@ -84,11 +84,19 @@ API Adapter는 저장소에서 대화 본문과 파싱된 첨부 본문을 조�
 
 현재 구현 상태:
 
+- `GET /api/v2/conversations/{conversation_id}/experience-extraction-status`가 마지막 성공 범위 이후의 미분석 사용자 메시지 수를 반환한다.
+- `POST /api/v2/conversations/{conversation_id}/experience-extractions`가 미분석 사용자 메시지를 실제 경험정리 AI로 전달한다.
+- 대화내용 분석에서는 AI 답변과 `job` 모드로 입력한 채용공고를 경험 근거에서 제외한다.
+- 생성한 Proposal은 assistant 메시지 action에 저장되어 새로고침과 대화 재진입 후에도 복원된다.
+- Proposal을 거절하면 해당 분석 범위를 다시 경험 정리 대상으로 사용할 수 있다.
 - `POST /api/v2/experience-extractions/direct-input`에서 텍스트 직접 입력을 실제 경험정리 AI로 실행한다.
 - 반환된 `ExperienceExtractionResult`는 프론트 Adapter가 기존 경험 구조화 제안 화면 모델로 변환한다.
 - AI 결과에 없는 가짜 추가 초안은 생성하지 않는다.
-- PDF/TXT 첨부는 업로드·본문 파싱 API가 연결되기 전까지 사용자에게 미제공 상태를 안내한다.
-- 초안의 최종 저장은 아직 경험 Mock 저장소를 사용하므로 배포용 영구 저장으로 간주하지 않는다.
+- 경험정리 직접 입력의 PDF·TXT·PNG·JPG·WEBP는 `/api/v2/experience-extractions/direct-input-files`에서 본문을 추출한다.
+- 직접 작성한 텍스트와 파일 근거는 동일한 분석 범위로 묶어 한 번에 경험 초안을 생성한다.
+- TXT와 텍스트 PDF는 서버에서 직접 추출하고, 이미지와 스캔 PDF는 로컬 Tesseract OCR(`kor+eng`)로 읽는다.
+- 파일 판독에는 Gemini를 사용하지 않으며, 추출된 텍스트를 경험 초안으로 구조화할 때만 활성 AI Provider를 호출한다.
+- 승인된 초안은 로그인 사용자 ID와 연결된 실제 Experience DB에 저장한다.
 
 ### 3.2 출력 변환
 
@@ -303,6 +311,19 @@ AI 모델의 `RequirementExperienceLink.status`와 화면의 관련성 `status`�
 
 ---
 
+### 5.3 현재 실제 연결 상태
+
+- `GET /api/jobs`: 로그인 사용자의 분석 기록 목록을 최신순으로 조회한다.
+- `POST /api/jobs/analyze`: 요구사항 추출과 사용자별 확정 경험 RAG를 실행한 뒤 DB에 저장한다.
+- `POST /api/jobs/extract-text`: TXT는 서버에서 읽고 PDF·PNG·JPG·WEBP는 Gemini 시각 인식으로 원문을 추출한다.
+- `GET /api/jobs/{job_id}`: 새로고침 뒤에도 저장된 분석 결과를 복원한다.
+- `POST /api/jobs/{job_id}/match`: 저장된 요구사항별 추천 경험과 근거를 화면 모델로 반환한다.
+- 요구사항–경험 `PUT/DELETE`: 사용자가 직접 변경한 연결을 DB에 반영한다.
+- `DELETE /api/jobs/{job_id}`: 현재 사용자 소유의 분석 기록만 삭제한다.
+- 채용공고 레코드와 Chroma 컬렉션은 모두 사용자별로 분리한다.
+- 파일 원문은 먼저 화면의 공고 원문 칸에 표시하여 사용자가 확인·수정한 뒤 분석한다.
+- 파일은 최대 5개, 각 10MB로 제한하며 현재 허용 형식은 PDF·TXT·PNG·JPG·WEBP이다.
+
 ## 6. AI 오류 → 공개 API 오류
 
 AI 내부 오류는 예외 또는 `AIError`로 표현하고, API가 HTTP 상태와 공개 오류 envelope를 결정한다.
@@ -369,15 +390,15 @@ AI 또는 프론트 연동 코드를 변경할 때 다음 순서로 확인한다
 
 ## 8. 아직 구현이 필요한 항목
 
-- Backend AI/API Adapter
-- Proposal 전체 저장의 멱등성 처리
-- SSE 이벤트 저장·heartbeat·재연결
-- `JobAnalysisResult`의 analyze/match projection
+- SSE heartbeat와 `Last-Event-ID` 기반 중간 스트림 재연결
 - AI 오류 예외의 공개 오류 envelope 변환
 - 정상·빈 결과·부분 성공·오류 JSON fixture
 - AI DTO ↔ 공개 API DTO 계약 테스트
+- 자기소개서 생성 AI의 실제 API·저장 연결
+- 브라우저 사용자 흐름 E2E 자동화
 
-이 문서는 변환 계약을 고정하며 위 항목의 구현 완료를 의미하지 않는다.
+경험정리 Proposal 저장과 채용공고 analyze/match projection은 실제 API에 연결되어 있다.
+위 목록은 현재 남은 통합·품질 작업을 나타낸다.
 
 ---
 
@@ -389,3 +410,11 @@ AI 또는 프론트 연동 코드를 변경할 때 다음 순서로 확인한다
 - 경험 목록과 상세 화면은 `/api/v2/experiences`와 `/api/v2/experience-structure`에서 실제 DB 값을 읽는다.
 - 다른 사용자의 경험은 목록·상세·수정·삭제 API에서 조회할 수 없다.
 - 예시 경험 fixture는 자동 테스트에서만 사용하며 개발·배포 화면에는 노출하지 않는다.
+
+### 경험 초안 쓰레기통
+
+- 삭제되었거나 저장에 실패한 경험 초안은 `experience_draft_trash`에 사용자별로 보관한다.
+- 분석 결과가 만들어진 실패·삭제 건은 구조화 초안 전체를 저장한다.
+- 분석 자체가 실패한 건은 입력 원문과 실패 이유를 저장한다.
+- 쓰레기통에서 초안을 수정하거나 실제 경험으로 저장할 수 있다.
+- 실제 경험으로 저장되면 쓰레기통 항목을 제거하며, 완전 삭제는 사용자 확인 후 복구 불가능하게 처리한다.

@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { jobApi } from '../api/index.js';
 import { v2ChatApi } from '../api/v2ChatApi.js';
 import { EmptyState, ErrorState, LoadingState, Tag } from '../components/common/index.js';
+import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
 import './jobs.css';
 import { failureRequirementIds } from '../utils/contractFields.js';
 
@@ -152,7 +153,7 @@ export function JobDetailPage() {
   const linkedIds = useMemo(() => new Set(requirementLinks[activeRequirement?.id] || []), [requirementLinks, activeRequirement]);
   const visibleExperiences = experienceView === 'all' ? experienceCatalog : experienceCatalog.filter((item) => recommendedIds.has(item.experienceId));
 
-  const retryMatch = async (requirementIds = []) => { setPhase('matching'); setError(''); try { const result = await jobApi.match(jobId, { requirementIds }); applyMatchResult(result, requirementIds); setPhase('matched'); } catch (reason) { setError(reason.message); setPhase(matches.length ? 'matched' : 'ready'); } };
+  const retryMatch = async (requirementIds = []) => { setPhase('matching'); setError(''); try { const result = await jobApi.rematch(jobId, requirementIds); applyMatchResult(result, requirementIds); setPhase('matched'); } catch (reason) { setError(reason.message); setPhase(matches.length ? 'matched' : 'ready'); } };
   const toggleRequirementLink = async (experienceId) => {
     const requirementId = activeRequirement?.id;
     if (!requirementId) return;
@@ -224,7 +225,8 @@ export function JobDetailPage() {
         })}</div>
       </section>
 
-      <section className="surface job-step-panel match-panel"><div className="section-title"><div><span className="step">2</span><div><h2>요구사항별 매칭 경험</h2><p>{activeRequirement ? `“${requirementTitle(activeRequirement)}”에 연결된 경험입니다.` : '요구사항을 선택해 주세요.'}</p></div></div></div>
+      <section className="surface job-step-panel match-panel"><div className="section-title"><div><span className="step">2</span><div><h2>요구사항별 매칭 경험</h2><p>{activeRequirement ? `“${requirementTitle(activeRequirement)}”에 연결된 경험입니다.` : '요구사항을 선택해 주세요.'}</p></div></div><button type="button" className="tool-button" disabled={phase === 'matching'} onClick={() => retryMatch([])}>{phase === 'matching' ? '다시 매칭 중…' : '최신 경험으로 다시 매칭'}</button></div>
+        <AnalysisProgress active={phase === 'matching'} kind="job" />
         <div className="experience-view-tabs" role="tablist" aria-label="경험 보기"><button role="tab" aria-selected={experienceView === 'recommended'} onClick={() => setExperienceView('recommended')}>AI 추천 {recommendedIds.size}</button><button role="tab" aria-selected={experienceView === 'all'} onClick={() => setExperienceView('all')}>전체 경험 {experienceCatalog.length}</button></div>
         <p className="match-panel__guide">체크하면 현재 요구사항에 연결되고, 해제하면 경험 자체가 아닌 연결만 삭제됩니다.</p>
         <div className="match-panel__scroll" tabIndex="0" aria-label="요구사항별 매칭 경험 목록">

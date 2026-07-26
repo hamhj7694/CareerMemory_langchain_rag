@@ -2,13 +2,28 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChatComposer, ConversationSidebar, MessageThread } from '../features/chat/index.js';
 import { applyProposalPanelChanges, toProposalView } from '../features/chat/proposalMapper.js';
-import { jobApi, v2ChatApi } from '../api/index.js';
-import { jobHistory } from '../features/jobs/jobHistory.js';
+import { chatExperienceApi, chatJobApi, experienceTrashApi, jobApi, v2ChatApi } from '../api/index.js';
+import { markProposalExperienceSaved, saveProposalExperience } from '../features/experience/api/experienceProposalService.js';
+import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
 import '../styles/v2-chat.css';
 
 const makeId = () => globalThis.crypto?.randomUUID?.() ?? `message-${Date.now()}`;
 
 function toUiMessage(message) {
+  const embeddedProposals = (message.actions || [])
+    .filter((action) => action.type === 'experience_proposal' && action.proposal)
+    .map((action) => ({
+      ...toProposalView(action.proposal),
+      chatMessageId: message.id,
+      conversationId: message.conversation_id || message.conversationId,
+    }));
+  const inputFiles = (message.actions || [])
+    .find((action) => action.type === 'input_files')?.filenames || [];
+  const jobAnalysisId = (message.actions || [])
+    .find((action) => action.type === 'open_job_analysis')?.job_id
+    ?? (message.actions || []).find((action) => action.type === 'open_job_analysis')?.jobId;
+  const attachmentRefs = message.attachment_refs || message.attachmentRefs || [];
+  const attachmentIds = message.attachment_ids || message.attachmentIds || [];
   return {
     id: message.id,
     sequence: message.sequence,
@@ -16,12 +31,16 @@ function toUiMessage(message) {
     content: message.content,
     status: message.status,
     error: message.error,
-    attachments: message.attachment_refs?.map((attachment) => attachment.filename || attachment.id) ?? message.attachment_ids ?? [],
+    attachments: attachmentRefs.length
+      ? attachmentRefs.map((attachment) => attachment.filename || attachment.id)
+      : attachmentIds.length ? attachmentIds : inputFiles,
     evidence: message.citations?.map((citation, index) => ({
       id: citation.source_ref_id ?? `${message.id}-${index}`,
       label: citation.label || String(index + 1),
     })) ?? [],
-    proposalIds: message.proposal_ids ?? [],
+    proposalIds: message.proposal_ids ?? message.proposalIds ?? embeddedProposals.map((proposal) => proposal.id),
+    embeddedProposals,
+    jobAnalysisId,
   };
 }
 
@@ -39,6 +58,7 @@ export function ChatPage({ onSend }) {
   const [proposals, setProposals] = useState({});
   const [conversations, setConversations] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [analysisHasFiles, setAnalysisHasFiles] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractionStatus, setExtractionStatus] = useState(null);
   const [notice, setNotice] = useState('');
@@ -107,10 +127,17 @@ export function ChatPage({ onSend }) {
         await v2ChatApi.getConversation(routeConversationId);
         let result = await v2ChatApi.listMessages(routeConversationId);
         if (!active) return;
-        setMessages(result.items.map(toUiMessage));
-        const proposalIds = result.items.flatMap((message) => message.proposal_ids ?? []).reverse();
-        const restoredProposals = {};
+        const restoredMessages = result.items.map(toUiMessage);
+        setMessages(restoredMessages);
+        const proposalIds = result.items.flatMap((message) => message.proposal_ids ?? message.proposalIds ?? []).reverse();
+        const restoredProposals = Object.fromEntries(
+          restoredMessages
+            .flatMap((message) => message.embeddedProposals || [])
+            .filter((proposal) => proposal.status !== 'rejected')
+            .map((proposal) => [proposal.id, proposal]),
+        );
         for (const proposalId of proposalIds) {
+          if (restoredProposals[proposalId]) continue;
           const candidate = await v2ChatApi.getProposal(proposalId);
           if (['pending', 'edited'].includes(candidate.status) || (candidate.status === 'approved' && candidate.type === 'create_experiences')) {
             restoredProposals[proposalId] = toProposalView(candidate);
@@ -161,6 +188,7 @@ export function ChatPage({ onSend }) {
     const attachments = files.map((file) => file.name);
     const userMessage = { id: makeId(), role: 'user', content: content || '첨부한 자료를 확인해 주세요.', attachments, status: 'sending' };
     setMessages((current) => [...current, userMessage]);
+    setAnalysisHasFiles(['experience', 'job'].includes(mode) && files.length > 0);
     setText(''); setFiles([]); setBusy(true); setNotice('');
     try {
       let response;
@@ -170,6 +198,56 @@ export function ChatPage({ onSend }) {
       } else {
         if (!conversationId.current) conversationId.current = (await v2ChatApi.createConversation({ title: (content || files[0]?.name || '새 대화').slice(0, 28) })).id;
         submittedConversationId = conversationId.current;
+        if (mode === 'experience') {
+          const result = await chatExperienceApi.analyze(conversationId.current, {
+            text: content,
+            files,
+            clientRequestId: makeId(),
+          });
+          const proposal = {
+            ...toProposalView(result.proposal),
+            chatMessageId: result.assistantMessage.id,
+            conversationId: conversationId.current,
+          };
+          if (conversationId.current === submittedConversationId) {
+            setMessages((current) => [
+              ...current.filter((message) => message.id !== userMessage.id),
+              toUiMessage(result.userMessage),
+              toUiMessage(result.assistantMessage),
+            ]);
+            setProposals((current) => ({ ...current, [proposal.id]: proposal }));
+          }
+          if (!routeConversationId) navigate(`/chat/${conversationId.current}`, { replace: true });
+          await refreshConversations();
+          return;
+        }
+        if (mode === 'job') {
+          const requestId = makeId();
+          const extracted = files.length ? await jobApi.extractFiles(files) : { text: '' };
+          const postingContent = [content, extracted.text?.trim()].filter(Boolean).join('\n\n');
+          if (!postingContent.trim()) throw new Error('채용공고 원문이나 파일을 입력해 주세요.');
+          const analyzed = await jobApi.analyze({
+            clientRequestId: requestId,
+            postingContent,
+            coverLetterQuestions: [],
+          });
+          const recorded = await chatJobApi.record(conversationId.current, {
+            clientRequestId: requestId,
+            jobId: analyzed.jobId,
+            content,
+            filenames: files.map((item) => item.name),
+          });
+          if (conversationId.current === submittedConversationId) {
+            setMessages((current) => [
+              ...current.filter((message) => message.id !== userMessage.id),
+              toUiMessage(recorded.userMessage),
+              toUiMessage(recorded.assistantMessage),
+            ]);
+          }
+          await refreshConversations();
+          navigate(`/jobs/${analyzed.jobId}`, { state: { job: analyzed } });
+          return;
+        }
         const uploaded = files.length ? await v2ChatApi.uploadAttachments(files) : [];
         let completedMessage = null;
         for await (const event of v2ChatApi.streamMessage(conversationId.current, {
@@ -244,12 +322,25 @@ export function ChatPage({ onSend }) {
       await refreshExtractionStatus();
     } catch (error) {
       if (conversationId.current === submittedConversationId) {
+        if (mode === 'experience') {
+          const failedInput = {
+            status: 'failed',
+            reason: error?.message || '커리어 챗 경험 분석에 실패했습니다.',
+            draft: {},
+            original_text: content,
+          };
+          if (submittedFiles.length) {
+            await experienceTrashApi.createWithFiles(failedInput, submittedFiles).catch(() => null);
+          } else {
+            await experienceTrashApi.create(failedInput).catch(() => null);
+          }
+        }
         setText((current) => current || content);
         setFiles((current) => current.length ? current : submittedFiles);
         setMessages((current) => current.map((message) => message.id === userMessage.id ? { ...message, status: 'failed' } : message));
         setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: error?.message ?? '응답을 만들지 못했어요. 입력은 보존되었으니 다시 시도해 주세요.' }]);
       }
-    } finally { setBusy(false); setMode('auto'); }
+    } finally { setBusy(false); setAnalysisHasFiles(false); setMode('auto'); }
   };
 
   const start = ({ mode: nextMode, title }) => { setMode(nextMode); setText(`${title}에 대해 도와줘.`); };
@@ -286,18 +377,45 @@ export function ChatPage({ onSend }) {
         postingContent: proposal.postingContent.trim(),
         coverLetterQuestions: [],
       });
-      const savedJob = jobHistory.save(analyzed, {
-        postingTitle: proposal.postingTitle?.trim() || '',
-        companyName: proposal.companyName?.trim() || '',
-        roleName: proposal.roleName?.trim() || '',
-        sourceUrl: sourceUrl || '',
-        postingContent: proposal.postingContent.trim(),
-      });
       if (proposal.id) await v2ChatApi.approveProposal(proposal.id, { base_version: proposal.version });
       setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
       await refreshConversations();
-      navigate(`/jobs/${savedJob.jobId}`, { state: { job: savedJob } });
+      navigate(`/jobs/${analyzed.jobId}`, { state: { job: analyzed } });
       return;
+    }
+    if (proposal?.chatMessageId) {
+      const requestedDraftId = proposal.selection?.draft_id;
+      const draftIndex = requestedDraftId
+        ? proposal.experiences.findIndex((item) => item.draft_id === requestedDraftId)
+        : -1;
+      const index = draftIndex >= 0 ? draftIndex : (proposal.selection?.experience_indexes?.[0] ?? 0);
+      const item = proposal.experiences[index];
+      if (!item || item.approved) return proposal;
+      const saved = await saveProposalExperience(item);
+      const marked = markProposalExperienceSaved(proposal, index, saved);
+      const approvedIndexes = marked.experiences
+        .map((entry, entryIndex) => entry.approved ? entryIndex : null)
+        .filter((entryIndex) => entryIndex !== null);
+      const updated = await chatExperienceApi.updateProposal(
+        proposal.conversationId,
+        proposal.chatMessageId,
+        {
+          version: proposal.version,
+          payload: applyProposalPanelChanges(proposal, marked),
+          approvedExperienceIndexes: approvedIndexes,
+          status: approvedIndexes.length === marked.experiences.length ? 'approved' : 'edited',
+        },
+      );
+      const nextProposal = {
+        ...toProposalView(updated),
+        chatMessageId: proposal.chatMessageId,
+        conversationId: proposal.conversationId,
+      };
+      setProposals((current) => ({ ...current, [nextProposal.id]: nextProposal }));
+      setNotice(approvedIndexes.length === marked.experiences.length
+        ? '경험으로 확정해 저장했습니다.'
+        : '선택한 경험을 저장했습니다. 다른 초안도 계속 검토할 수 있습니다.');
+      return nextProposal;
     }
     const result = proposal?.id ? await v2ChatApi.approveProposal(proposal.id, { base_version: proposal.version, selection: proposal.selection }) : null;
     const nextProposal = toProposalView(result?.proposal);
@@ -317,7 +435,24 @@ export function ChatPage({ onSend }) {
     return nextProposal;
   };
   const reject = async (proposal) => {
-    if (proposal?.id) await v2ChatApi.rejectProposal(proposal.id, { base_version: proposal.version });
+    if (proposal?.kind === 'experience') {
+      const pendingDrafts = (proposal.experiences || []).filter((item) => !item.approved);
+      await Promise.all(pendingDrafts.map((draft) => experienceTrashApi.create({
+        status: 'deleted',
+        reason: '대화형 챗봇에서 삭제한 경험 초안',
+        draft,
+      })));
+    }
+    if (proposal?.chatMessageId) {
+      await chatExperienceApi.updateProposal(proposal.conversationId, proposal.chatMessageId, {
+        version: proposal.version,
+        payload: proposal.rawPayload,
+        approvedExperienceIndexes: proposal.approvedExperienceIndexes || [],
+        status: 'rejected',
+      });
+    } else if (proposal?.id) {
+      await v2ChatApi.rejectProposal(proposal.id, { base_version: proposal.version });
+    }
     setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
     setNotice('초안을 삭제했습니다. 대화는 그대로 유지됩니다.');
     await refreshConversations();
@@ -325,6 +460,29 @@ export function ChatPage({ onSend }) {
   };
   const discardRemainingProposalExperiences = async (proposal) => {
     if (!proposal?.id) return null;
+    const pendingDrafts = (proposal.experiences || []).filter((item) => !item.approved);
+    await Promise.all(pendingDrafts.map((draft) => experienceTrashApi.create({
+      status: 'deleted',
+      reason: '대화형 챗봇에서 나머지 초안을 삭제함',
+      draft,
+    })));
+    if (proposal.chatMessageId) {
+      const approvedDrafts = (proposal.experiences || []).filter((item) => item.approved);
+      const payload = applyProposalPanelChanges(proposal, { ...proposal, experiences: approvedDrafts });
+      const updated = await chatExperienceApi.updateProposal(proposal.conversationId, proposal.chatMessageId, {
+        version: proposal.version,
+        payload,
+        approvedExperienceIndexes: approvedDrafts.map((_, index) => index),
+        status: approvedDrafts.length ? 'approved' : 'rejected',
+      });
+      if (!approvedDrafts.length) {
+        setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
+        return null;
+      }
+      const nextProposal = { ...toProposalView(updated), chatMessageId: proposal.chatMessageId, conversationId: proposal.conversationId };
+      setProposals((current) => ({ ...current, [nextProposal.id]: nextProposal }));
+      return nextProposal;
+    }
     const result = await v2ChatApi.discardUnapprovedProposalExperiences(proposal.id, { base_version: proposal.version });
     if (result.status === 'rejected') {
       setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
@@ -344,6 +502,18 @@ export function ChatPage({ onSend }) {
       setProposals((current) => ({ ...current, [id]: { ...panel, id } }));
       return panel;
     }
+    if (panel.chatMessageId) {
+      const updated = await chatExperienceApi.updateProposal(panel.conversationId, panel.chatMessageId, {
+        version: panel.version,
+        payload: applyProposalPanelChanges(proposals[panel.id], panel),
+        approvedExperienceIndexes: panel.approvedExperienceIndexes || [],
+        status: 'edited',
+      });
+      const next = { ...toProposalView(updated), chatMessageId: panel.chatMessageId, conversationId: panel.conversationId };
+      setProposals((current) => ({ ...current, [next.id]: next }));
+      setNotice('수정한 내용을 초안에 저장했습니다.');
+      return next;
+    }
     const updated = await v2ChatApi.updateProposal(panel.id, {
       base_version: panel.version,
       payload: applyProposalPanelChanges(proposals[panel.id], panel),
@@ -356,24 +526,51 @@ export function ChatPage({ onSend }) {
   const removeProposalExperience = async (proposal, sourceIndex) => {
     if (!proposal?.id) return;
     const currentProposal = proposals[proposal.id] || proposal;
+    const removedDraft = (currentProposal.experiences || [])[sourceIndex];
+    if (removedDraft && !removedDraft.approved) {
+      await experienceTrashApi.create({
+        status: 'deleted',
+        reason: '대화형 챗봇에서 선택하여 삭제한 초안',
+        draft: removedDraft,
+      });
+    }
     const payload = structuredClone(currentProposal.rawPayload);
     payload.experiences = (payload.experiences || []).filter((_, index) => index !== sourceIndex);
     const approvedExperienceIndexes = (currentProposal.approvedExperienceIndexes || [])
       .filter((index) => index !== sourceIndex)
       .map((index) => (index > sourceIndex ? index - 1 : index));
     if (!payload.experiences.length) {
-      await v2ChatApi.rejectProposal(proposal.id, { base_version: currentProposal.version });
+      if (proposal.chatMessageId) {
+        await chatExperienceApi.updateProposal(proposal.conversationId, proposal.chatMessageId, {
+          version: currentProposal.version,
+          payload,
+          approvedExperienceIndexes: [],
+          status: 'rejected',
+        });
+      } else {
+        await v2ChatApi.rejectProposal(proposal.id, { base_version: currentProposal.version });
+      }
       setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
       setNotice('초안을 삭제했습니다.');
       await Promise.all([refreshConversations(), refreshExtractionStatus()]);
       return null;
     }
-    const updated = await v2ChatApi.updateProposal(proposal.id, {
-      base_version: currentProposal.version,
-      payload,
-      approved_experience_indexes: approvedExperienceIndexes,
-    });
-    const next = toProposalView(updated);
+    const updated = proposal.chatMessageId
+      ? await chatExperienceApi.updateProposal(proposal.conversationId, proposal.chatMessageId, {
+          version: currentProposal.version,
+          payload,
+          approvedExperienceIndexes,
+          status: 'edited',
+        })
+      : await v2ChatApi.updateProposal(proposal.id, {
+          base_version: currentProposal.version,
+          payload,
+          approved_experience_indexes: approvedExperienceIndexes,
+        });
+    const next = {
+      ...toProposalView(updated),
+      ...(proposal.chatMessageId ? { chatMessageId: proposal.chatMessageId, conversationId: proposal.conversationId } : {}),
+    };
     setProposals((current) => ({ ...current, [next.id]: next }));
     setNotice('선택한 초안을 삭제했습니다.');
     return next;
@@ -433,8 +630,9 @@ export function ChatPage({ onSend }) {
         </div>
       </header>
       <div className="v2-conversation__scroll" ref={scrollArea}>
-        <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />
+        <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : mode === 'job' ? '채용공고 요구사항과 보유 경험을 분석하고 있어요.' : mode === 'experience' ? '경험을 분석하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />
       </div>
+      <AnalysisProgress active={busy && ['experience', 'job'].includes(mode)} hasFiles={analysisHasFiles} kind={mode === 'job' ? 'job' : 'experience'} />
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
       <ChatComposer mode={mode} onModeChange={setMode} text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} />
     </section>
