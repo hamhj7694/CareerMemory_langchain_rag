@@ -2,10 +2,26 @@ import { InlineProposalCard } from './InlineProposalCard.jsx';
 import { MarkdownMessage } from './MarkdownMessage.jsx';
 
 const STARTERS = [
-  { mode: 'experience', title: '프로젝트 경험 정리', description: '정리되지 않은 이야기를 경력 자산으로 만들어요.' },
-  { mode: 'experience', title: '파일에서 성과 찾기', description: 'PDF나 TXT를 올려 경험과 수치를 찾아요.' },
-  { mode: 'auto', title: '내 경험에 질문', description: '저장된 경험과 원본 근거에서 답을 찾아요.' },
-  { mode: 'job', title: '채용공고와 비교', description: '공고 요구사항과 내 경험을 근거별로 비교해요.' },
+  {
+    title: '프로젝트 경험 이야기하기',
+    description: '질문을 따라가며 기억을 구체적인 경험으로 풀어내요.',
+    prompt: '프로젝트 경험을 이야기하고 싶은데, 어떤 내용부터 말하면 좋을까요?',
+  },
+  {
+    title: '파일에서 성과 찾기',
+    description: '자료를 준비하기 전에 어떤 파일과 내용이 필요한지 물어봐요.',
+    prompt: '파일에서 제 경험과 성과를 찾고 싶은데, 어떤 자료를 준비하면 좋을까요?',
+  },
+  {
+    title: '내 경험 돌아보기',
+    description: '저장된 경험을 바탕으로 강점과 보완점을 함께 살펴봐요.',
+    prompt: '저장된 경험을 바탕으로 제 강점과 보완할 점을 함께 살펴봐 주세요.',
+  },
+  {
+    title: '채용공고와 비교 준비하기',
+    description: '공고와 경험을 비교하기 위해 필요한 내용을 먼저 확인해요.',
+    prompt: '채용공고와 제 경험을 비교하려면 어떤 내용을 준비해야 하나요?',
+  },
 ];
 
 export function MessageThread({ messages, proposals, busy, busyLabel = '답변을 준비하고 있어요.', onStarter, onEvidence, onOpenJobAnalysis, onApproveProposal, onRejectProposal, onDiscardRemainingProposalExperiences, onChangeProposal, onRemoveProposalExperience }) {
@@ -37,7 +53,7 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
         ? <p className="v2-message--thinking" role="status"><span /> {busyLabel}</p>
         : message.role === 'assistant'
         ? <MarkdownMessage content={message.content} />
-        : <p>{message.content}</p>}
+        : <p className="v2-message__content">{message.content}</p>}
       {message.status === 'failed' && <small className="v2-message__failed">전송되지 않았습니다. 입력창에서 다시 전송해 주세요.</small>}
       {message.attachments?.length > 0 && <div className="v2-message__files">{message.attachments.map((file) => <span key={file}>▧ {file}</span>)}</div>}
       {message.evidence?.length > 0 && !message.proposalIds?.length && <div className="v2-message__links">

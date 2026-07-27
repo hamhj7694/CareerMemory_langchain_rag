@@ -202,14 +202,51 @@ export async function* streamMessage(conversationId, input = {}) {
   }
 }
 
-// 9. 마지막 성공한 정리 이후의 실제 대화 메시지 개수를 조회한다.
+// 9. 채팅 첨부 파일 중복 확인·업로드·삭제
+export function preflightAttachments(descriptors = []) {
+  return http.request({
+    path: '/api/v2/attachments/preflight',
+    method: 'POST',
+    body: { items: descriptors },
+  });
+}
+
+export async function uploadAttachments(selections = []) {
+  return Promise.all(Array.from(selections).map(async (selection) => {
+    if (selection.existingAttachmentId) {
+      const existing = await http.request({
+        path: `/api/v2/attachments/${encodeURIComponent(selection.existingAttachmentId)}`,
+      });
+      return { ...existing, reused: true };
+    }
+    const file = selection.file || selection;
+    const body = new FormData();
+    body.append('file', file);
+    body.append('content_hash', selection.contentHash || '');
+    body.append('original_attachment_id', selection.previousAttachmentId || '');
+    return http.request({
+      path: '/api/v2/attachments',
+      method: 'POST',
+      body,
+    });
+  }));
+}
+
+export function deleteAttachment(attachmentId) {
+  return http.request({
+    path: `/api/v2/attachments/${encodeURIComponent(attachmentId)}`,
+    method: 'DELETE',
+  });
+}
+
+// 10. 마지막 성공한 정리 이후의 실제 대화 메시지 개수를 조회한다.
 export function getConversationExtractionStatus(conversationId) {
   return http.request({
     path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/experience-extraction-status`,
   });
 }
 
-// 10. 최근 사용자 대화를 기존 ExperienceAI로 분석해 복원 가능한 제안 카드를 만든다.
+// 11. 최근 사용자 대화를 기존 ExperienceAI로 분석해 복원 가능한 제안 카드를 만든다.
 export function extractConversationExperiences(conversationId, input = {}) {
   return http.request({
     path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/experience-extractions`,
@@ -229,6 +266,9 @@ export const v2ChatHttpApi = {
   listMessages,
   sendMessage,
   streamMessage,
+  preflightAttachments,
+  uploadAttachments,
+  deleteAttachment,
   getConversationExtractionStatus,
   extractConversationExperiences,
 };

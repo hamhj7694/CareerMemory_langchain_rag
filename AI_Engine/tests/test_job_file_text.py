@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+from AI_Engine.experience_file_text import ExtractedExperienceFile
 from AI_Engine.job_file_text import (
     JobFile,
     JobFileInputError,
@@ -37,25 +37,23 @@ class JobFileTextTests(unittest.TestCase):
                 for index in range(6)
             ])
 
-    def test_image_is_sent_to_gemini_and_text_is_returned(self) -> None:
-        model_api = MagicMock()
-        model_api.generate_content.return_value = SimpleNamespace(
-            text="주요 업무\n서비스 개선"
-        )
-        client = SimpleNamespace(models=model_api)
-
-        with (
-            patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
-            patch("AI_Engine.job_file_text.genai.Client", return_value=client),
-        ):
+    def test_image_uses_shared_local_extractor(self) -> None:
+        with patch(
+            "AI_Engine.experience_file_text.extract_experience_file_texts",
+            return_value=[
+                ExtractedExperienceFile(
+                    filename="capture.png",
+                    mime_type="image/png",
+                    text="주요 업무\n서비스 개선",
+                )
+            ],
+        ) as extractor:
             text = extract_job_file_text([
                 JobFile("capture.png", "image/png", b"fake-image-bytes"),
             ])
 
         self.assertIn("서비스 개선", text)
-        call = model_api.generate_content.call_args.kwargs
-        self.assertTrue(call["model"])
-        self.assertGreaterEqual(len(call["contents"]), 3)
+        extractor.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 # 3. 데이터베이스 모델과 공개 API 스키마
 from AI_Engine.database.connection import get_database_session
-from AI_Engine.database.models import Conversation, Message, User, utc_now
+from AI_Engine.database.models import Attachment, Conversation, Message, User, utc_now
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.database.schemas import (
     ConversationCreate,
@@ -33,6 +33,7 @@ from AI_Engine.database.schemas import (
     MessageResponse,
 )
 from AI_Engine.chatbot_ai import ChatbotAI
+from AI_Engine.AI_langchain import CareerMemoryAI
 from AI_Engine.schemas import ChatMessage, ChatMode, ChatRequest, ChatRole
 
 
@@ -66,6 +67,13 @@ def get_chatbot_ai() -> ChatbotAI:
     """환경 변수로 선택한 Gemini 또는 OpenAI 챗봇을 한 번 생성해 재사용한다."""
 
     return ChatbotAI.create_default()
+
+
+@lru_cache(maxsize=1)
+def get_career_memory_ai() -> CareerMemoryAI:
+    """대화 문맥·RAG·요약·자동 의도를 조립하는 공통 파이프라인."""
+
+    return CareerMemoryAI()
 
 
 # 7. 프론트엔드 intent 변환
@@ -140,6 +148,32 @@ def get_conversation_or_404(
             detail="대화를 찾을 수 없습니다.",
         )
     return conversation
+
+
+def validate_attachment_ownership(
+    attachment_ids: list[str],
+    user_id: str,
+    database: Session,
+) -> None:
+    """메시지를 저장하기 전에 모든 첨부가 현재 사용자 소유인지 확인한다."""
+
+    if not attachment_ids:
+        return
+    owned_ids = set(database.scalars(
+        select(Attachment.id).where(
+            Attachment.user_id == user_id,
+            Attachment.id.in_(attachment_ids),
+        )
+    ))
+    missing = [
+        attachment_id for attachment_id in attachment_ids
+        if attachment_id not in owned_ids
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="열 수 없는 첨부 파일이 포함되어 있습니다.",
+        )
 
 
 # 10. 새 대화 생성
@@ -341,6 +375,7 @@ def send_message(
     current_user: User = Depends(require_csrf_user),
     database: Session = Depends(get_database_session),
     chatbot: ChatbotAI = Depends(get_chatbot_ai),
+    ai_pipeline: CareerMemoryAI = Depends(get_career_memory_ai),
 ) -> MessageResponse:
     """사용자 메시지를 저장하고 대화형 AI의 완성된 답변을 반환한다."""
 
@@ -349,13 +384,12 @@ def send_message(
         current_user.id,
         database,
     )
-    if request.attachment_ids:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="첨부 파일 본문 처리 기능은 아직 연결되지 않았습니다.",
-        )
-
     ai_mode = convert_intent_to_chat_mode(request.intent)
+    validate_attachment_ownership(
+        request.attachment_ids,
+        current_user.id,
+        database,
+    )
     request_id = str(request.client_request_id)
 
     # 같은 사용자 동작을 재시도했으면 이미 완료된 assistant 메시지를 반환한다.
@@ -421,29 +455,16 @@ def send_message(
     )
     stored_history.reverse()
 
-    ai_request = ChatRequest(
-        client_request_id=request_id,
-        conversation_id=conversation.id,
-        message_id=user_message.id,
-        sequence=user_message.sequence,
-        mode=ai_mode,
-        content=user_message.content,
-        attachment_ids=user_message.attachment_ids,
-        user_display_name=current_user.display_name,
-        history=[
-            ChatMessage(
-                id=message.id,
-                conversation_id=message.conversation_id,
-                sequence=message.sequence,
-                role=ChatRole(message.role),
-                content=message.content,
-                attachment_ids=message.attachment_ids,
-                created_at=message.created_at,
-            )
-            for message in stored_history
-            if message.content.strip() or message.attachment_ids
-        ],
+    prepared = ai_pipeline.prepare_chat(
+        database=database,
+        conversation=conversation,
+        current_user=current_user,
+        user_message=user_message,
+        stored_history=stored_history,
     )
+    resolved_intent = str(prepared.route.route)
+
+    ai_request = prepared.request.model_copy(update={"mode": ai_mode})
 
     try:
         ai_response = chatbot.invoke(ai_request)
@@ -473,11 +494,6 @@ def send_message(
             detail="AI 답변을 생성하지 못했습니다.",
         ) from error
 
-    resolved_intent = (
-        request.intent
-        if request.intent in {"question", "advice"}
-        else "question"
-    )
     assistant_message = Message(
         id=ai_response.message.id,
         conversation_id=conversation.id,
@@ -520,6 +536,7 @@ def stream_message(
     current_user: User = Depends(require_csrf_user),
     database: Session = Depends(get_database_session),
     chatbot: ChatbotAI = Depends(get_chatbot_ai),
+    ai_pipeline: CareerMemoryAI = Depends(get_career_memory_ai),
 ) -> StreamingResponse:
     """AI 답변을 생성되는 즉시 SSE 이벤트로 전달하고 최종 내용을 DB에 저장한다."""
 
@@ -528,13 +545,12 @@ def stream_message(
         current_user.id,
         database,
     )
-    if request.attachment_ids:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="첨부 파일 본문 처리 기능은 아직 연결되지 않았습니다.",
-        )
-
     ai_mode = convert_intent_to_chat_mode(request.intent)
+    validate_attachment_ownership(
+        request.attachment_ids,
+        current_user.id,
+        database,
+    )
     request_id = str(request.client_request_id)
     existing_user = database.scalar(
         select(Message).where(
@@ -590,7 +606,6 @@ def stream_message(
         )
 
     user_sequence = conversation.message_count + 1
-    assistant_id = create_resource_id("MSG")
     user_message = Message(
         id=create_resource_id("MSG"),
         conversation_id=conversation.id,
@@ -604,19 +619,8 @@ def stream_message(
         attachment_ids=request.attachment_ids,
         completed_at=utc_now(),
     )
-    assistant_message = Message(
-        id=assistant_id,
-        conversation_id=conversation.id,
-        sequence=user_sequence + 1,
-        role="assistant",
-        status="streaming",
-        content="",
-        requested_intent=request.intent,
-        resolved_intents=[],
-        attachment_ids=[],
-    )
-    database.add_all([user_message, assistant_message])
-    conversation.message_count = user_sequence + 1
+    database.add(user_message)
+    conversation.message_count = user_sequence
     conversation.last_message_preview = request.content[:300]
     conversation.version += 1
     database.commit()
@@ -636,37 +640,37 @@ def stream_message(
         )
     )
     stored_history.reverse()
-    ai_request = ChatRequest(
-        client_request_id=request_id,
-        conversation_id=conversation.id,
-        message_id=user_message.id,
-        sequence=user_message.sequence,
-        mode=ai_mode,
-        content=user_message.content,
-        attachment_ids=user_message.attachment_ids,
-        user_display_name=current_user.display_name,
-        history=[
-            ChatMessage(
-                id=message.id,
-                conversation_id=message.conversation_id,
-                sequence=message.sequence,
-                role=ChatRole(message.role),
-                content=message.content,
-                attachment_ids=message.attachment_ids,
-                created_at=message.created_at,
-            )
-            for message in stored_history
-            if message.content.strip() or message.attachment_ids
-        ],
+    prepared = ai_pipeline.prepare_chat(
+        database=database,
+        conversation=conversation,
+        current_user=current_user,
+        user_message=user_message,
+        stored_history=stored_history,
     )
-    resolved_intent = (
-        request.intent
-        if request.intent in {"question", "advice"}
-        else "question"
-    )
+    ai_request = prepared.request.model_copy(update={"mode": ai_mode})
+    resolved_intent = str(prepared.route.route)
 
     # 브라우저가 새로고침되거나 다른 화면으로 이동해 SSE 연결이 끊겨도
     # AI 생성과 DB 저장이 계속되도록 별도의 작업 스레드와 DB 세션을 사용한다.
+    # 경험 초안 생성은 이 메시지 스트림이 아니라 별도 경험 정리 버튼 API가 맡는다.
+
+    assistant_id = create_resource_id("MSG")
+    assistant_message = Message(
+        id=assistant_id,
+        conversation_id=conversation.id,
+        sequence=user_sequence + 1,
+        role="assistant",
+        status="streaming",
+        content="",
+        requested_intent=request.intent,
+        resolved_intents=[],
+        attachment_ids=[],
+    )
+    database.add(assistant_message)
+    conversation.message_count = user_sequence + 1
+    conversation.version += 1
+    database.commit()
+
     worker_events: queue.SimpleQueue[tuple[str, object]] = queue.SimpleQueue()
     worker_session_factory = sessionmaker(
         bind=database.get_bind(),
@@ -676,6 +680,7 @@ def stream_message(
 
     def generate_answer_in_background() -> None:
         answer_parts: list[str] = []
+        completed_response = None
         with worker_session_factory() as worker_database:
             saved_assistant = worker_database.get(Message, assistant_id)
             saved_conversation = worker_database.get(
@@ -719,10 +724,21 @@ def stream_message(
                             ("error", saved_assistant.error)
                         )
                         return
+                    elif ai_event.type == "completed":
+                        completed_response = getattr(ai_event, "response", None)
 
                 saved_assistant.content = "".join(answer_parts)
                 saved_assistant.status = "completed"
                 saved_assistant.resolved_intents = [resolved_intent]
+                if completed_response is not None:
+                    saved_assistant.citations = [
+                        citation.model_dump(mode="json")
+                        for citation in completed_response.citations
+                    ]
+                    saved_assistant.actions = [
+                        action.model_dump(mode="json")
+                        for action in completed_response.suggested_actions
+                    ]
                 saved_assistant.completed_at = utc_now()
                 saved_conversation.last_message_preview = (
                     saved_assistant.content[:300]

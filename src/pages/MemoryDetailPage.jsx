@@ -10,6 +10,7 @@ import { downloadEvidenceFile, openEvidenceFile } from '../features/evidence/mod
 import { experienceRepository } from '../features/experience/api/experienceRepository.js';
 import { ExperienceDetailContent } from '../features/experience/components/ExperienceDetailContent.jsx';
 import { listToText, textToMarkdownLines, textToSkills } from '../features/experience/model/experienceContent.js';
+import { formatExperienceSavedDateTime } from '../features/experience/model/experienceDate.js';
 import { createEmptyExperience } from '../features/experience/model/experienceMapper.js';
 import { useDirtyBlocker } from '../hooks/useDirtyBlocker.js';
 import '../styles/memory.css';
@@ -196,6 +197,7 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
     if (isNew) return;
     setSourceOpen(true);
     setSourceNotice('');
+    setError('');
     if (!sources) {
       try {
         setSources(await experienceApi.getSources(experienceId));
@@ -378,13 +380,17 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
   if (status === 'error') return <div className="memory-detail"><ErrorState title="경험을 찾을 수 없습니다" description="대상이 없거나 잘못된 주소일 수 있습니다." onRetry={load} /><Link className="ui-button ui-button--secondary" to="/memory">경험 목록으로</Link></div>;
 
   const careerRole = item.role?.trim() || '역할 미입력';
+  const savedDate = isNew ? '' : formatExperienceSavedDateTime(item.createdAt);
 
   return (
     <article className="memory-detail">
       <div className="detail-breadcrumb">
-        <Link to="/memory">경험 메모리</Link>
-        <span>/</span>
-        <span>{isNew ? '새 경험' : item.projectName}</span>
+        <div className="detail-breadcrumb__path">
+          <Link to="/memory">경험 메모리</Link>
+          <span>/</span>
+          <span>{isNew ? '새 경험' : item.projectName}</span>
+        </div>
+        {savedDate && <time dateTime={item.createdAt}>저장일 {savedDate}</time>}
       </div>
 
       <header className="detail-header">

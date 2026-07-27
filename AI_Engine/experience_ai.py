@@ -5,6 +5,8 @@ from __future__ import annotations
 # 1. Python 기본 기능
 # 함수 호출 인자(JSON), 시간, 고유 ID, 타입 표기를 위해 사용한다.
 import json
+import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -22,6 +24,10 @@ from AI_Engine.llm_provider import (
     create_structured_client,
     get_chat_model_name,
 )
+from AI_Engine.experience_file_analysis_ai import (
+    ExperienceFileAnalysisAI,
+    ExperienceFileAnalysisError,
+)
 
 # 4. 프론트엔드·백엔드·AI가 함께 사용하는 데이터 계약
 # AI 출력은 아래 Pydantic 스키마를 통과해야만 경험 초안으로 반환한다.
@@ -29,6 +35,7 @@ from AI_Engine.schemas import (
     EvidenceCitation,
     EvidenceSource,
     EvidenceSourceType,
+    FileEvidenceAnalysis,
     ExperienceClassificationDraft,
     ExperienceDraft,
     ExperienceDraftStatus,
@@ -45,8 +52,10 @@ from AI_Engine.schemas import (
 # 5. 모델·프롬프트·스키마 버전
 # 저장된 초안이 어떤 구성으로 생성됐는지 추적할 수 있도록 실행 결과에 기록한다.
 DEFAULT_EXPERIENCE_MODEL = "gpt-4o-mini"
-EXPERIENCE_PROMPT_VERSION = "experience-prompt-v3"
-EXPERIENCE_SCHEMA_VERSION = "experience-schema-v1"
+EXPERIENCE_PROMPT_VERSION = "experience-prompt-v4"
+EXPERIENCE_SCHEMA_VERSION = "experience-schema-v2"
+
+logger = logging.getLogger(__name__)
 
 # 6. 모델이 호출해야 하는 함수 이름
 # 일반 텍스트 응답과 구조화된 경험 초안 출력을 구분하는 식별자다.
@@ -106,6 +115,11 @@ EXPERIENCE_SYSTEM_PROMPT = """
 - 정확한 원문은 facts의 text가 아니라 quote에 짧게 넣고 source_ref_id와 연결해.
 - source_ref_ids에는 해당 초안 작성에 실제 사용한 근거 ID만 넣어.
 - 입력에 제공되지 않은 source_ref_id를 절대 만들지 마.
+- period.start와 period.end는 반드시 YYYY 또는 YYYY-MM 형식으로 작성해.
+  예를 들어 "2024년 8월부터 11월까지"는 start="2024-08", end="2024-11"로 작성해.
+- facts에서 인용한 모든 source_ref_id를 source_ref_ids에도 빠짐없이 포함해.
+- 파일 근거는 원문 전체 대신 [파일 1차 분석]으로 전달될 수 있어.
+  이 분석의 summary는 파생 요약이고, exact quote로 표시된 문장만 원문 인용으로 사용해.
 - 개인정보나 민감정보를 새로 추론하지 마.
 
 [형식 format]
@@ -154,11 +168,17 @@ EXPERIENCE_DRAFT_TOOL: dict[str, Any] = {
                                     "properties": {
                                         "start": {
                                             "type": ["string", "null"],
-                                            "description": "YYYY 또는 YYYY-MM",
+                                            "description": (
+                                                "YYYY 또는 YYYY-MM. "
+                                                "예: 2024년 8월은 2024-08"
+                                            ),
                                         },
                                         "end": {
                                             "type": ["string", "null"],
-                                            "description": "YYYY 또는 YYYY-MM",
+                                            "description": (
+                                                "YYYY 또는 YYYY-MM. "
+                                                "예: 같은 해 11월은 2024-11"
+                                            ),
                                         },
                                     },
                                     "required": ["start", "end"],
@@ -331,6 +351,7 @@ class ExperienceAI:
         schema_version: str = EXPERIENCE_SCHEMA_VERSION,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
+        file_analyzer: ExperienceFileAnalysisAI | Any | None = None,
     ) -> None:
         # 실제 서비스에서는 활성 Provider의 구조화 출력 클라이언트를 사용하고,
         # 테스트에서는 같은 responses.create 모양의 가짜 클라이언트를 주입한다.
@@ -343,6 +364,10 @@ class ExperienceAI:
         self.schema_version = _require_text(schema_version, "schema_version")
         self.id_factory = id_factory or (lambda: str(uuid4()))
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.file_analyzer = file_analyzer or ExperienceFileAnalysisAI(
+            client=self.client,
+            model_version=self.model_version,
+        )
 
     # 10-1. 경험 초안 생성
     # 호출 한 번의 입력 범위, 결과, 근거, 버전을 하나의 ExtractionResult로 묶는다.
@@ -367,7 +392,20 @@ class ExperienceAI:
                 "파일은 본문을 추출한 뒤 EvidenceSource.text로 전달해 주세요."
             )
 
-        model_input = self._build_model_input(request, analyzed_sources)
+        try:
+            file_analyses = self.file_analyzer.analyze_sources(
+                analyzed_sources
+            )
+        except (ExperienceFileAnalysisError, ValidationError, ValueError) as error:
+            raise ExperienceAIOutputError(
+                "파일 원문을 경험 구조화 전에 요약하지 못했습니다."
+            ) from error
+
+        model_input = self._build_model_input(
+            request,
+            analyzed_sources,
+            file_analyses=file_analyses,
+        )
         response = self.client.responses.create(
             model=self.model_version,
             input=model_input,
@@ -401,15 +439,21 @@ class ExperienceAI:
                 instructions=EXPERIENCE_SYSTEM_PROMPT,
             )
             raw_drafts = self._function_arguments(retry_response)
+        known_source_ids = {source.id for source in registered_sources}
         try:
-            drafts = [
-                self._to_experience_draft(raw_draft)
-                for raw_draft in raw_drafts
-            ]
-        except ExperienceAIOutputError:
+            drafts = self._convert_drafts(
+                raw_drafts,
+                known_source_ids=known_source_ids,
+            )
+        except ExperienceAIOutputError as first_error:
             # Gemini의 구조화 출력은 간헐적으로 facts의 quote 같은 필수 문자열을
             # null로 반환할 수 있다. 잘못된 인용을 임의로 채우지 않고 형식을 한 번
             # 재요청하며, 두 번째 결과도 잘못되면 그대로 오류를 반환한다.
+            logger.warning(
+                "경험 초안 첫 구조 검증 실패. 형식 재요청을 실행합니다: %s",
+                first_error,
+            )
+            valid_source_ids = ", ".join(sorted(known_source_ids))
             format_retry_response = self.client.responses.create(
                 model=self.model_version,
                 input=(
@@ -418,7 +462,10 @@ class ExperienceAI:
                     "이전 결과가 경험 초안 스키마를 통과하지 못했습니다. "
                     "원문의 경험 구분과 내용은 유지하면서 전체 초안을 다시 반환하세요. "
                     "특히 facts의 각 항목은 text, source_ref_id, quote를 모두 "
-                    "빈값이 아닌 문자열로 작성하세요."
+                    "빈값이 아닌 문자열로 작성하세요. period.start와 period.end는 "
+                    "YYYY 또는 YYYY-MM 형식만 사용하세요. facts에서 인용한 근거 ID는 "
+                    "source_ref_ids에도 포함하고, 아래에 있는 ID만 정확히 사용하세요.\n"
+                    f"사용 가능한 source_ref_id: {valid_source_ids}"
                 ),
                 tools=[EXPERIENCE_DRAFT_TOOL],
                 tool_choice={
@@ -428,10 +475,10 @@ class ExperienceAI:
                 instructions=EXPERIENCE_SYSTEM_PROMPT,
             )
             retry_raw_drafts = self._function_arguments(format_retry_response)
-            drafts = [
-                self._to_experience_draft(raw_draft)
-                for raw_draft in retry_raw_drafts
-            ]
+            drafts = self._convert_drafts(
+                retry_raw_drafts,
+                known_source_ids=known_source_ids,
+            )
         completed_at = self.clock()
 
         try:
@@ -454,6 +501,7 @@ class ExperienceAI:
                 ),
                 experience_drafts=drafts,
                 sources=registered_sources,
+                file_analyses=file_analyses,
                 analyzed_source_ids=[
                     source.id for source in analyzed_sources
                 ],
@@ -540,6 +588,8 @@ class ExperienceAI:
     def _build_model_input(
         request: ExperienceExtractionRequest,
         sources: Sequence[EvidenceSource],
+        *,
+        file_analyses: Sequence[FileEvidenceAnalysis] = (),
     ) -> str:
         request_scope = {
             "client_request_id": request.client_request_id,
@@ -548,8 +598,39 @@ class ExperienceAI:
             "from_sequence": request.from_sequence,
             "to_sequence": request.to_sequence,
         }
+        analyses_by_source_id = {
+            analysis.source_ref_id: analysis
+            for analysis in file_analyses
+        }
         source_sections: list[str] = []
         for source in sources:
+            file_analysis = analyses_by_source_id.get(source.id)
+            if file_analysis is not None:
+                source_sections.append(
+                    "\n".join(
+                        (
+                            "--- 파일 근거 1차 분석 시작 ---",
+                            f"source_ref_id: {source.id}",
+                            f"source_type: {source.type}",
+                            f"title: {source.title or '제목 없음'}",
+                            "[파일 1차 분석]",
+                            json.dumps(
+                                file_analysis.model_dump(
+                                    exclude={
+                                        "source_ref_id",
+                                        "filename",
+                                        "model_version",
+                                        "prompt_version",
+                                        "schema_version",
+                                    }
+                                ),
+                                ensure_ascii=False,
+                            ),
+                            "--- 파일 근거 1차 분석 끝 ---",
+                        )
+                    )
+                )
+                continue
             source_sections.append(
                 "\n".join(
                     (
@@ -623,10 +704,27 @@ class ExperienceAI:
         return raw_drafts
 
     # 10-5. 함수 호출 결과를 공통 ExperienceDraft로 변환
+    # 근거 레지스트리 검증까지 이 단계에서 수행해 잘못된 출력은 한 번 재요청한다.
+    def _convert_drafts(
+        self,
+        raw_drafts: Sequence[Mapping[str, Any]],
+        *,
+        known_source_ids: set[str],
+    ) -> list[ExperienceDraft]:
+        return [
+            self._to_experience_draft(
+                raw_draft,
+                known_source_ids=known_source_ids,
+            )
+            for raw_draft in raw_drafts
+        ]
+
     # 근거에서 확인된 내용은 facts.N 위치별 EvidenceCitation과 함께 저장한다.
     def _to_experience_draft(
         self,
         raw_draft: Mapping[str, Any],
+        *,
+        known_source_ids: set[str] | None = None,
     ) -> ExperienceDraft:
         raw_facts = raw_draft.get("facts", [])
         if not isinstance(raw_facts, list):
@@ -659,11 +757,33 @@ class ExperienceAI:
 
         try:
             raw_period = raw_draft.get("period")
+            normalized_period = _normalize_period(raw_period)
             period = (
-                ExperiencePeriodDraft.model_validate(raw_period)
-                if raw_period is not None
+                ExperiencePeriodDraft.model_validate(normalized_period)
+                if normalized_period is not None
                 else None
             )
+            explicit_source_ref_ids = raw_draft.get("source_ref_ids", [])
+            if not isinstance(explicit_source_ref_ids, list):
+                raise ValueError("source_ref_ids는 배열이어야 합니다.")
+            citation_source_ids = [
+                citation.source_ref_id
+                for citations in field_citations.values()
+                for citation in citations
+            ]
+            source_ref_ids = _unique_texts(
+                [*explicit_source_ref_ids, *citation_source_ids]
+            )
+            if known_source_ids is not None:
+                unknown_source_ids = (
+                    set(source_ref_ids) - known_source_ids
+                )
+                if unknown_source_ids:
+                    unknown = ", ".join(sorted(unknown_source_ids))
+                    raise ValueError(
+                        "초안이 입력에 없는 source_ref_id를 참조합니다: "
+                        f"{unknown}"
+                    )
             return ExperienceDraft(
                 draft_id=self._new_id("experience-draft"),
                 domain=ExperienceClassificationDraft(
@@ -689,14 +809,17 @@ class ExperienceAI:
                 missing_information=raw_draft.get(
                     "missing_information", []
                 ),
-                source_ref_ids=raw_draft.get("source_ref_ids", []),
+                source_ref_ids=source_ref_ids,
                 field_citations=field_citations,
                 confidence=raw_draft.get("confidence"),
                 status=ExperienceDraftStatus.DRAFT,
             )
         except (TypeError, ValidationError, ValueError) as error:
+            error_summary = _validation_error_summary(error)
+            logger.warning("경험 초안 필드 검증 실패: %s", error_summary)
             raise ExperienceAIOutputError(
-                "모델이 반환한 경험 초안의 필드 형식이 올바르지 않습니다."
+                "모델이 반환한 경험 초안의 필드 형식이 올바르지 않습니다: "
+                f"{error_summary}"
             ) from error
 
     # 10-6. 실행·초안 고유 ID 생성
@@ -744,7 +867,96 @@ def _require_text(value: str, field_name: str) -> str:
     return normalized
 
 
-# 14. 외부 공개 목록
+# 14. 모델이 반환한 기간 표기 정규화
+# 한국어·점·슬래시 형식을 공통 스키마의 YYYY 또는 YYYY-MM로 바꾼다.
+def _normalize_period(raw_period: Any) -> Any:
+    if raw_period is None or not isinstance(raw_period, Mapping):
+        return raw_period
+
+    normalized_start = _normalize_period_value(raw_period.get("start"))
+    start_year = (
+        normalized_start[:4]
+        if isinstance(normalized_start, str)
+        and re.fullmatch(r"\d{4}(?:-\d{2})?", normalized_start)
+        else None
+    )
+    normalized_end = _normalize_period_value(
+        raw_period.get("end"),
+        fallback_year=start_year,
+    )
+    return {
+        "start": normalized_start,
+        "end": normalized_end,
+    }
+
+
+def _normalize_period_value(
+    value: Any,
+    *,
+    fallback_year: str | None = None,
+) -> Any:
+    if value is None or not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    korean_match = re.fullmatch(
+        r"(\d{4})\s*년(?:\s*(\d{1,2})\s*월)?",
+        normalized,
+    )
+    separated_match = re.fullmatch(
+        r"(\d{4})(?:\s*[-./]\s*(\d{1,2}))?\.?",
+        normalized,
+    )
+    match = korean_match or separated_match
+    if match:
+        year, month = match.groups()
+        if month is None:
+            return year
+        month_number = int(month)
+        if 1 <= month_number <= 12:
+            return f"{year}-{month_number:02d}"
+        return normalized
+
+    month_match = re.fullmatch(r"(\d{1,2})\s*월", normalized)
+    if month_match and fallback_year:
+        month_number = int(month_match.group(1))
+        if 1 <= month_number <= 12:
+            return f"{fallback_year}-{month_number:02d}"
+    return normalized
+
+
+# 15. 근거 ID 목록 정규화
+# facts가 인용한 ID를 source_ref_ids에 안전하게 합치고 중복을 제거한다.
+def _unique_texts(values: Sequence[Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("source_ref_ids의 각 값은 문자열이어야 합니다.")
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+# 16. 검증 오류 로그 요약
+# 원문 전체는 로그에 남기지 않고 실패 필드와 이유만 기록한다.
+def _validation_error_summary(error: Exception) -> str:
+    if isinstance(error, ValidationError):
+        messages: list[str] = []
+        for detail in error.errors(include_input=False)[:3]:
+            location = ".".join(str(part) for part in detail.get("loc", ()))
+            message = str(detail.get("msg", "검증 실패"))
+            messages.append(f"{location}: {message}" if location else message)
+        return "; ".join(messages) or "Pydantic 검증 실패"
+    return str(error) or error.__class__.__name__
+
+
+# 17. 외부 공개 목록
 # 다른 파일에서 가져다 사용할 이름을 명시한다.
 __all__ = [
     "DEFAULT_EXPERIENCE_MODEL",

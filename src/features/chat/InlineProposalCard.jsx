@@ -63,6 +63,18 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
     catch (reason) { setError(reason?.message ?? '남은 초안을 삭제하지 못했습니다.'); }
     finally { setSaving(false); }
   };
+  const closeEmptyDraft = async () => {
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await onReject(activeDraft);
+    } catch (reason) {
+      setError(reason?.message ?? '초안을 닫지 못했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  };
   const saveAllExperiences = async () => {
     const pendingIndexes = (activeDraft.experiences || []).map((item, index) => ({ item, index })).filter(({ item }) => !item.approved).map(({ index }) => index);
     if (!pendingIndexes.length || !window.confirm(`저장하지 않은 경험 초안 ${pendingIndexes.length}개를 모두 저장할까요?`)) return;
@@ -136,7 +148,7 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
             {!domainCollapsed && <div>{group.entries.map(({ item, index }) => <ExperienceDraftEditor key={`${item.draft_id || item.sourceIndex || 'draft'}-${index}`} grouped collapseKey={`${proposal.id}:${item.draft_id || item.sourceIndex || `draft-${index}`}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>}
           </section>;
         })}</div>
-      : <div className="v2-draft-zero-state"><strong>정리할 경험 후보를 찾지 못했습니다.</strong><p>대화에 프로젝트, 역할, 행동이나 결과를 조금 더 구체적으로 남긴 뒤 다시 정리해 주세요.</p><button type="button" onClick={() => onReject(proposal)}>초안 닫기</button></div>}
+      : <div className="v2-draft-zero-state"><strong>정리할 경험 후보를 찾지 못했습니다.</strong><p>대화에 프로젝트, 역할, 행동이나 결과를 조금 더 구체적으로 남긴 뒤 다시 정리해 주세요.</p><button type="button" disabled={saving} onClick={closeEmptyDraft}>{saving ? '닫는 중…' : '초안 닫기'}</button></div>}
     {error && <p className="v2-proposal-error" role="alert">{error}</p>}
     {showBatchActions && experienceDrafts.length > 0 && <footer className="v2-draft-batch-footer">
       <span>저장하지 않은 초안 {pendingExperienceCount}개</span>

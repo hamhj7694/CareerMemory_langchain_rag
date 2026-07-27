@@ -129,6 +129,81 @@ class ExperiencesApiTests(unittest.TestCase):
         )
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual(client.get("/api/v2/experiences").json()["items"], [])
+        trash = client.get("/api/v2/experience-draft-trash").json()
+        self.assertEqual(trash["total_count"], 1)
+        self.assertEqual(trash["items"][0]["title"], "수정된 제목")
+        self.assertEqual(
+            trash["items"][0]["draft"]["original_experience_id"],
+            created["id"],
+        )
+        self.assertEqual(trash["items"][0]["draft"]["domain"]["name"], "개인 경험")
+        self.assertEqual(trash["items"][0]["draft"]["project"]["name"], "학습")
+
+    def test_deleting_project_moves_all_child_experiences_to_trash(self) -> None:
+        client = TestClient(app)
+        csrf = self.register(client, "project_delete")
+        for title in ("첫 경험", "두 번째 경험"):
+            response = client.post(
+                "/api/v2/experiences",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "domain": {"name": "직장 경험"},
+                    "project": {"name": "서비스 개선"},
+                    "title": title,
+                },
+            )
+            self.assertEqual(response.status_code, 201)
+
+        structure = client.get("/api/v2/experience-structure").json()
+        project = structure["domains"][0]["projects"][0]
+        deleted = client.request(
+            "DELETE",
+            f"/api/v2/experience-projects/{project['id']}",
+            headers={"X-CSRF-Token": csrf},
+            json={"version": project["version"], "confirm": True},
+        )
+
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(client.get("/api/v2/experiences").json()["items"], [])
+        trash = client.get("/api/v2/experience-draft-trash").json()
+        self.assertEqual(trash["total_count"], 2)
+        self.assertEqual(
+            {item["draft"]["title"] for item in trash["items"]},
+            {"첫 경험", "두 번째 경험"},
+        )
+
+    def test_deleting_domain_moves_all_nested_experiences_to_trash(self) -> None:
+        client = TestClient(app)
+        csrf = self.register(client, "domain_delete")
+        for project_name, title in (("결제 개선", "결제 경험"), ("운영 개선", "운영 경험")):
+            response = client.post(
+                "/api/v2/experiences",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "domain": {"name": "직장 경험"},
+                    "project": {"name": project_name},
+                    "title": title,
+                },
+            )
+            self.assertEqual(response.status_code, 201)
+
+        structure = client.get("/api/v2/experience-structure").json()
+        domain = structure["domains"][0]
+        deleted = client.request(
+            "DELETE",
+            f"/api/v2/experience-domains/{domain['id']}",
+            headers={"X-CSRF-Token": csrf},
+            json={"version": domain["version"], "confirm": True},
+        )
+
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(client.get("/api/v2/experiences").json()["items"], [])
+        trash = client.get("/api/v2/experience-draft-trash").json()
+        self.assertEqual(trash["total_count"], 2)
+        self.assertEqual(
+            {item["draft"]["title"] for item in trash["items"]},
+            {"결제 경험", "운영 경험"},
+        )
 
     def test_draft_trash_is_user_scoped_and_can_be_permanently_deleted(self) -> None:
         owner = TestClient(app)
@@ -173,6 +248,57 @@ class ExperiencesApiTests(unittest.TestCase):
         self.assertEqual(
             owner.get("/api/v2/experience-draft-trash").json()["items"],
             [],
+        )
+
+    def test_all_trash_items_can_be_permanently_deleted_for_current_user(self) -> None:
+        owner = TestClient(app)
+        other = TestClient(app)
+        owner_csrf = self.register(owner, "trash_bulk_owner")
+        other_csrf = self.register(other, "trash_bulk_other")
+        payload = {
+            "status": "deleted",
+            "reason": "bulk delete test",
+            "draft": {"title": "deleted draft"},
+            "original_text": "",
+        }
+
+        for index in range(2):
+            created = owner.post(
+                "/api/v2/experience-draft-trash",
+                headers={"X-CSRF-Token": owner_csrf},
+                json={**payload, "draft": {"title": f"owner draft {index}"}},
+            )
+            self.assertEqual(created.status_code, 201)
+        other_created = other.post(
+            "/api/v2/experience-draft-trash",
+            headers={"X-CSRF-Token": other_csrf},
+            json={**payload, "draft": {"title": "other draft"}},
+        )
+        self.assertEqual(other_created.status_code, 201)
+
+        missing_confirmation = owner.request(
+            "DELETE",
+            "/api/v2/experience-draft-trash",
+            headers={"X-CSRF-Token": owner_csrf},
+            json={"confirm": False},
+        )
+        self.assertEqual(missing_confirmation.status_code, 422)
+
+        deleted = owner.request(
+            "DELETE",
+            "/api/v2/experience-draft-trash",
+            headers={"X-CSRF-Token": owner_csrf},
+            json={"confirm": True},
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.json()["deleted_count"], 2)
+        self.assertEqual(
+            owner.get("/api/v2/experience-draft-trash").json()["items"],
+            [],
+        )
+        self.assertEqual(
+            other.get("/api/v2/experience-draft-trash").json()["total_count"],
+            1,
         )
 
     def test_failed_draft_trash_keeps_original_file_for_reanalysis(self) -> None:

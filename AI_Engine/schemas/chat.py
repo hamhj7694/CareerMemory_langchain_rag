@@ -76,6 +76,64 @@ class ChatMessage(SchemaModel):
         return self
 
 
+class ChatContextDocument(SchemaModel):
+    """챗봇 문맥에 실제로 포함된 경험·근거·첨부 검색 결과."""
+
+    source_id: Identifier
+    source_type: Literal["experience", "evidence", "attachment", "message"]
+    title: str = ""
+    content: str
+    score: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("title", "content")
+    @classmethod
+    def normalize_context_text(cls, value: str) -> str:
+        return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    @model_validator(mode="after")
+    def require_context_content(self) -> "ChatContextDocument":
+        if not self.content:
+            raise ValueError("챗봇 문맥 문서에는 content가 필요합니다.")
+        return self
+
+
+class ConversationSummaryContext(SchemaModel):
+    """원문 메시지를 대체하지 않고 오래된 대화만 압축한 파생 메모리."""
+
+    text: str
+    through_sequence: SequenceNumber
+    updated_at: datetime | None = None
+
+    @field_validator("text")
+    @classmethod
+    def require_summary_text(cls, value: str) -> str:
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            raise ValueError("대화 요약은 비어 있을 수 없습니다.")
+        return normalized
+
+
+class ChatTokenUsage(SchemaModel):
+    """모델 호출 전에 계산한 문맥별 예상 입력 토큰과 축약 결과."""
+
+    budget: int = Field(ge=1)
+    estimated_input_tokens: int = Field(ge=0)
+    sections: dict[str, int] = Field(default_factory=dict)
+    compacted: bool = False
+    omitted_context_count: int = Field(default=0, ge=0)
+
+
+class ChatContext(SchemaModel):
+    """API가 수집하고 축약한 뒤 ChatbotAI에 전달하는 단일 문맥 계약."""
+
+    conversation_summary: ConversationSummaryContext | None = None
+    attachments: list[ChatContextDocument] = Field(default_factory=list)
+    experiences: list[ChatContextDocument] = Field(default_factory=list)
+    evidence: list[ChatContextDocument] = Field(default_factory=list)
+    token_usage: ChatTokenUsage | None = None
+
+
 class ChatRequest(SchemaModel):
     """대화형 챗봇에 한 번의 사용자 메시지를 전달하는 요청."""
 
@@ -84,6 +142,11 @@ class ChatRequest(SchemaModel):
     message_id: Identifier
     sequence: SequenceNumber
     mode: ChatMode = ChatMode.AUTO
+    routed_intent: Literal[
+        "chat",
+        "experience_extraction",
+        "job_analysis",
+    ] = "chat"
     content: str = ""
     attachment_ids: list[Identifier] = Field(default_factory=list)
     # 로그인 계정의 표시 이름만 AI 문맥에 전달한다.
@@ -92,6 +155,8 @@ class ChatRequest(SchemaModel):
     # DB에서 복원한 이전 대화입니다.
     # 현재 사용자 메시지는 content에 따로 들어가므로 history에는 포함하지 않습니다.
     history: list[ChatMessage] = Field(default_factory=list)
+    # API 계층에서 사용자 소유권과 토큰 예산을 적용해 조립한 문맥입니다.
+    context: ChatContext = Field(default_factory=ChatContext)
 
     @field_validator("content")
     @classmethod
@@ -165,6 +230,12 @@ class ChatResponse(SchemaModel):
     model_version: Identifier
     prompt_version: Identifier
     schema_version: Identifier
+    routed_intent: Literal[
+        "chat",
+        "experience_extraction",
+        "job_analysis",
+    ] = "chat"
+    token_usage: ChatTokenUsage | None = None
     error: AIError | None = None
 
     @model_validator(mode="after")
@@ -219,6 +290,8 @@ class ChatStreamEvent(SchemaModel):
 __all__ = [
     "AttachmentReference",
     "ChatCitation",
+    "ChatContext",
+    "ChatContextDocument",
     "ChatMessage",
     "ChatMode",
     "ChatRequest",
@@ -226,6 +299,8 @@ __all__ = [
     "ChatRole",
     "ChatStreamEvent",
     "ChatStreamEventType",
+    "ChatTokenUsage",
+    "ConversationSummaryContext",
     "SuggestedAction",
     "SuggestedActionType",
 ]

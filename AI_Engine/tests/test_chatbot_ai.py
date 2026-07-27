@@ -67,10 +67,23 @@ class ChatbotAgentFactoryTests(unittest.TestCase):
             "[역할 role]",
             "[목표 task]",
             "[문맥 context]",
+            "[대화 전략 conversation strategy]",
             "[제약조건 constraint]",
             "[형식 format]",
         ):
             self.assertIn(section, CHATBOT_SYSTEM_PROMPT)
+
+    def test_system_prompt_requires_proactive_but_focused_dialogue(self) -> None:
+        self.assertIn("구체적인 질문", CHATBOT_SYSTEM_PROMPT)
+        self.assertIn("핵심 질문은 하나만", CHATBOT_SYSTEM_PROMPT)
+        self.assertIn(
+            "“어떤 도움이 필요하세요?”",
+            CHATBOT_SYSTEM_PROMPT,
+        )
+        self.assertIn("사용자가 “내가 누구게?”라고 물으면", CHATBOT_SYSTEM_PROMPT)
+        self.assertIn("마크다운 bullet(`-`)", CHATBOT_SYSTEM_PROMPT)
+        self.assertIn("마크다운 굵은 글씨(`**내용**`)", CHATBOT_SYSTEM_PROMPT)
+        self.assertIn("문단 사이에는 빈 줄", CHATBOT_SYSTEM_PROMPT)
 
     @patch("AI_Engine.chatbot_ai.create_agent")
     def test_agent_uses_required_components(self, create_agent_mock) -> None:
@@ -114,6 +127,16 @@ class ChatbotAITests(unittest.TestCase):
             self.agent.invoke_input,
             {
                 "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "[대화 단계]\n"
+                            "새 대화의 첫 사용자 메시지입니다. 인사나 모호한 입력이면 "
+                            "Career Memory가 무엇을 돕는지 짧게 소개하고, 사용자가 바로 "
+                            "답할 수 있는 구체적인 질문 하나로 대화를 시작하세요. "
+                            "요청이 명확하면 소개보다 요청에 대한 답을 우선하세요."
+                        ),
+                    },
                     {
                         "role": "user",
                         "content": "내 강점을 어떻게 설명하면 좋을까?",
@@ -192,6 +215,46 @@ class ChatbotAITests(unittest.TestCase):
         self.assertNotIn("user@example.com", messages[0]["content"])
         self.assertEqual(messages[-1]["role"], "user")
 
+    def test_first_turn_adds_onboarding_phase_context(self) -> None:
+        request = self.request.model_copy(update={"sequence": 1})
+
+        self.chatbot.invoke(request)
+
+        messages = self.agent.invoke_input["messages"]
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("[대화 단계]", messages[0]["content"])
+        self.assertIn("새 대화의 첫 사용자 메시지", messages[0]["content"])
+
+    def test_follow_up_turn_does_not_repeat_onboarding_phase_context(
+        self,
+    ) -> None:
+        request = self.request.model_copy(
+            update={
+                "sequence": 2,
+                "history": [
+                    ChatMessage(
+                        id="user-message-old",
+                        conversation_id="conversation-1",
+                        sequence=1,
+                        role="user",
+                        content="안녕",
+                        created_at=FIXED_TIME,
+                    ),
+                ],
+            }
+        )
+
+        self.chatbot.invoke(request)
+
+        messages = self.agent.invoke_input["messages"]
+        self.assertFalse(
+            any(
+                message["role"] == "system"
+                and "[대화 단계]" in message["content"]
+                for message in messages
+            )
+        )
+
     def test_default_versions_use_chatbot_constants(self) -> None:
         chatbot = ChatbotAI(
             self.agent,
@@ -237,7 +300,7 @@ class ChatbotAITests(unittest.TestCase):
 
         self.chatbot.invoke(request)
 
-        content = self.agent.invoke_input["messages"][0]["content"]
+        content = self.agent.invoke_input["messages"][-1]["content"]
         self.assertIn("파일을 첨부", content)
         self.assertIn("내용을 추측하지 마세요", content)
 

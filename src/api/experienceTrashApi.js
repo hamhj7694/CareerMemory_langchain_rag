@@ -60,4 +60,12 @@ export const experienceTrashApi = {
       body: { confirm: true },
     });
   },
+
+  removeAll() {
+    return http.request({
+      path: '/api/v2/experience-draft-trash',
+      method: 'DELETE',
+      body: { confirm: true },
+    });
+  },
 };

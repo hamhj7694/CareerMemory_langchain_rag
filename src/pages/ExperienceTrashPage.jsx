@@ -44,7 +44,7 @@ export function ExperienceTrashPage() {
       setItems(result.items || []);
       setStatus('ready');
     } catch (reason) {
-      setError(reason?.message || '쓰레기통을 불러오지 못했습니다.');
+      setError(reason?.message || '휴지통을 불러오지 못했습니다.');
       setStatus('error');
     }
   };
@@ -57,7 +57,7 @@ export function ExperienceTrashPage() {
       setStatus('ready');
     }, (reason) => {
       if (!active) return;
-      setError(reason?.message || '쓰레기통을 불러오지 못했습니다.');
+      setError(reason?.message || '휴지통을 불러오지 못했습니다.');
       setStatus('error');
     });
     return () => { active = false; };
@@ -89,6 +89,22 @@ export function ExperienceTrashPage() {
       setItems((current) => current.filter((entry) => entry.id !== item.id));
     } catch (reason) {
       setError(reason?.message || '초안을 완전히 삭제하지 못했습니다.');
+    } finally { setBusyId(''); }
+  };
+
+  const permanentlyDeleteAll = async () => {
+    if (!items.length) return;
+    if (!window.confirm(`휴지통의 ${items.length}개 항목을 모두 삭제할까요?\n삭제한 항목과 보관 파일은 복구할 수 없습니다.`)) return;
+    setBusyId('__all__'); setError('');
+    try {
+      await experienceTrashApi.removeAll();
+      setItems([]);
+      setEditingId('');
+      setForm(null);
+      setAnalysisProposal(null);
+      setAnalysisSourceItem(null);
+    } catch (reason) {
+      setError(reason?.message || '휴지통을 비우지 못했습니다.');
     } finally { setBusyId(''); }
   };
 
@@ -197,20 +213,23 @@ export function ExperienceTrashPage() {
 
   return <section className="mv2-trash-page">
     <header className="mv2-trash-page__header">
-      <div><span className="mv2-kicker">DRAFT TRASH</span><h1>쓰레기통</h1><p>삭제되었거나 저장에 실패한 경험 초안을 확인하고 다시 저장할 수 있습니다.</p></div>
-      <Link className="mv2-button mv2-button--secondary" to="/memory">경험 관리로 돌아가기</Link>
+      <div><span className="mv2-kicker">EXPERIENCE TRASH</span><h1>휴지통</h1><p>삭제된 경험과 저장에 실패한 경험 초안을 확인하고 다시 저장할 수 있습니다.</p></div>
+      <div className="mv2-trash-page__actions">
+        {items.length > 0 && <button type="button" className="mv2-button mv2-button--danger" disabled={busyId === '__all__' || analysisBusy} onClick={permanentlyDeleteAll}>{busyId === '__all__' ? '삭제 중…' : '모두 삭제'}</button>}
+        <Link className="mv2-button mv2-button--secondary" to="/memory">경험 관리로 돌아가기</Link>
+      </div>
     </header>
     {error && <div className="mv2-sync-error" role="alert"><span>{error}</span><button onClick={() => setError('')}>닫기</button></div>}
-    {status === 'loading' && <p className="mv2-sync-status">쓰레기통을 불러오는 중입니다…</p>}
+    {status === 'loading' && <p className="mv2-sync-status">휴지통을 불러오는 중입니다…</p>}
     {status === 'error' && <button className="mv2-button" onClick={load}>다시 시도</button>}
-    {status === 'ready' && !items.length && <div className="mv2-trash-empty"><span aria-hidden="true">✓</span><h2>쓰레기통이 비어 있습니다</h2><p>삭제되거나 저장에 실패한 경험 초안이 없습니다.</p></div>}
+    {status === 'ready' && !items.length && <div className="mv2-trash-empty"><span aria-hidden="true">✓</span><h2>휴지통이 비어 있습니다</h2><p>삭제된 경험이나 저장에 실패한 경험 초안이 없습니다.</p></div>}
     {status === 'ready' && items.length > 0 && <div className="mv2-trash-list">{items.map((item) => {
       const hasDraft = Object.keys(item.draft || {}).length > 0;
       const draft = editingId === item.id ? form : editableDraft(item.draft);
       const editing = editingId === item.id;
-      const busy = busyId === item.id;
+      const busy = busyId === item.id || busyId === '__all__';
       return <article className="mv2-trash-card" key={item.id}>
-        <header><div><span className={`mv2-trash-status is-${item.status}`}>{item.status === 'failed' ? '저장 실패' : '삭제한 초안'}</span><h2>{draft.title || item.title}</h2><p>{item.reason || '보관된 경험 초안'}</p></div><time>{new Date(item.created_at).toLocaleString('ko-KR')}</time></header>
+        <header><div><span className={`mv2-trash-status is-${item.status}`}>{item.status === 'failed' ? '저장 실패' : item.draft?.original_experience_id ? '삭제한 경험' : '삭제한 초안'}</span><h2>{draft.title || item.title}</h2><p>{item.reason || '보관된 경험 초안'}</p></div><time>{new Date(item.created_at).toLocaleString('ko-KR')}</time></header>
         {editing ? <div className="mv2-trash-form">
           <label>경험 분류<input value={draft.domain} onChange={(event) => update('domain', event.target.value)} /></label>
           <label>프로젝트·활동<input value={draft.project} onChange={(event) => update('project', event.target.value)} /></label>

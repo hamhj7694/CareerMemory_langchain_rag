@@ -16,6 +16,7 @@ from AI_Engine.database.connection import get_database_session
 from AI_Engine.database.models import (
     Experience,
     ExperienceDomain,
+    ExperienceDraftTrash,
     ExperienceProject,
     User,
     utc_now,
@@ -115,6 +116,55 @@ def experience_dict(item: Experience) -> dict[str, Any]:
         "created_at": item.created_at, "updated_at": item.updated_at,
         "version": item.version,
     }
+
+
+def experience_trash_draft(item: Experience) -> dict[str, Any]:
+    """삭제 시점의 확정 경험을 다시 저장 가능한 초안 스냅샷으로 만든다."""
+
+    project = item.project
+    domain = project.domain
+    return {
+        "draft_id": f"deleted-{item.id}",
+        "original_experience_id": item.id,
+        "domain": {"name": domain.name},
+        "project": {
+            "name": project.name,
+            "organization": project.organization,
+        },
+        "title": item.title,
+        "summary": item.summary,
+        "situation": item.situation,
+        "actions": list(item.actions or []),
+        "results": list(item.results or []),
+        "role": item.role,
+        "skills": list(item.skills or []),
+        "facts": list(item.facts or []),
+        "period": dict(item.period) if isinstance(item.period, dict) else item.period,
+        "missing_information": list(item.missing_information or []),
+        "source_ref_ids": list(item.source_ids or []),
+        "source_refs": list(item.source_refs or []),
+        "status": "draft",
+    }
+
+
+def move_experience_to_trash(
+    item: Experience,
+    *,
+    user_id: str,
+    reason: str,
+    database: Session,
+) -> None:
+    """확정 경험을 소프트 삭제하기 전에 사용자 휴지통에 보관한다."""
+
+    database.add(ExperienceDraftTrash(
+        id=resource_id("TRASH"),
+        user_id=user_id,
+        status="deleted",
+        title=item.title or "제목 없는 경험",
+        reason=reason,
+        draft=experience_trash_draft(item),
+        original_text="",
+    ))
 
 
 def owned_project(project_id: str, user_id: str, database: Session) -> ExperienceProject:
@@ -280,8 +330,18 @@ def delete_domain(
     item.deleted_at = utc_now()
     item.version += 1
     for project in item.projects:
+        if project.deleted_at is not None:
+            continue
         project.deleted_at = utc_now()
         for experience in project.experiences:
+            if experience.deleted_at is not None:
+                continue
+            move_experience_to_trash(
+                experience,
+                user_id=current_user.id,
+                reason=f"‘{item.name}’ 경험 분류 삭제로 휴지통에 이동",
+                database=database,
+            )
             experience.deleted_at = utc_now()
     database.commit()
     return {"deleted_id": item.id, "recoverable": True}
@@ -327,6 +387,14 @@ def delete_project(
     item.deleted_at = utc_now()
     item.version += 1
     for experience in item.experiences:
+        if experience.deleted_at is not None:
+            continue
+        move_experience_to_trash(
+            experience,
+            user_id=current_user.id,
+            reason=f"‘{item.name}’ 프로젝트·활동 삭제로 휴지통에 이동",
+            database=database,
+        )
         experience.deleted_at = utc_now()
     database.commit()
     return {"deleted_id": item.id, "recoverable": True}
@@ -445,6 +513,12 @@ def delete_experience(
     item = owned_experience(experience_id, current_user.id, database)
     if request.version is not None and item.version != request.version:
         raise HTTPException(status_code=409, detail="경험 버전이 변경되었습니다.")
+    move_experience_to_trash(
+        item,
+        user_id=current_user.id,
+        reason="경험 관리에서 삭제하여 휴지통에 이동",
+        database=database,
+    )
     item.deleted_at = utc_now()
     item.version += 1
     database.commit()

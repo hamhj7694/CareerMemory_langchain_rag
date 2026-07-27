@@ -1,4 +1,4 @@
-"""삭제되었거나 저장에 실패한 경험 초안의 사용자별 쓰레기통 API."""
+"""삭제된 경험과 저장에 실패한 경험 초안을 보관하는 사용자별 휴지통 API."""
 
 from __future__ import annotations
 
@@ -22,7 +22,9 @@ from AI_Engine.database.models import (
 from AI_Engine.job_file_text import (
     MAX_JOB_FILE_BYTES,
     MAX_JOB_FILE_COUNT,
+    MAX_JOB_FILE_MIB,
     MAX_JOB_FILES_TOTAL_BYTES,
+    MAX_JOB_FILES_TOTAL_MIB,
 )
 
 
@@ -78,7 +80,7 @@ def owned_item(item_id: str, user_id: str, database: Session) -> ExperienceDraft
         )
     )
     if item is None:
-        raise HTTPException(status_code=404, detail="쓰레기통 초안을 찾을 수 없습니다.")
+        raise HTTPException(status_code=404, detail="휴지통 항목을 찾을 수 없습니다.")
     return item
 
 
@@ -147,10 +149,22 @@ async def create_trash_draft_with_files(
     for uploaded in files:
         content = await uploaded.read(MAX_JOB_FILE_BYTES + 1)
         if len(content) > MAX_JOB_FILE_BYTES:
-            raise HTTPException(status_code=422, detail=f"{uploaded.filename} 파일이 10MB를 초과합니다.")
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{uploaded.filename} 파일이 "
+                    f"{MAX_JOB_FILE_MIB}MiB를 초과합니다."
+                ),
+            )
         total_bytes += len(content)
         if total_bytes > MAX_JOB_FILES_TOTAL_BYTES:
-            raise HTTPException(status_code=422, detail="파일 전체 크기가 14MB를 초과합니다.")
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "파일 전체 크기가 "
+                    f"{MAX_JOB_FILES_TOTAL_MIB}MiB를 초과합니다."
+                ),
+            )
         stored_files.append((uploaded, content))
 
     title = str(draft.get("title") or "").strip() or (
@@ -189,7 +203,7 @@ def download_trash_file(
     current_user: User = Depends(get_current_user),
     database: Session = Depends(get_database_session),
 ):
-    """현재 사용자가 보관한 쓰레기통 원본 파일을 다시 내려준다."""
+    """현재 사용자가 휴지통에 보관한 원본 파일을 다시 내려준다."""
 
     item = owned_item(item_id, current_user.id, database)
     stored = database.scalar(
@@ -220,6 +234,33 @@ def update_trash_draft(
     database.commit()
     database.refresh(item)
     return item_dict(item)
+
+
+@router.delete("")
+def permanently_delete_all_trash_drafts(
+    request: TrashDraftDelete,
+    current_user: User = Depends(require_csrf_user),
+    database: Session = Depends(get_database_session),
+):
+    """현재 사용자의 휴지통 항목과 보관 파일을 모두 영구 삭제한다."""
+
+    if not request.confirm:
+        raise HTTPException(status_code=422, detail="모두 삭제 확인이 필요합니다.")
+    items = list(
+        database.scalars(
+            select(ExperienceDraftTrash).where(
+                ExperienceDraftTrash.user_id == current_user.id,
+            )
+        )
+    )
+    deleted_ids = [item.id for item in items]
+    for item in items:
+        database.delete(item)
+    database.commit()
+    return {
+        "deleted_count": len(deleted_ids),
+        "deleted_ids": deleted_ids,
+    }
 
 
 @router.delete("/{item_id}")

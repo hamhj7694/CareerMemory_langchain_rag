@@ -3,8 +3,8 @@ import { fingerprintFile } from '../../../utils/fileFingerprint.js';
 export const EVIDENCE_FILE_LIMITS = {
   acceptedTypes: ['application/pdf', 'text/plain', 'image/png', 'image/jpeg', 'image/webp'],
   maxCount: 5,
-  maxFileBytes: 10 * 1024 * 1024,
-  maxTotalBytes: 14 * 1024 * 1024,
+  maxFileBytes: 25 * 1024 * 1024,
+  maxTotalBytes: 100 * 1024 * 1024,
 };
 
 export const evidenceFileKey = (item) => item.selectionId || item.contentHash || `${item.name}-${item.size}-${item.lastModified || 0}`;
@@ -27,7 +27,7 @@ export async function mergeEvidenceFileSelections(currentFiles, incomingFiles, p
   const notices = [];
 
   if (unsupported.length) errors.push(`PDF/TXT/이미지가 아닌 파일 ${unsupported.length}개`);
-  if (oversized.length) errors.push(`10MiB를 넘는 파일 ${oversized.length}개`);
+  if (oversized.length) errors.push(`25MiB를 넘는 파일 ${oversized.length}개`);
 
   const descriptors = await Promise.all(candidates.map(async (file) => {
     const contentHash = await fingerprintFile(file);
@@ -64,7 +64,7 @@ export async function mergeEvidenceFileSelections(currentFiles, incomingFiles, p
       break;
     }
     if (totalBytes + descriptor.size_bytes > EVIDENCE_FILE_LIMITS.maxTotalBytes) {
-      errors.push('전체 용량 14MiB 초과');
+      errors.push('전체 용량 100MiB 초과');
       continue;
     }
 

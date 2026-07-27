@@ -977,7 +977,12 @@ export async function deleteExperience(experienceId, { version, confirm } = {}) 
 // 경험정리·공고분석·첨부·경험관리 기능은 구현이 끝날 때까지 기존 Mock을 유지한다.
 const activeConversationApi = apiConfig.useMock
   ? { createConversation, listConversations, getConversation, updateConversation, deleteConversation, listMessages, sendMessage }
-  : v2ChatHttpApi;
+  : {
+      ...v2ChatHttpApi,
+      preflightAttachments: v2ChatHttpApi.preflightAttachments,
+      uploadAttachments: v2ChatHttpApi.uploadAttachments,
+      deleteAttachment: v2ChatHttpApi.deleteAttachment,
+    };
 
 // 개발 서버에서는 경험 데이터를 사용자별 DB API에서 읽고 저장합니다.
 // 테스트 모드만 기존 인메모리 구현을 사용하여 외부 서버 없이 검증합니다.

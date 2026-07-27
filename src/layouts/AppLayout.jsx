@@ -3,7 +3,7 @@ import { useAuth } from '../auth/useAuth.js';
 
 const PAGE_TITLES = [
   { pattern: /^\/chat(?:\/[^/]+)?$/, title: '커리어 챗' },
-  { pattern: /^\/memory\/trash$/, title: '경험 초안 쓰레기통' },
+  { pattern: /^\/memory\/trash$/, title: '경험 휴지통' },
   { pattern: /^\/memory\/[^/]+$/, title: '경험 상세' },
   { pattern: /^\/memory$/, title: '경험 관리' },
   { pattern: /^\/jobs\/[^/]+$/, title: '공고 분석 결과' },

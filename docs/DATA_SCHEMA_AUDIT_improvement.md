@@ -247,3 +247,72 @@ EmbeddingRecord
 - 이름이 달라도 내용 해시가 같으면 기존 파일을 재사용한다.
 - 여러 경험이 같은 Evidence를 안전하게 공유하고 한 경험의 연결 해제가 다른 경험의 근거를 삭제하지 않는다.
 - RAG 답변은 Experience 후보와 실제 EvidenceChunk 인용을 함께 반환한다.
+
+## 10. 2026-07-27 구현 반영 및 남은 스키마 보강
+
+### 현재 연결된 데이터 흐름
+
+```text
+Attachment
+  ├─ Message.attachment_ids
+  ├─ ChatContext.attachments
+  ├─ ExperienceExtractionRequest.attachment_ids
+  └─ 파일 기반 EvidenceSource
+
+Conversation
+  ├─ Message[]
+  ├─ ConversationMemory
+  └─ last_successful_extraction_sequence
+
+confirmed Experience + source_refs
+  ├─ Experience RAG 문서
+  └─ Evidence RAG 청크
+
+AIRouteDecision
+  ├─ chat → ChatbotAI
+  ├─ experience_extraction → ExperienceAI → Proposal
+  └─ job_analysis → JobAnalysisAI → JobAnalysisRecord
+```
+
+구현된 사항:
+
+- `Attachment`는 사용자별 SHA-256 고유 제약, 추출 본문, 파서 상태, 같은 이름의 이전 버전 ID를 가진다.
+- `ConversationMemory`는 요약 원문 범위인 `through_sequence`와 모델·프롬프트 버전을 가진다.
+- `ChatContext`는 첨부, 검색된 경험, 검색된 근거, 대화 요약과 예상 토큰 사용량을 하나의 계약으로 전달한다.
+- `[자동]` 모드는 `AIRouteDecision`을 실제 실행 경로로 사용하며, 경험 초안과 공고 분석을 전용 AI로 전달한다.
+- 사용자 질문에 포함되는 경험·근거 검색은 로그인한 `user_id`로 제한된다.
+
+아직 보강할 사항:
+
+1. 현재 근거 청크는 `Experience.source_refs`에서 실행 시 생성된다. 운영 구조에서는 `EvidenceDocument`, `EvidenceChunk`, `EmbeddingRecord`를 정규 테이블로 승격해야 한다.
+2. 첨부 바이너리는 현재 DB에 저장된다. 운영 배포에서는 객체 저장소의 `storage_key`와 무결성 해시를 사용하는 구조가 적합하다.
+3. Experience 생성·수정·삭제 및 근거 연결 변경 시 벡터 인덱스를 갱신하는 outbox/event 계약이 필요하다.
+4. `ChatCitation`은 source ID와 표시 정보를 반환하지만, 답변 문장별 인용 강제 검증과 인용 실패 재시도 정책은 추가해야 한다.
+5. 현재 토큰 수는 공급자 독립적인 보수 추정값이다. 실제 호출 응답의 prompt/completion token usage를 별도 실행 로그에 기록해야 한다.
+
+## 11. 2026-07-27 경험 파일 선행 분석 파이프라인
+
+파일이 하나 이상 포함된 경험정리는 원본 전체를 곧바로 `ExperienceDraft`로
+변환하지 않는다.
+
+```text
+PDF·TXT·이미지
+  → 본문 추출·OCR
+  → 파일별 청크 분할
+  → FileEvidenceAnalysis
+     ├─ summary
+     ├─ experience_signals
+     └─ key_facts + 원문 인용
+  → 사용자 직접 입력과 파일별 분석 결과 통합
+  → ExperienceDraft 0..N개
+```
+
+- `EvidenceSource.text`는 원본 근거로 보존한다.
+- `FileEvidenceAnalysis`는 최종 경험이 아닌 파생 요약이며 원본
+  `source_ref_id`를 참조한다.
+- 최종 경험 AI에는 파일 원문 전체 대신 파일별 분석 결과를 전달한다.
+- 파일 분석의 인용문이 실제 추출 원문에 존재할 때만 최종 근거 후보로 유지한다.
+- 긴 파일은 `AI_EXPERIENCE_FILE_ANALYSIS_CHUNK_TOKENS` 기준으로 나누며,
+  각 청크 분석 결과를 파일 단위로 병합한다.
+- 운영 환경에서는 `content_hash + parser_version + file-analysis
+  prompt/schema/model version`으로 파생 분석을 캐시해 반복 모델 호출을 막아야 한다.

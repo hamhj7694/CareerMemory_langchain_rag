@@ -31,13 +31,13 @@ export function JobsPage() {
       event.target.value = '';
       return;
     }
-    if (files.some((file) => file.size > 10 * 1024 * 1024)) {
-      setError('파일 크기는 각각 10MB 이하여야 합니다.');
+    if (files.some((file) => file.size > 25 * 1024 * 1024)) {
+      setError('파일 크기는 각각 25MiB 이하여야 합니다.');
       event.target.value = '';
       return;
     }
-    if (files.reduce((total, file) => total + file.size, 0) > 14 * 1024 * 1024) {
-      setError('선택한 파일의 전체 크기는 14MB 이하여야 합니다.');
+    if (files.reduce((total, file) => total + file.size, 0) > 100 * 1024 * 1024) {
+      setError('선택한 파일의 전체 크기는 100MiB 이하여야 합니다.');
       event.target.value = '';
       return;
     }
@@ -107,7 +107,7 @@ export function JobsPage() {
         <div className="is-wide job-file-input">
           <div className="job-file-input__heading">
             <span>공고 파일 또는 화면 캡처 <small>선택</small></span>
-            <small>PDF·TXT·PNG·JPG·WEBP / 최대 5개 / 파일당 10MB·전체 14MB</small>
+            <small>PDF·TXT·PNG·JPG·WEBP / 최대 5개 / 파일당 25MiB·전체 100MiB</small>
           </div>
           <label className="job-file-input__picker">
             <input

@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     last_message_preview VARCHAR(300),
     message_count INTEGER NOT NULL DEFAULT 0,
     pending_proposal_count INTEGER NOT NULL DEFAULT 0,
+    last_successful_extraction_sequence INTEGER NOT NULL DEFAULT 0,
+    last_extraction_at DATETIME,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
@@ -98,3 +100,51 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS ix_messages_conversation_created
     ON messages (conversation_id, created_at);
+
+-- 5. 대화 요약 메모리
+-- 오래된 원문 메시지를 삭제하지 않고 모델 입력에 사용할 파생 요약만 저장한다.
+CREATE TABLE IF NOT EXISTS conversation_memories (
+    conversation_id VARCHAR(50) PRIMARY KEY,
+    summary_text TEXT NOT NULL DEFAULT '',
+    through_sequence INTEGER NOT NULL DEFAULT 0,
+    estimated_tokens INTEGER NOT NULL DEFAULT 0,
+    model_version VARCHAR(100) NOT NULL DEFAULT '',
+    prompt_version VARCHAR(100) NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (conversation_id)
+        REFERENCES conversations (id)
+        ON DELETE CASCADE
+);
+
+-- 6. 사용자 원본 첨부 파일
+-- 해시가 같은 파일은 사용자 안에서 재사용하고 추출 본문은 RAG/대화 문맥에 사용한다.
+CREATE TABLE IF NOT EXISTS attachments (
+    id VARCHAR(50) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    filename VARCHAR(300) NOT NULL,
+    normalized_filename VARCHAR(300) NOT NULL,
+    mime_type VARCHAR(150) NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    content BLOB NOT NULL,
+    extracted_text TEXT NOT NULL DEFAULT '',
+    parse_status VARCHAR(20) NOT NULL DEFAULT 'ready',
+    parse_error TEXT,
+    parser_version VARCHAR(100) NOT NULL DEFAULT 'experience-file-parser-v1',
+    original_attachment_id VARCHAR(50),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    CONSTRAINT uq_attachments_user_content_hash
+        UNIQUE (user_id, content_hash),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (original_attachment_id)
+        REFERENCES attachments (id)
+        ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_attachments_user_id
+    ON attachments (user_id);
+CREATE INDEX IF NOT EXISTS ix_attachments_user_filename
+    ON attachments (user_id, normalized_filename);

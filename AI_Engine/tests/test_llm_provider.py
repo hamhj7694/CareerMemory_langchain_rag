@@ -18,15 +18,16 @@ from AI_Engine.llm_provider import (
     create_embeddings,
     create_structured_client,
     get_ai_provider,
+    get_chat_temperature,
     get_chat_model_name,
     get_experience_index_version,
 )
 
 
 class LLMProviderTests(unittest.TestCase):
-    def test_gemini_is_default_provider(self) -> None:
+    def test_openai_is_default_provider(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(get_ai_provider(), "gemini")
+            self.assertEqual(get_ai_provider(), "openai")
 
     def test_invalid_provider_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "gemini.*openai"):
@@ -68,6 +69,28 @@ class LLMProviderTests(unittest.TestCase):
                 OpenAIEmbeddings,
             )
             self.assertEqual(get_chat_model_name("openai"), "gpt-test")
+
+    def test_chat_temperature_uses_configured_value(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"AI_CHAT_TEMPERATURE": "0.3"},
+            clear=True,
+        ):
+            self.assertEqual(get_chat_temperature(), 0.3)
+
+    def test_invalid_chat_temperature_is_rejected(self) -> None:
+        for invalid_value in ("high", "-0.1", "2.1"):
+            with self.subTest(value=invalid_value):
+                with patch.dict(
+                    os.environ,
+                    {"AI_CHAT_TEMPERATURE": invalid_value},
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "AI_CHAT_TEMPERATURE",
+                    ):
+                        get_chat_temperature()
 
     def test_embedding_indexes_are_separated_by_provider(self) -> None:
         self.assertNotEqual(

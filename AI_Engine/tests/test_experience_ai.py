@@ -18,6 +18,7 @@ from AI_Engine.experience_ai import (
 from AI_Engine.schemas import (
     EvidenceSource,
     ExperienceExtractionRequest,
+    FileEvidenceAnalysis,
 )
 
 
@@ -87,6 +88,25 @@ class IncrementingIdFactory:
     def __call__(self) -> str:
         self.value += 1
         return str(self.value)
+
+
+class FakeFileAnalyzer:
+    """외부 호출 없이 파일 원문을 파일별 파생 요약으로 바꾼다."""
+
+    def analyze_sources(self, sources):
+        return [
+            FileEvidenceAnalysis(
+                source_ref_id=source.id,
+                filename=source.filename or source.title,
+                summary=source.text or "",
+                chunk_count=1,
+                model_version="test-file-model",
+                prompt_version="test-file-prompt",
+                schema_version="test-file-schema",
+            )
+            for source in sources
+            if source.type == "file"
+        ]
 
 
 def valid_raw_draft(
@@ -185,6 +205,7 @@ class ExperienceAITests(unittest.TestCase):
             schema_version="test-schema-v1",
             id_factory=IncrementingIdFactory(),
             clock=lambda: FIXED_TIME,
+            file_analyzer=FakeFileAnalyzer(),
         )
 
     def test_direct_text_becomes_evidence_and_one_draft(self) -> None:
@@ -279,6 +300,77 @@ class ExperienceAITests(unittest.TestCase):
             result.experience_drafts[1].draft_id,
         )
 
+    def test_korean_period_is_normalized_without_rejecting_draft(self) -> None:
+        raw_draft = valid_raw_draft()
+        raw_draft["period"] = {
+            "start": "2024년 8월",
+            "end": "11월",
+        }
+        ai = self.create_ai(
+            FakeResponses({"experience_drafts": [raw_draft]})
+        )
+
+        result = ai.organize(self.request)
+
+        period = result.experience_drafts[0].project.period
+        self.assertIsNotNone(period)
+        self.assertEqual(period.start, "2024-08")
+        self.assertEqual(period.end, "2024-11")
+
+    def test_fact_citation_is_added_to_source_reference_list(self) -> None:
+        raw_draft = valid_raw_draft()
+        raw_draft["source_ref_ids"] = []
+        ai = self.create_ai(
+            FakeResponses({"experience_drafts": [raw_draft]})
+        )
+
+        result = ai.organize(self.request)
+
+        self.assertEqual(
+            result.experience_drafts[0].source_ref_ids,
+            ["source-manual-1"],
+        )
+
+    def test_manual_text_and_file_can_create_multiple_drafts(self) -> None:
+        request = ExperienceExtractionRequest(
+            client_request_id="request-mixed",
+            input_type="direct_input",
+            text="결제 절차와 운영 대시보드를 개선했습니다.",
+            manual_input_id="manual-1",
+            attachment_ids=["attachment-1"],
+        )
+        file_source = EvidenceSource(
+            id="source-file-1",
+            type="file",
+            title="Career Bridge RAG 서비스 기획안",
+            attachment_id="attachment-1",
+            filename="Career Bridge RAG 서비스 기획안.pdf",
+            text="Career Bridge RAG 서비스 기획안을 작성했습니다.",
+        )
+        payload = {
+            "experience_drafts": [
+                valid_raw_draft(title="결제 절차 개선"),
+                valid_raw_draft(title="운영 대시보드 구축"),
+                valid_raw_draft(
+                    title="Career Bridge RAG 서비스 기획",
+                    source_ref_id="source-file-1",
+                ),
+            ]
+        }
+        ai = self.create_ai(FakeResponses(payload))
+
+        result = ai.organize(request, sources=[file_source])
+
+        self.assertEqual(len(result.experience_drafts), 3)
+        self.assertEqual(
+            result.experience_drafts[2].source_ref_ids,
+            ["source-file-1"],
+        )
+        self.assertEqual(
+            result.analyzed_source_ids,
+            ["source-manual-1", "source-file-1"],
+        )
+
     def test_invalid_fact_shape_is_requested_once_more(self) -> None:
         malformed = valid_raw_draft()
         malformed["facts"][0]["quote"] = None
@@ -325,10 +417,64 @@ class ExperienceAITests(unittest.TestCase):
         result = ai.organize(request, sources=[source])
 
         self.assertEqual(result.sources[0].filename, "report.txt")
+        self.assertEqual(len(result.file_analyses), 1)
+        self.assertEqual(
+            result.file_analyses[0].source_ref_id,
+            "source-file-1",
+        )
         self.assertEqual(result.analyzed_source_ids, ["source-file-1"])
         self.assertIn(
             "고객 문의 처리 시간을 20% 단축했습니다.",
             responses.calls[0]["input"],
+        )
+        self.assertIn("[파일 1차 분석]", responses.calls[0]["input"])
+        self.assertNotIn("original_text:", responses.calls[0]["input"])
+
+    def test_multiple_files_are_each_summarized_before_structuring(self) -> None:
+        request = ExperienceExtractionRequest(
+            client_request_id="request-two-files",
+            input_type="direct_input",
+            attachment_ids=["attachment-1", "attachment-2"],
+        )
+        sources = [
+            EvidenceSource(
+                id="source-file-1",
+                type="file",
+                title="결제 개선 보고서",
+                attachment_id="attachment-1",
+                filename="checkout.txt",
+                text="결제 완료율이 14% 증가했습니다.",
+            ),
+            EvidenceSource(
+                id="source-file-2",
+                type="file",
+                title="운영 대시보드 보고서",
+                attachment_id="attachment-2",
+                filename="dashboard.txt",
+                text="주간 보고서 작성 시간이 4시간에서 1시간으로 줄었습니다.",
+            ),
+        ]
+        payload = {
+            "experience_drafts": [
+                valid_raw_draft(
+                    title="결제 절차 개선",
+                    source_ref_id="source-file-1",
+                ),
+                valid_raw_draft(
+                    title="운영 대시보드 구축",
+                    source_ref_id="source-file-2",
+                ),
+            ]
+        }
+        ai = self.create_ai(FakeResponses(payload))
+
+        result = ai.organize(request, sources=sources)
+
+        self.assertEqual(len(result.file_analyses), 2)
+        self.assertEqual(len(result.experience_drafts), 2)
+        self.assertEqual(
+            {item.source_ref_id for item in result.file_analyses},
+            {"source-file-1", "source-file-2"},
         )
 
     def test_attachment_without_evidence_source_is_rejected(self) -> None:

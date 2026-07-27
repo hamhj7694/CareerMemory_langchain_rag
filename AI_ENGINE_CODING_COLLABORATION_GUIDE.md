@@ -214,16 +214,16 @@ AI mode: experience_extraction
 
 ## 7. AI Provider 관리 원칙
 
-현재 기본 Provider는 Gemini다.
-
-```env
-AI_PROVIDER=gemini
-```
-
-기존 GPT 경로는 삭제하지 않는다. 나중에 다음 설정으로 전환할 수 있어야 한다.
+현재 기본 Provider는 OpenAI다.
 
 ```env
 AI_PROVIDER=openai
+```
+
+기존 Gemini 경로는 삭제하지 않는다. 필요하면 다음 설정으로 전환할 수 있어야 한다.
+
+```env
+AI_PROVIDER=gemini
 ```
 
 모델의 일반 기본값은 코드에 둘 수 있고 `.env` 값으로 재정의할 수 있다.
@@ -383,7 +383,7 @@ Codex는 구현 완료 후 다음 내용을 사용자에게 알려야 한다.
 학습 가능한 수준으로 코드를 나누고 각 코드의 역할과 이유를
 한국어 주석으로 설명해줘.
 
-기존 GPT 코드는 유지하고 Gemini를 기본 Provider로 사용해줘.
+기존 Gemini 코드는 유지하고 OpenAI를 기본 Provider로 사용해줘.
 ```
 
 이 문서의 규칙과 사용자의 최신 요청이 충돌하면 사용자의 최신 요청을 우선한다.

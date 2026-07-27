@@ -5,7 +5,10 @@ export async function sha256ArrayBuffer(buffer) {
     throw new Error('이 브라우저에서는 파일 중복 확인을 지원하지 않습니다.');
   }
   const digest = await globalThis.crypto.subtle.digest('SHA-256', buffer);
-  return `sha256:${[...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
+  // 서버 Attachment.content_hash 계약은 알고리즘 접두어가 없는 SHA-256 64자리 hex다.
+  return [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 export async function fingerprintFile(file) {

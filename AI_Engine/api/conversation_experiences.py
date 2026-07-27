@@ -13,7 +13,13 @@ from AI_Engine.api.conversations import create_resource_id, get_conversation_or_
 from AI_Engine.api.experience_extractions import get_experience_ai
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.database.connection import get_database_session
-from AI_Engine.database.models import JobAnalysisRecord, Message, User, utc_now
+from AI_Engine.database.models import (
+    Attachment,
+    JobAnalysisRecord,
+    Message,
+    User,
+    utc_now,
+)
 from AI_Engine.experience_ai import ExperienceAI, ExperienceAIInputError, ExperienceAIOutputError
 from AI_Engine.experience_file_text import extract_experience_file_texts
 from AI_Engine.job_file_text import JobFile, JobFileExtractionError, JobFileInputError, MAX_JOB_FILE_BYTES
@@ -153,6 +159,43 @@ def extract_recent_chat_experiences(
         for message in messages
         if message.content.strip()
     ]
+    attachment_ids = list(dict.fromkeys(
+        attachment_id
+        for message in messages
+        for attachment_id in message.attachment_ids
+    ))
+    if attachment_ids:
+        attachments = list(database.scalars(
+            select(Attachment).where(
+                Attachment.user_id == current_user.id,
+                Attachment.id.in_(attachment_ids),
+            )
+        ))
+        attachment_by_id = {item.id: item for item in attachments}
+        missing_attachment_ids = [
+            attachment_id for attachment_id in attachment_ids
+            if attachment_id not in attachment_by_id
+        ]
+        if missing_attachment_ids:
+            raise HTTPException(
+                status_code=422,
+                detail="경험 정리에 사용할 첨부 파일을 찾을 수 없습니다.",
+            )
+        sources.extend([
+            EvidenceSource(
+                id=f"source-{attachment.id}",
+                type=EvidenceSourceType.FILE,
+                title=attachment.filename,
+                attachment_id=attachment.id,
+                filename=attachment.filename,
+                mime_type=attachment.mime_type,
+                uploaded_at=attachment.created_at,
+                content_hash=attachment.content_hash,
+                text=attachment.extracted_text,
+            )
+            for attachment in attachments
+            if attachment.extracted_text.strip()
+        ])
     if not sources:
         raise HTTPException(status_code=422, detail="분석 가능한 대화내용이 없습니다.")
 
@@ -165,6 +208,7 @@ def extract_recent_chat_experiences(
                 from_sequence=messages[0].sequence,
                 to_sequence=messages[-1].sequence,
                 message_ids=[message.id for message in messages],
+                attachment_ids=attachment_ids,
             ),
             sources=sources,
         )

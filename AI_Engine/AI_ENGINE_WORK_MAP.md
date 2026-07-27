@@ -78,7 +78,7 @@ AI_langchain.py
 
 | ID | 상태 | 작업 | 입력 → 출력 | 구현 위치 | 완료 조건 |
 |---|---|---|---|---|---|
-| AI-210 | `[~]` | 첨부 파일 파싱 | PDF·TXT·PNG·JPG·WEBP → 검토·인용 가능한 원문 | `job_file_text.py`, `experience_file_text.py` | 경험 파일은 PyMuPDF·Tesseract 로컬 처리, 채용공고 파일은 Gemini 처리. 세부 인용 위치 보존 대기 |
+| AI-210 | `[~]` | 첨부 파일 파싱 | PDF·TXT·PNG·JPG·WEBP → 검토·인용 가능한 원문 | `job_file_text.py`, `experience_file_text.py` | 경험·채용공고 파일 모두 PyMuPDF·Tesseract 공통 로컬 처리. 세부 인용 위치 보존 대기 |
 | AI-211 | `[ ]` | 중복 파일 판정 | filename, size, SHA-256 → duplicate 상태 | `experience_ai.py`, 백엔드 저장 API | 동일 해시는 재사용하고 수정본은 별도 버전 처리 |
 | AI-220 | `[ ]` | EvidenceChunk 생성·임베딩 | 원본 대화·텍스트·파일 → 검색 chunk | `experience_ai.py` | 원본 ID·page·offset가 보존되고 중복 임베딩 방지 |
 | AI-230 | `[~]` | Experience Search Document 생성·임베딩 | 사용자별 확정 Experience → 검색용 문서 | `schemas/retrieval.py`, `job_analysis_ai.py` | `user_id` 메타데이터와 필터를 강제하고 확정·근거 보유 경험만 문서화. 생성·수정·삭제 저장소 이벤트 연결 대기 |
@@ -169,8 +169,8 @@ AI 답변은 경험의 사실 근거로 사용하지 않으며, `공고 분석` 
 
 현재 연결 메모:
 
-- 직접 입력 → Gemini 경험정리 → 초안 검토 → 개별/전체 저장 → 사용자별 DB 조회 경로를 연결했다.
-- 삭제·저장 실패 초안 → 사용자별 쓰레기통 → 수정·내 경험 저장·완전 삭제 경로를 연결했다.
+- 직접 입력 → OpenAI 경험정리 → 초안 검토 → 개별/전체 저장 → 사용자별 DB 조회 경로를 연결했다.
+- 삭제된 경험·저장 실패 초안 → 사용자별 휴지통 → 수정·내 경험 저장·완전 삭제 경로를 연결했다.
 - 경험 CRUD API와 프론트 단위 테스트까지 통과했으며, 브라우저 수동 E2E 확인 후 관련 항목을 `[x]`로 확정한다.
 
 ---
@@ -215,3 +215,53 @@ AI 답변은 경험의 사실 근거로 사용하지 않으며, `공고 분석` 
 - API/프론트 통합 또는 사용자 확인까지 끝난 뒤 `[x]`로 변경한다.
 - 스키마나 API가 바뀌면 이 문서, `Data_Flow_Summary.md`, `DATA_SCHEMA_AUDIT_improvement.md`를 함께 확인한다.
 - 실제 코드와 문서가 다르면 코드를 임의로 맞추기 전에 계약 차이를 먼저 기록한다.
+
+---
+
+## 12. 2026-07-27 커리어 챗 문맥 파이프라인 구현 현황
+
+이번 구현으로 다음 경로가 실제 백엔드·프론트엔드 계약에 연결되었다.
+
+| 작업 | 상태 | 구현 위치 | 현재 동작 |
+|---|---|---|---|
+| 사용자별 첨부 저장·중복 방지 | `[x]` | `api/attachments.py`, `database/models.py`, `src/api/v2ChatHttpApi.js` | SHA-256으로 완전 중복을 재사용하고 같은 이름의 다른 파일은 버전 관계로 저장 |
+| 채팅 첨부 본문 전달 | `[x]` | `AI_langchain.py`, `chat_context.py` | PDF·TXT·이미지 추출 본문을 청크로 나눠 현재 질문 문맥에 제한적으로 포함 |
+| 저장 경험 RAG | `[x]` | `chat_retrieval.py` | 로그인 사용자 소유의 `confirmed`이면서 근거가 있는 경험만 검색 |
+| 원본 근거 RAG | `[~]` | `chat_retrieval.py` | 확정 경험의 `source_refs`에서 근거 청크를 만들고 검색. 정규 `EvidenceDocument/EvidenceChunk` DB 전환은 후속 작업 |
+| 대화 요약 메모리 | `[x]` | `conversation_memory.py`, `ConversationMemory` | 원문 메시지는 보존하고 임계치를 넘은 오래된 범위만 누적 요약 |
+| 토큰 계산·자동 축약 | `[x]` | `chat_context.py`, `.env.example` | 최근 대화·첨부·경험·근거별 예산과 전체 입력 예산을 적용 |
+| `[자동]` 의도 분류 | `[x]` | `intent_classifier.py`, `AI_langchain.py` | 일반 질문·경험 정리·공고 분석을 구조화 출력으로 판정하며 낮은 확신은 chat으로 폴백 |
+| `[자동]` 전용 AI 실행 | `[x]` | `chat_auto_routes.py`, `api/conversations.py` | 경험 정리는 Proposal, 공고 분석은 Job 분석 기록과 화면 이동 액션으로 저장 |
+| 인용 반환 | `[~]` | `chatbot_ai.py` | 모델이 `[출처:source_id]`를 사용한 항목만 citation으로 반환. 인용 강제 검증·재시도는 후속 작업 |
+
+현재 조립 순서는 다음과 같다.
+
+```text
+메시지·첨부 저장
+  → 첨부 소유권 및 추출 본문 확인
+  → [자동] 의도 분류
+  → 오래된 대화 요약 + 최근 대화 유지
+  → 저장 경험 RAG + 원본 근거 RAG
+  → 종류별/전체 토큰 예산 적용
+  → chat | experience_extraction | job_analysis 실행
+  → 메시지·Proposal·JobAnalysisRecord 영속 저장
+```
+
+후속 우선순위:
+
+1. `EvidenceDocument`, `EvidenceChunk`, `EmbeddingRecord`를 정규 DB 모델로 만들고 저장·수정 이벤트 기반으로 인덱스를 갱신한다.
+2. 벡터 검색 평가 세트와 자동 의도 분류 혼동행렬을 추가한다.
+3. 모델 제공자의 실제 토크나이저 사용량과 현재 보수적 사전 추정치를 함께 기록한다.
+4. 첨부 바이너리는 운영 환경에서 객체 저장소로 옮기고 DB에는 메타데이터·storage key만 둔다.
+
+---
+
+## 13. 경험 파일 선행 분석
+
+| 작업 | 상태 | 구현 위치 | 현재 동작 |
+|---|---|---|---|
+| PDF·TXT·이미지 본문 추출 | `[x]` | `experience_file_text.py` | 파일별 원문과 페이지 표식을 보존 |
+| 파일별 청크 분석 | `[x]` | `experience_file_analysis_ai.py` | 긴 파일을 나눠 요약·경험 후보·핵심 사실·원문 인용 생성 |
+| 파일 분석 스키마 | `[x]` | `schemas/evidence.py` | `FileEvidenceAnalysis`, `FileExperienceSignal`, `FileEvidenceFact` |
+| 최종 경험 구조화 연결 | `[x]` | `experience_ai.py` | 직접 입력 텍스트와 파일별 분석 결과를 함께 사용해 `ExperienceDraft 0..N` 생성 |
+| 파생 분석 영속 캐시 | `[ ]` | 후속 DB 작업 | 동일 파일 재분석을 막기 위한 버전·해시 기반 캐시 필요 |

@@ -6,6 +6,13 @@ import { v2ChatApi } from '../../api/v2ChatApi.js';
 import { buildExperienceAnalysisFromResult, discardPendingProposalAttachments, markProposalExperienceSaved, saveProposalExperience } from '../experience/api/experienceProposalService.js';
 import { ExperienceIntakeModal } from '../experience/components/ExperienceIntakeModal.jsx';
 import { ExperienceProposalModal } from '../experience/components/ExperienceProposalModal.jsx';
+import { formatExperienceSavedDateTime } from '../experience/model/experienceDate.js';
+import {
+  createExperienceNoticeState,
+  markExperienceNoticeRead,
+  normalizeExperienceNoticeState,
+  reconcileExperienceNoticeState,
+} from '../experience/model/experienceNoticeState.js';
 import { toExperience } from '../experience/model/experienceMapper.js';
 import { selectExperienceCard, selectExperiencePreview } from '../experience/model/experienceSelectors.js';
 import { buildSkillProfile, listExperienceRoles } from '../experience/model/skillModel.js';
@@ -15,6 +22,23 @@ import './memory-manager.css';
 
 const toView = (item) => toExperience(item);
 
+function ExperienceCardContent({ experience, query, isNew = false }) {
+  const card = selectExperienceCard(experience);
+  const createdAt = experience.createdAt || experience.created_at || '';
+  const savedDate = formatExperienceSavedDateTime(createdAt);
+
+  return (
+    <span>
+      <span className="mv2-experience-title-row">
+        <strong><HighlightText text={card.title} query={query} /></strong>
+        {isNew && <span className="mv2-experience-new-badge" aria-label="새로 추가된 경험">새 경험</span>}
+      </span>
+      <small><HighlightText text={card.skills.join(' · ') || '역량 미입력'} query={query} /></small>
+      {savedDate && <time dateTime={createdAt}>저장일 {savedDate}</time>}
+    </span>
+  );
+}
+
 const createdTimeValue = (item) => new Date(item.created_at || item.createdAt || 0).getTime() || 0;
 const structureNameKey = (value) => String(value || '')
   .normalize('NFKC')
@@ -23,6 +47,7 @@ const structureNameKey = (value) => String(value || '')
   .replace(/\s+/g, ' ')
   .toLocaleLowerCase('ko-KR');
 const ORDER_STORAGE_KEY = 'career-memory.experience-structure-order.v1';
+const NOTICE_STORAGE_KEY = 'career-memory.experience-new-notices.v1';
 const readStructureOrder = () => {
   try {
     const userKey = getUserStorageKey(ORDER_STORAGE_KEY);
@@ -30,6 +55,22 @@ const readStructureOrder = () => {
     return { domains: [], projects: {}, experiences: {}, ...JSON.parse(saved || '{}') };
   }
   catch { return { domains: [], projects: {}, experiences: {} }; }
+};
+const readExperienceNoticeState = () => {
+  try {
+    const saved = window.localStorage.getItem(getUserStorageKey(NOTICE_STORAGE_KEY));
+    return normalizeExperienceNoticeState(JSON.parse(saved || '{}'));
+  }
+  catch { return createExperienceNoticeState(); }
+};
+const writeExperienceNoticeState = (value) => {
+  try {
+    window.localStorage.setItem(
+      getUserStorageKey(NOTICE_STORAGE_KEY),
+      JSON.stringify(normalizeExperienceNoticeState(value)),
+    );
+  }
+  catch { /* 목록 표시는 유지하고 저장소 오류만 무시한다. */ }
 };
 const sortBySavedOrder = (items, ids = []) => {
   const rank = new Map(ids.map((id, index) => [id, index]));
@@ -236,16 +277,36 @@ export function ExperienceManagerV3() {
   const [experiencePreviewBusy, setExperiencePreviewBusy] = useState(false);
   const [experienceProposalEditing, setExperienceProposalEditing] = useState(false);
   const [trashCount, setTrashCount] = useState(0);
+  const [experienceNoticeState, setExperienceNoticeState] = useState(readExperienceNoticeState);
   const [structureOrder, setStructureOrder] = useState(readStructureOrder);
   const editSnapshotRef = useRef(null);
   const selectedExperience = experiences.find((item) => item.id === selectedExperienceId) || null;
   const selected = selectedExperience ? selectExperiencePreview(selectedExperience) : null;
+  const newExperienceIds = useMemo(
+    () => new Set(experienceNoticeState.unreadIds),
+    [experienceNoticeState.unreadIds],
+  );
+
+  const syncExperienceNotices = (items) => {
+    setExperienceNoticeState((current) => {
+      const next = reconcileExperienceNoticeState(current, items.map((item) => item.id));
+      writeExperienceNoticeState(next);
+      return next;
+    });
+  };
+  const markExperienceSeen = (experienceId) => {
+    setExperienceNoticeState((current) => {
+      const next = markExperienceNoticeRead(current, experienceId);
+      writeExperienceNoticeState(next);
+      return next;
+    });
+  };
 
   const refresh = async () => {
     setStatus('loading'); setError('');
     try {
       const [data, trash] = await Promise.all([loadLibrary(), experienceTrashApi.list()]);
-      setExperiences(data.experiences); setDomains(data.domains); setTrashCount(trash.total_count); setStatus('ready');
+      setExperiences(data.experiences); setDomains(data.domains); setTrashCount(trash.total_count); syncExperienceNotices(data.experiences); setStatus('ready');
     }
     catch (reason) { setError(reason.message || '경험을 불러오지 못했습니다.'); setStatus('error'); }
   };
@@ -256,6 +317,7 @@ export function ExperienceManagerV3() {
         setExperiences(data.experiences);
         setDomains(data.domains);
         setTrashCount(trash.total_count);
+        syncExperienceNotices(data.experiences);
         setStatus('ready');
       }
     }, (reason) => {
@@ -299,6 +361,7 @@ export function ExperienceManagerV3() {
   };
 
   const togglePreview = (experience, anchor) => {
+    markExperienceSeen(experience.id);
     if (selected?.id === experience.id) {
       setSelectedExperienceId(null);
       setPreviewPosition(null);
@@ -873,7 +936,7 @@ export function ExperienceManagerV3() {
   return <div className={`mv2-manager mv2-manager--v3 ${selected ? 'has-preview' : ''} ${editMode ? 'is-edit-mode' : ''}`}>
     <main>
       <section className="mv2-library-header" aria-labelledby="experience-library-title">
-        <header className="mv2-page-header"><div><span className="mv2-kicker">EXPERIENCE LIBRARY</span><div className="mv2-title-row"><h1 id="experience-library-title">경험 관리</h1>{editMode && <span className="mv2-edit-mode-badge">구조 편집 중</span>}</div><p>AI로 경험을 분석하고, 정리된 경험을 직접 수정·관리하세요.</p></div><div className="mv2-header-actions">{editMode ? <><button type="button" className="mv2-button mv2-button--secondary mv2-edit-cancel" onClick={cancelEditMode} disabled={savingStructure}>취소</button><button type="button" className="mv2-button mv2-button--primary mv2-edit-save" onClick={() => saveStructure()} disabled={!pendingOps.length || savingStructure}>{savingStructure ? '저장 중…' : '변경사항 저장'}</button></> : <><button type="button" className="mv2-button mv2-button--primary mv2-add-experience" onClick={openNewExperience}>+ 경험 분석하기</button><button type="button" className="mv2-button mv2-button--secondary mv2-structure-edit" onClick={beginEditMode}>경험 구조 편집</button><Link className="mv2-trash-link" to="/memory/trash" aria-label={`쓰레기통${trashCount ? `, 초안 ${trashCount}개` : ''}`} title="쓰레기통"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>{trashCount > 0 && <span>{trashCount > 99 ? '99+' : trashCount}</span>}</Link></>}</div></header>
+        <header className="mv2-page-header"><div><span className="mv2-kicker">EXPERIENCE LIBRARY</span><div className="mv2-title-row"><h1 id="experience-library-title">경험 관리</h1>{editMode && <span className="mv2-edit-mode-badge">구조 편집 중</span>}</div><p>AI로 경험을 분석하고, 정리된 경험을 직접 수정·관리하세요.</p></div><div className="mv2-header-actions">{editMode ? <><button type="button" className="mv2-button mv2-button--secondary mv2-edit-cancel" onClick={cancelEditMode} disabled={savingStructure}>취소</button><button type="button" className="mv2-button mv2-button--primary mv2-edit-save" onClick={() => saveStructure()} disabled={!pendingOps.length || savingStructure}>{savingStructure ? '저장 중…' : '변경사항 저장'}</button></> : <><button type="button" className="mv2-button mv2-button--primary mv2-add-experience" onClick={openNewExperience}>+ 경험 분석하기</button><button type="button" className="mv2-button mv2-button--secondary mv2-structure-edit" onClick={beginEditMode}>경험 구조 편집</button><Link className="mv2-trash-link" to="/memory/trash" aria-label={`휴지통${trashCount ? `, 항목 ${trashCount}개` : ''}`} title="휴지통"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>{trashCount > 0 && <span>{trashCount > 99 ? '99+' : trashCount}</span>}</Link></>}</div></header>
         <section className="mv2-summary" aria-label="커리어 자산 요약"><button onClick={clearSearch}><strong>{experiences.length}</strong><span>전체 경험</span><small>정리된 경험 보기</small></button><button onClick={() => setAssetModal('evidence')}><strong>{evidenceTotal}</strong><span>경험 근거</span><small>원본 리스트 보기</small></button><button onClick={() => setAssetModal('skills')}><strong>{skillTotal}</strong><span>내 역량</span><small>직군 · 직업 · 역량 보기</small></button></section>
         <section className="mv2-discovery-panel" aria-label="경험 검색"><div className="mv2-toolbar"><label className="mv2-search"><span className="mv2-search__label">경험 검색</span><input value={query} onChange={(event) => { setSkillGroupFilter(''); setQuery(event.target.value); }} placeholder="경험, 프로젝트·활동, 역량 검색" /></label><button type="button" className="mv2-button mv2-button--secondary mv2-search-reset" onClick={clearSearch} disabled={!query && !skillGroupFilter}>검색 초기화</button></div></section>
       </section>
@@ -890,7 +953,7 @@ export function ExperienceManagerV3() {
             const projectDropClass = dropTarget?.kind === 'project-container' && dropTarget.id === project.id ? 'is-drop-target' : dropIndicatorClass('project', project.id);
             return <div className={`mv2-project ${projectDropClass} ${draggingClass('project', project.id)}`} key={project.id} onDragOver={(event) => { if (!editMode || !dragging || !['project', 'experience'].includes(dragging.kind)) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; if (dragging.kind === 'project' && dragging.id === project.id) { setDropTarget(null); return; } if (dragging.kind === 'project') showDropTarget('project', project.id, dropPosition(event)); else showDropTarget('project-container', project.id, 'inside'); }} onDragLeave={(event) => leaveDropTarget(event, project.id, ['project', 'project-container'])} onDrop={(event) => { if (!editMode) return; event.preventDefault(); event.stopPropagation(); const payload = readDragPayload(event); if (payload?.kind === 'project') moveProject(payload.id, domain.id, project.id, dropTarget?.position || 'before'); if (payload?.kind === 'experience') moveExperience(payload.id, project.id); clearDragState(); }}>
               <div className="mv2-project__title" draggable={editMode && nameEditor?.id !== project.id} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/json', JSON.stringify({ kind: 'project', id: project.id, domainId: domain.id })); setDragging({ kind: 'project', id: project.id, domainId: domain.id }); }} onDragEnd={clearDragState}>{nameEditor?.kind === 'project' && nameEditor.id === project.id ? renderNameEditor() : <strong><HighlightText text={project.name} query={query} /></strong>}{editMode && nameEditor?.id !== project.id && <MoreMenu label={`${project.name} 관리`}><button onClick={() => renameProject(project)}>이름 변경</button><button className="is-danger" onClick={() => requestDeleteProject(project)}>프로젝트·활동 삭제</button></MoreMenu>}</div>
-              <div className={`mv2-project__experiences ${projectExperiences.length ? '' : 'is-empty'}`}>{projectExperiences.length ? projectExperiences.map((experience) => <article className={`mv2-experience-tile ${selected?.id === experience.id ? 'is-selected' : ''} ${dropIndicatorClass('experience', experience.id)} ${draggingClass('experience', experience.id)}`} draggable={editMode} key={experience.id} onDragStart={(event) => { if (!editMode) return; event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/json', JSON.stringify({ kind: 'experience', id: experience.id, projectId: project.id })); setDragging({ kind: 'experience', id: experience.id, projectId: project.id }); }} onDragEnd={clearDragState} onDragOver={(event) => { if (!editMode || dragging?.kind !== 'experience') return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; if (dragging.id === experience.id) { setDropTarget(null); return; } showDropTarget('experience', experience.id, dropPosition(event)); }} onDragLeave={(event) => leaveDropTarget(event, experience.id, ['experience'])} onDrop={(event) => { if (!editMode) return; event.preventDefault(); event.stopPropagation(); const payload = readDragPayload(event); const position = dropTarget?.position || 'before'; if (payload?.kind === 'experience') payload.projectId === project.id ? reorderExperience(project.id, payload.id, experience.id, position) : moveExperience(payload.id, project.id, experience.id, position); clearDragState(); }}><button className="mv2-experience-main" aria-expanded={selected?.id === experience.id} onClick={(event) => togglePreview(experience, event.currentTarget)}><span><strong><HighlightText text={selectExperienceCard(experience).title} query={query} /></strong><small><HighlightText text={selectExperienceCard(experience).skills.join(' · ') || '역량 미입력'} query={query} /></small></span></button>{editMode && <MoreMenu label={`${experience.title} 관리`}><button className="is-danger" onClick={() => requestDeleteExperience(experience)}>경험 삭제</button></MoreMenu>}</article>) : <div className="mv2-v3-empty-project"><p>아직 경험이 없습니다.</p>{!editMode && <button type="button" onClick={() => startExperience(domain, project)}>+ 이곳에 경험 추가</button>}</div>}</div>
+              <div className={`mv2-project__experiences ${projectExperiences.length ? '' : 'is-empty'}`}>{projectExperiences.length ? projectExperiences.map((experience) => <article className={`mv2-experience-tile ${selected?.id === experience.id ? 'is-selected' : ''} ${newExperienceIds.has(experience.id) ? 'is-new' : ''} ${dropIndicatorClass('experience', experience.id)} ${draggingClass('experience', experience.id)}`} draggable={editMode} key={experience.id} onDragStart={(event) => { if (!editMode) return; event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/json', JSON.stringify({ kind: 'experience', id: experience.id, projectId: project.id })); setDragging({ kind: 'experience', id: experience.id, projectId: project.id }); }} onDragEnd={clearDragState} onDragOver={(event) => { if (!editMode || dragging?.kind !== 'experience') return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; if (dragging.id === experience.id) { setDropTarget(null); return; } showDropTarget('experience', experience.id, dropPosition(event)); }} onDragLeave={(event) => leaveDropTarget(event, experience.id, ['experience'])} onDrop={(event) => { if (!editMode) return; event.preventDefault(); event.stopPropagation(); const payload = readDragPayload(event); const position = dropTarget?.position || 'before'; if (payload?.kind === 'experience') payload.projectId === project.id ? reorderExperience(project.id, payload.id, experience.id, position) : moveExperience(payload.id, project.id, experience.id, position); clearDragState(); }}><button className="mv2-experience-main" aria-expanded={selected?.id === experience.id} onClick={(event) => togglePreview(experience, event.currentTarget)}><ExperienceCardContent experience={experience} query={query} isNew={newExperienceIds.has(experience.id)} /></button>{editMode && <MoreMenu label={`${experience.title} 관리`}><button className="is-danger" onClick={() => requestDeleteExperience(experience)}>경험 삭제</button></MoreMenu>}</article>) : <div className="mv2-v3-empty-project"><p>아직 경험이 없습니다.</p>{!editMode && <button type="button" onClick={() => startExperience(domain, project)}>+ 이곳에 경험 추가</button>}</div>}</div>
             </div>;
           })}{editMode && !normalizedQuery && draftProject?.domainId === domain.id && renderDraftProject(domain)}{editMode && !normalizedQuery && domain.projects.length === 0 && draftProject?.domainId !== domain.id && <button className="mv2-v3-add-project" onClick={() => setDraftProject({ domainId: domain.id, name: '' })}>+ 첫 프로젝트·활동 추가</button>}</div>}
         </section>;

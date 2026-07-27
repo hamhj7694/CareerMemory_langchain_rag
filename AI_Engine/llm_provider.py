@@ -25,11 +25,12 @@ load_dotenv()
 
 AIProvider = Literal["gemini", "openai"]
 
-DEFAULT_AI_PROVIDER: AIProvider = "gemini"
+DEFAULT_AI_PROVIDER: AIProvider = "openai"
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-2"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_CHAT_TEMPERATURE = 0.3
 
 
 # 4. 활성 Provider 확인
@@ -68,8 +69,26 @@ def get_embedding_model_name(provider: str | None = None) -> str:
     ).strip()
 
 
+def get_chat_temperature() -> float:
+    raw_value = os.getenv(
+        "AI_CHAT_TEMPERATURE",
+        str(DEFAULT_CHAT_TEMPERATURE),
+    ).strip()
+    try:
+        temperature = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            "AI_CHAT_TEMPERATURE는 0.0~2.0 사이의 숫자여야 합니다."
+        ) from exc
+    if not 0.0 <= temperature <= 2.0:
+        raise ValueError(
+            "AI_CHAT_TEMPERATURE는 0.0~2.0 사이의 숫자여야 합니다."
+        )
+    return temperature
+
+
 # 7. 대화형 모델 생성
-# Gemini가 기본이며 AI_PROVIDER=openai로 설정하면 기존 GPT 모델을 만든다.
+# OpenAI가 기본이며 AI_PROVIDER=gemini로 설정하면 Gemini 모델을 만든다.
 def create_chat_model(
     *,
     provider: str | None = None,
@@ -79,17 +98,19 @@ def create_chat_model(
     selected_model = model_name or get_chat_model_name(active_provider)
     # 일반 채팅 답변 길이는 구조화 분석 결과와 별도로 조절한다.
     # 이후 대화 요약 엔진을 추가해도 용도별 한도가 서로 영향을 주지 않는다.
-    chat_output_tokens = int(os.getenv("AI_CHAT_MAX_TOKENS", "4000"))
+    chat_output_tokens = int(os.getenv("AI_CHAT_MAX_TOKENS", "8000"))
+    chat_temperature = get_chat_temperature()
     if active_provider == "gemini":
         return ChatGoogleGenerativeAI(
             model=selected_model,
             api_key=_required_api_key("GEMINI_API_KEY"),
             max_tokens=chat_output_tokens,
+            temperature=chat_temperature,
         )
     return ChatOpenAI(
         model=selected_model,
         api_key=_required_api_key("OPENAI_API_KEY"),
-        temperature=0,
+        temperature=chat_temperature,
         max_completion_tokens=chat_output_tokens,
     )
 
@@ -147,7 +168,7 @@ class GeminiStructuredClient:
         # JSON으로 반환되어 4,000토큰을 쉽게 넘을 수 있다. 응답이 중간에
         # 잘려 스키마 오류가 나지 않도록 구조화 출력 전용 한도를 넉넉히 둔다.
         structured_output_tokens = int(
-            os.getenv("AI_STRUCTURED_OUTPUT_MAX_TOKENS", "32000")
+            os.getenv("AI_STRUCTURED_OUTPUT_MAX_TOKENS", "65536")
         )
         model_client = ChatGoogleGenerativeAI(
             model=model,
@@ -213,11 +234,13 @@ __all__ = [
     "DEFAULT_GEMINI_MODEL",
     "DEFAULT_OPENAI_EMBEDDING_MODEL",
     "DEFAULT_OPENAI_MODEL",
+    "DEFAULT_CHAT_TEMPERATURE",
     "GeminiStructuredClient",
     "create_chat_model",
     "create_embeddings",
     "create_structured_client",
     "get_ai_provider",
+    "get_chat_temperature",
     "get_chat_model_name",
     "get_embedding_model_name",
     "get_experience_index_version",

@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from AI_Engine.api import (
+    attachments_router,
     conversations_router,
     conversation_experiences_router,
     experience_extractions_router,
@@ -77,6 +78,7 @@ register_error_handlers(app)
 # 8. 기능별 API 라우터 연결
 # 대화 관련 주소를 별도 파일에 두어 서버 진입점이 지나치게 커지지 않게 한다.
 app.include_router(conversations_router)
+app.include_router(attachments_router)
 app.include_router(conversation_experiences_router)
 app.include_router(experience_extractions_router)
 app.include_router(experiences_router)

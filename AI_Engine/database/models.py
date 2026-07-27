@@ -81,6 +81,10 @@ class User(Base):
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="user",
     )
+    attachments: Mapped[list["Attachment"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     experience_domains: Mapped[list["ExperienceDomain"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -215,6 +219,124 @@ class Conversation(Base):
         order_by="Message.sequence",
     )
     user: Mapped[User | None] = relationship(back_populates="conversations")
+    memory: Mapped["ConversationMemory | None"] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class ConversationMemory(Base):
+    """오래된 대화 원문을 대체하지 않고 모델 문맥만 줄이는 요약 메모리."""
+
+    __tablename__ = "conversation_memories"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    through_sequence: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    estimated_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    model_version: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="",
+    )
+    prompt_version: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="memory")
+
+
+class Attachment(Base):
+    """채팅과 경험정리에서 재사용하는 사용자 소유 원본 첨부 파일."""
+
+    __tablename__ = "attachments"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "content_hash",
+            name="uq_attachments_user_content_hash",
+        ),
+        Index(
+            "ix_attachments_user_filename",
+            "user_id",
+            "normalized_filename",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    filename: Mapped[str] = mapped_column(String(300), nullable=False)
+    normalized_filename: Mapped[str] = mapped_column(
+        String(300),
+        nullable=False,
+    )
+    mime_type: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+        default="application/octet-stream",
+    )
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    extracted_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    parse_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="ready",
+    )
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parser_version: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="experience-file-parser-v1",
+    )
+    original_attachment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("attachments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    user: Mapped[User] = relationship(back_populates="attachments")
 
 
 # 7. 메시지 테이블
@@ -412,7 +534,7 @@ class ExperienceDraftTrash(Base):
 
 
 class ExperienceDraftTrashFile(Base):
-    """재분석할 수 있도록 쓰레기통에 보관하는 원본 첨부파일."""
+    """재분석할 수 있도록 휴지통에 보관하는 원본 첨부파일."""
 
     __tablename__ = "experience_draft_trash_files"
 
@@ -473,8 +595,10 @@ class JobAnalysisRecord(Base):
 
 
 __all__ = [
+    "Attachment",
     "AuthSession",
     "Conversation",
+    "ConversationMemory",
     "Experience",
     "ExperienceDomain",
     "ExperienceDraftTrash",

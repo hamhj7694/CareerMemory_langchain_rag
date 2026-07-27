@@ -8,6 +8,8 @@
 from .chat import (
     AttachmentReference,
     ChatCitation,
+    ChatContext,
+    ChatContextDocument,
     ChatMessage,
     ChatMode,
     ChatRequest,
@@ -15,11 +17,21 @@ from .chat import (
     ChatRole,
     ChatStreamEvent,
     ChatStreamEventType,
+    ChatTokenUsage,
+    ConversationSummaryContext,
     SuggestedAction,
     SuggestedActionType,
 )
 from .common import AIError, Confidence, Identifier, SchemaModel, SequenceNumber
-from .evidence import EvidenceCitation, EvidenceSource, EvidenceSourceType
+from .evidence import (
+    EvidenceCitation,
+    EvidenceSource,
+    EvidenceSourceType,
+    FileEvidenceAnalysis,
+    FileEvidenceExcerpt,
+    FileEvidenceFact,
+    FileExperienceSignal,
+)
 from .experience import (
     ExperienceClassificationDraft,
     ExperienceDraft,
@@ -62,6 +74,8 @@ __all__ = [
     "AIRouteRequest",
     "AttachmentReference",
     "ChatCitation",
+    "ChatContext",
+    "ChatContextDocument",
     "ChatMessage",
     "ChatMode",
     "ChatRequest",
@@ -69,10 +83,16 @@ __all__ = [
     "ChatRole",
     "ChatStreamEvent",
     "ChatStreamEventType",
+    "ChatTokenUsage",
     "Confidence",
+    "ConversationSummaryContext",
     "EvidenceCitation",
     "EvidenceSource",
     "EvidenceSourceType",
+    "FileEvidenceAnalysis",
+    "FileEvidenceExcerpt",
+    "FileEvidenceFact",
+    "FileExperienceSignal",
     "ExperienceClassificationDraft",
     "ExperienceDraft",
     "ExperienceDraftStatus",

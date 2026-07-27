@@ -42,8 +42,12 @@ class AIRouteRequest(SchemaModel):
     conversation_id: Identifier | None = None
     text: str = ""
     attachment_ids: list[Identifier] = Field(default_factory=list)
+    attachment_context: str = Field(
+        default="",
+        description="File names and a bounded extracted-text preview for auto routing",
+    )
 
-    @field_validator("text")
+    @field_validator("text", "attachment_context")
     @classmethod
     def normalize_text(cls, value: str) -> str:
         return value.replace("\r\n", "\n").replace("\r", "\n")

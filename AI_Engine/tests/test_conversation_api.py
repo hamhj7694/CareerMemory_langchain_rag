@@ -222,6 +222,96 @@ class ConversationApiTests(unittest.TestCase):
             "테스트 사용자",
         )
 
+    def test_uploaded_text_attachment_body_reaches_chatbot_context(self) -> None:
+        upload = self.client.post(
+            "/api/v2/attachments",
+            files={
+                "file": (
+                    "career.txt",
+                    "지원 퍼널을 분석해 완료율을 18% 높였습니다.".encode("utf-8"),
+                    "text/plain",
+                )
+            },
+        )
+        self.assertEqual(upload.status_code, 201)
+        attachment = upload.json()
+        self.assertTrue(attachment["extracted_text_available"])
+
+        preflight = self.client.post(
+            "/api/v2/attachments/preflight",
+            json={
+                "items": [{
+                    "client_id": "client-file-1",
+                    "filename": "career-copy.txt",
+                    "mime_type": "text/plain",
+                    "size_bytes": attachment["size_bytes"],
+                    "content_hash": attachment["content_hash"],
+                }]
+            },
+        )
+        self.assertEqual(preflight.status_code, 200)
+        self.assertEqual(
+            preflight.json()["items"][0]["status"],
+            "exact_duplicate",
+        )
+
+        conversation = self.create_conversation().json()
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "첨부한 성과를 어떻게 설명하면 좋을까?",
+                "intent": "question",
+                "attachment_ids": [attachment["id"]],
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        context = self.chatbot.requests[0].context
+        self.assertEqual(context.attachments[0].source_id, attachment["id"])
+        self.assertIn("18%", context.attachments[0].content)
+        self.assertGreater(context.token_usage.estimated_input_tokens, 0)
+
+    def test_auto_message_with_attachment_only_chats_until_extract_button(self) -> None:
+        upload = self.client.post(
+            "/api/v2/attachments",
+            files={
+                "file": (
+                    "career-evidence.txt",
+                    "결제 완료율을 18% 개선했습니다.".encode("utf-8"),
+                    "text/plain",
+                )
+            },
+        )
+        attachment = upload.json()
+        conversation = self.create_conversation().json()
+
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "",
+                "intent": "auto",
+                "attachment_ids": [attachment["id"]],
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["resolved_intents"], ["chat"])
+        self.assertEqual(response.json()["proposal_ids"], [])
+        self.assertEqual(response.json()["actions"], [])
+        self.assertEqual(self.chatbot.invoke_count, 1)
+        self.assertEqual(
+            self.chatbot.requests[0].context.attachments[0].source_id,
+            attachment["id"],
+        )
+
+        extraction_status = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/experience-extraction-status"
+        ).json()
+        self.assertEqual(extraction_status["unprocessed_message_count"], 1)
+        self.assertEqual(extraction_status["unprocessed_attachment_count"], 1)
+
     def test_message_retry_returns_existing_answer(self) -> None:
         conversation = self.create_conversation().json()
         request_body = {

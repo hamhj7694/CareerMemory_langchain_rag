@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+import os
 from pathlib import Path
 import shutil
 
@@ -14,12 +15,15 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from AI_Engine.job_file_text import (
     JobFile,
     JobFileExtractionError,
+    MAX_JOB_FILE_COUNT,
+    MAX_JOB_FILES_TOTAL_BYTES,
+    MAX_JOB_FILES_TOTAL_MIB,
     decode_text_file,
     validate_job_file,
 )
 
 
-MAX_PDF_PAGES = 30
+MAX_PDF_PAGES = max(1, int(os.getenv("AI_MAX_PDF_PAGES", "100")))
 MIN_NATIVE_PDF_TEXT_LENGTH = 20
 WINDOWS_TESSERACT_PATHS = (
     Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
@@ -146,10 +150,15 @@ def extract_experience_file_texts(
 
     if not files:
         return []
-    if len(files) > 5:
-        raise ValueError("경험 근거 파일은 최대 5개까지 선택할 수 있습니다.")
-    if sum(len(file.content) for file in files) > 14 * 1024 * 1024:
-        raise ValueError("선택한 경험 근거 파일의 전체 크기는 14MB 이하여야 합니다.")
+    if len(files) > MAX_JOB_FILE_COUNT:
+        raise ValueError(
+            f"경험 근거 파일은 최대 {MAX_JOB_FILE_COUNT}개까지 선택할 수 있습니다."
+        )
+    if sum(len(file.content) for file in files) > MAX_JOB_FILES_TOTAL_BYTES:
+        raise ValueError(
+            "선택한 경험 근거 파일의 전체 크기는 "
+            f"{MAX_JOB_FILES_TOTAL_MIB}MiB 이하여야 합니다."
+        )
 
     extracted: list[ExtractedExperienceFile] = []
     for file in files:

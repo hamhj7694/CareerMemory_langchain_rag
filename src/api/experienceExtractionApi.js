@@ -4,8 +4,8 @@ import { createHttpAdapter } from './adapters/httpAdapter.js';
 const http = createHttpAdapter({
   baseUrl: apiConfig.baseUrl,
   // 경험 구조화는 일반 API보다 오래 걸릴 수 있어 별도 제한 시간을 사용한다.
-  // PDF·이미지 글자 추출 뒤 경험 구조화를 연속 실행하므로 충분한 처리 시간을 둔다.
-  timeoutMs: Math.max(apiConfig.timeoutMs, 180_000),
+  // 파일별 청크 요약 뒤 최종 경험 구조화를 연속 실행하므로 충분한 처리 시간을 둔다.
+  timeoutMs: Math.max(apiConfig.timeoutMs, 300_000),
 });
 
 function createRequestId() {

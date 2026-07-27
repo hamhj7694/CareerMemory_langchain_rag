@@ -67,7 +67,7 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
             <label className="mv2-file-picker">
               <span>파일 근거 추가</span>
               <input type="file" multiple accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,image/png,image/jpeg,image/webp" onChange={addFiles} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} />
-              <small>{checkingFiles ? '기존 근거와 중복 여부를 확인하고 있습니다…' : 'PDF·TXT·이미지를 최대 5개, 전체 14MB까지 선택할 수 있습니다. 이미지 글자는 로컬 OCR로 읽습니다.'}</small>
+              <small>{checkingFiles ? '기존 근거와 중복 여부를 확인하고 있습니다…' : 'PDF·TXT·이미지를 최대 5개, 파일당 25MiB·전체 100MiB까지 선택할 수 있습니다. PDF는 최대 100페이지까지 읽습니다.'}</small>
             </label>
             {files.length > 0 && <ul className="mv2-experience-intake__files">{files.map((file) => <li key={evidenceFileKey(file)}><span><strong>{file.name}</strong><small>{evidenceFileStatusLabel(file)}</small></span><button type="button" onClick={() => setFiles((current) => current.filter((item) => item !== file))} aria-label={`${file.name} 제거`}>×</button></li>)}</ul>}
             {fileError && <p className="mv2-experience-intake__file-error" role="alert">{fileError}</p>}

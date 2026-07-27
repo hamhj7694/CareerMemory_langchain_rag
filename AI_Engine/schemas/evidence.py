@@ -8,7 +8,13 @@ from typing import Annotated
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 
-from .common import Confidence, Identifier, SchemaModel, normalize_newlines
+from .common import (
+    Confidence,
+    Identifier,
+    SchemaModel,
+    normalize_newlines,
+    unique_non_empty,
+)
 
 
 class EvidenceSourceType(str, Enum):
@@ -118,8 +124,83 @@ class EvidenceCitation(SchemaModel):
         return self
 
 
+class FileEvidenceExcerpt(SchemaModel):
+    """파일 1차 분석에서 보존한 짧은 원문 인용."""
+
+    quote: str
+    page_number: Annotated[int, Field(ge=1)] | None = None
+
+    @field_validator("quote")
+    @classmethod
+    def require_quote(cls, value: str) -> str:
+        normalized = normalize_newlines(value).strip()
+        if not normalized:
+            raise ValueError("파일 분석 인용문은 비어 있을 수 없습니다.")
+        return normalized
+
+
+class FileExperienceSignal(SchemaModel):
+    """파일에서 발견한 경험 후보. 아직 최종 ExperienceDraft는 아니다."""
+
+    title: str
+    summary: str
+    details: list[str] = Field(default_factory=list)
+    excerpts: list[FileEvidenceExcerpt] = Field(default_factory=list)
+
+    @field_validator("title", "summary")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return normalize_newlines(value).strip()
+
+    @field_validator("details")
+    @classmethod
+    def normalize_details(cls, values: list[str]) -> list[str]:
+        return unique_non_empty(values)
+
+
+class FileEvidenceFact(SchemaModel):
+    """파일에서 확인한 핵심 사실과 이를 뒷받침하는 원문."""
+
+    text: str
+    quote: str
+    page_number: Annotated[int, Field(ge=1)] | None = None
+
+    @field_validator("text", "quote")
+    @classmethod
+    def require_text(cls, value: str) -> str:
+        normalized = normalize_newlines(value).strip()
+        if not normalized:
+            raise ValueError("파일 핵심 사실과 인용문은 비어 있을 수 없습니다.")
+        return normalized
+
+
+class FileEvidenceAnalysis(SchemaModel):
+    """원본 파일을 청크별로 읽은 뒤 만든 파일 단위 파생 분석."""
+
+    source_ref_id: Identifier
+    filename: str
+    summary: str
+    experience_signals: list[FileExperienceSignal] = Field(
+        default_factory=list,
+    )
+    key_facts: list[FileEvidenceFact] = Field(default_factory=list)
+    chunk_count: Annotated[int, Field(ge=1)] = 1
+    model_version: Identifier
+    prompt_version: Identifier
+    schema_version: Identifier
+
+    @field_validator("filename", "summary")
+    @classmethod
+    def normalize_analysis_text(cls, value: str) -> str:
+        return normalize_newlines(value).strip()
+
+
 __all__ = [
     "EvidenceCitation",
     "EvidenceSource",
     "EvidenceSourceType",
+    "FileEvidenceAnalysis",
+    "FileEvidenceExcerpt",
+    "FileEvidenceFact",
+    "FileExperienceSignal",
 ]

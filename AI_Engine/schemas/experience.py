@@ -16,7 +16,7 @@ from .common import (
     period_sort_key,
     unique_non_empty,
 )
-from .evidence import EvidenceCitation, EvidenceSource
+from .evidence import EvidenceCitation, EvidenceSource, FileEvidenceAnalysis
 
 
 class ExperienceExtractionInputType(str, Enum):
@@ -368,6 +368,12 @@ class ExperienceExtractionResult(SchemaModel):
         default_factory=list,
         description="Original evidence used by this extraction run",
     )
+    file_analyses: list[FileEvidenceAnalysis] = Field(
+        default_factory=list,
+        description=(
+            "Derived per-file summaries used before final experience structuring"
+        ),
+    )
     analyzed_source_ids: list[Identifier] = Field(
         default_factory=list,
         description="Original source IDs included in the successful analysis scope",
@@ -385,6 +391,18 @@ class ExperienceExtractionResult(SchemaModel):
             raise ValueError("sources에 중복 source_ref_id가 있습니다.")
 
         registered_source_ids = set(source_ids)
+        analyzed_file_source_ids = {
+            analysis.source_ref_id for analysis in self.file_analyses
+        }
+        unknown_file_source_ids = (
+            analyzed_file_source_ids - registered_source_ids
+        )
+        if unknown_file_source_ids:
+            unknown = ", ".join(sorted(unknown_file_source_ids))
+            raise ValueError(
+                "file_analyses가 sources에 등록되지 않은 파일을 참조합니다: "
+                f"{unknown}"
+            )
         referenced_source_ids = {
             source_ref_id
             for draft in self.experience_drafts

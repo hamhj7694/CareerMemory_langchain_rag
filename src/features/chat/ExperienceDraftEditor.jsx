@@ -46,12 +46,14 @@ export function ExperienceDraftEditor({ item, index, collapseKey, grouped = fals
       <div className="v2-draft-project__bar" onClick={toggleProjectCollapsed}>
         <span>프로젝트·활동</span>
         {editing ? <input aria-label={`프로젝트·활동 ${index + 1}`} value={item.project || ''} onClick={(event) => event.stopPropagation()} onChange={(event) => update('project', event.target.value)} /> : <strong>{item.project || '새 프로젝트'}</strong>}
-        {grouped && <div className="v2-draft-structure__actions" onClick={(event) => event.stopPropagation()}>{actionButtons}</div>}
         <button type="button" className="v2-draft-project__collapse" aria-label={`${item.project || '프로젝트·활동'} ${projectCollapsed ? '펼치기' : '접기'}`} aria-expanded={!projectCollapsed} onClick={(event) => { event.stopPropagation(); toggleProjectCollapsed(); }}>{projectCollapsed ? '⌄' : '⌃'}</button>
       </div>
       {!projectCollapsed && <article className="v2-draft-detail">
         {grouped && editing && <label className="v2-grouped-domain-edit">경험 분류<input aria-label={`경험 분류 ${index + 1}`} value={item.domain || ''} onChange={(event) => update('domain', event.target.value)} /></label>}
-        {editing ? <input className="v2-draft-title-input" aria-label={`경험 제목 ${index + 1}`} value={item.title || ''} onChange={(event) => update('title', event.target.value)} /> : <h3>{item.title || '제목 미입력'}</h3>}
+        <header className="v2-draft-detail__header">
+          {editing ? <input className="v2-draft-title-input" aria-label={`경험 제목 ${index + 1}`} value={item.title || ''} onChange={(event) => update('title', event.target.value)} /> : <h3>{item.title || '제목 미입력'}</h3>}
+          {grouped && <div className="v2-draft-structure__actions">{actionButtons}</div>}
+        </header>
         <div className="v2-draft-detail-grid">
           <div className="v2-draft-detail-main">
             <section><h4><span>1.</span> 핵심 요약</h4>{editing ? <textarea rows="3" value={item.summary || ''} onChange={(event) => update('summary', event.target.value)} /> : <ExperienceRichText text={item.summary} empty="정리된 요약이 없습니다." />}</section>
