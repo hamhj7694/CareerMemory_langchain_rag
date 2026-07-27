@@ -493,6 +493,7 @@ class ExperienceAI:
                     to_sequence=request.to_sequence,
                     message_ids=request.message_ids,
                     attachment_ids=request.attachment_ids,
+                    source_ref_ids=request.source_ref_ids,
                     model_version=self.model_version,
                     prompt_version=self.prompt_version,
                     schema_version=self.schema_version,
@@ -578,6 +579,15 @@ class ExperienceAI:
             missing = ", ".join(sorted(missing_message_ids))
             raise ExperienceAIInputError(
                 f"대화 메시지의 원본 근거가 전달되지 않았습니다: {missing}"
+            )
+
+        missing_source_ref_ids = (
+            set(request.source_ref_ids) - set(prepared_source_ids)
+        )
+        if missing_source_ref_ids:
+            missing = ", ".join(sorted(missing_source_ref_ids))
+            raise ExperienceAIInputError(
+                f"다시 정리할 원본 근거가 전달되지 않았습니다: {missing}"
             )
 
         return registered_sources

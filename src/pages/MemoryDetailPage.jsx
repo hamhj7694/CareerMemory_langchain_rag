@@ -11,7 +11,7 @@ import { experienceRepository } from '../features/experience/api/experienceRepos
 import { ExperienceDetailContent } from '../features/experience/components/ExperienceDetailContent.jsx';
 import { listToText, textToMarkdownLines, textToSkills } from '../features/experience/model/experienceContent.js';
 import { formatExperienceSavedDateTime } from '../features/experience/model/experienceDate.js';
-import { createEmptyExperience } from '../features/experience/model/experienceMapper.js';
+import { createEmptyExperience, toExperience } from '../features/experience/model/experienceMapper.js';
 import { useDirtyBlocker } from '../hooks/useDirtyBlocker.js';
 import '../styles/memory.css';
 
@@ -209,12 +209,13 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
 
   const applyEvidenceMetadata = (experience) => {
     if (!experience) return;
+    const normalized = toExperience(experience);
     const evidencePatch = {
-      version: experience.version,
-      evidenceIds: experience.evidenceIds,
-      sourceRefs: experience.sourceRefs,
-      evidenceCount: experience.evidenceCount,
-      factEvidenceStatus: experience.factEvidenceStatus,
+      version: normalized.version,
+      evidenceIds: normalized.evidenceIds,
+      sourceRefs: normalized.sourceRefs,
+      evidenceCount: normalized.evidenceCount,
+      factEvidenceStatus: normalized.factEvidenceStatus,
     };
     setItem((current) => ({ ...current, ...evidencePatch }));
     setForm((current) => ({ ...current, ...evidencePatch }));
@@ -225,7 +226,7 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
     setError('');
     setSourceNotice('');
     try {
-      const updated = await sourceApi.update(source.id, { text });
+      const updated = await sourceApi.update(experienceId, source.id, { text });
       setSources((current) => ({
         ...current,
         sources: current.sources.map((entry) => (entry.id === source.id ? { ...entry, ...updated, text } : entry)),
@@ -304,8 +305,9 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
     setSourceNotice('');
     try {
       const result = await sourceApi.reorganize(experienceId);
-      setSourceNotice(`'${result.experience.title}' 경험 카드로 저장했습니다.`);
-      if (onSaved) await onSaved(result.experience);
+      const reorganized = toExperience(result.experience);
+      setSourceNotice(`'${reorganized.title}' 경험 카드로 저장했습니다.`);
+      if (onSaved) await onSaved(reorganized);
       return result;
     } catch (reason) {
       setError(reason.message);
@@ -318,7 +320,10 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
   const downloadSource = async (source) => {
     setError('');
     try {
-      await downloadEvidenceFile(source, sourceApi.download);
+      await downloadEvidenceFile(
+        source,
+        (selectedSource) => sourceApi.download(experienceId, selectedSource),
+      );
     } catch (reason) {
       setError(reason.message);
     }
@@ -326,7 +331,10 @@ export function MemoryDetailPage({ experienceId: experienceIdProp, initialDraft 
   const openSource = async (source) => {
     setError('');
     try {
-      await openEvidenceFile(source, sourceApi.download);
+      await openEvidenceFile(
+        source,
+        (selectedSource) => sourceApi.download(experienceId, selectedSource),
+      );
     } catch (reason) {
       setError(reason.message);
     }

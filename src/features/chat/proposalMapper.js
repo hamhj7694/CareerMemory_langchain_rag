@@ -35,6 +35,8 @@ function toExperienceDraftView(item, index, approvedIndexes) {
     needsConfirmation: missingInformation.length > 0,
     sourceIndex: item.sourceIndex ?? index,
     approved: Boolean(item.approved || approvedIndexes.has(index)),
+    savedExperienceId: item.saved_experience_id || item.savedExperienceId || null,
+    savedAt: item.saved_at || item.savedAt || null,
   };
 }
 
@@ -151,6 +153,8 @@ export function applyProposalPanelChanges(proposal, panel) {
     field_citations: item.fieldCitations || item.field_citations || {},
     confidence: item.confidence,
     skill_groups: list(item.skillGroups || item.skill_groups),
+    saved_experience_id: item.savedExperienceId || item.saved_experience_id || undefined,
+    saved_at: item.savedAt || item.saved_at || undefined,
   }));
   return payload;
 }

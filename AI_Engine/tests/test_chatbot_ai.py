@@ -18,7 +18,7 @@ from AI_Engine.chatbot_ai import (
     ChatbotAIInputError,
     create_chatbot_agent,
 )
-from AI_Engine.schemas import ChatMessage, ChatRequest
+from AI_Engine.schemas import ChatContext, ChatContextDocument, ChatMessage, ChatRequest
 
 
 FIXED_TIME = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
@@ -303,6 +303,26 @@ class ChatbotAITests(unittest.TestCase):
         content = self.agent.invoke_input["messages"][-1]["content"]
         self.assertIn("파일을 첨부", content)
         self.assertIn("내용을 추측하지 마세요", content)
+
+    def test_attachment_context_requires_direct_file_answer(self) -> None:
+        request = self.request.model_copy(update={
+            "content": "아까 파일 안에는 어떤 내용이 있어?",
+            "context": ChatContext(attachments=[
+                ChatContextDocument(
+                    source_id="attachment-1",
+                    source_type="attachment",
+                    title="career.txt",
+                    content="결제 완료율을 18% 높였습니다.",
+                ),
+            ]),
+        })
+
+        self.chatbot.invoke(request)
+
+        context_message = self.agent.invoke_input["messages"][-2]["content"]
+        self.assertIn("[대화에 첨부된 파일 본문]", context_message)
+        self.assertIn("파일을 읽을 수 없다고 말하지 마세요", context_message)
+        self.assertIn("결제 완료율을 18% 높였습니다.", context_message)
 
     def test_stream_uses_message_stream_mode(self) -> None:
         events = list(self.chatbot.stream(self.request))

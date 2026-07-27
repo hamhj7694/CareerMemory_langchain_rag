@@ -73,4 +73,30 @@ describe('proposal mapper', () => {
     expect(payload.experiences[0].source_refs).toEqual(sources);
     expect(payload.experiences[0].missing_information).toEqual(['정확한 기간 확인']);
   });
+
+  it('preserves the confirmed experience id used for idempotent draft saving', () => {
+    const proposal = toProposalView({
+      id: 'PRP-SAVED',
+      version: 2,
+      type: 'create_experiences',
+      approved_experience_indexes: [0],
+      payload: {
+        experiences: [{
+          ...rawExperience,
+          saved_experience_id: 'EXP-SAVED',
+          saved_at: '2026-07-27T12:00:00+00:00',
+        }],
+      },
+    });
+
+    expect(proposal.experiences[0]).toMatchObject({
+      approved: true,
+      savedExperienceId: 'EXP-SAVED',
+      savedAt: '2026-07-27T12:00:00+00:00',
+    });
+    expect(applyProposalPanelChanges(proposal, proposal).experiences[0]).toMatchObject({
+      saved_experience_id: 'EXP-SAVED',
+      saved_at: '2026-07-27T12:00:00+00:00',
+    });
+  });
 });

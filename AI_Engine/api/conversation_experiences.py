@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -11,10 +12,12 @@ from sqlalchemy.orm import Session
 
 from AI_Engine.api.conversations import create_resource_id, get_conversation_or_404
 from AI_Engine.api.experience_extractions import get_experience_ai
+from AI_Engine.api.experiences import ExperienceCreate, resolve_project
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.database.connection import get_database_session
 from AI_Engine.database.models import (
     Attachment,
+    Experience,
     JobAnalysisRecord,
     Message,
     User,
@@ -39,6 +42,12 @@ class ConversationProposalUpdate(BaseModel):
     payload: dict
     approved_experience_indexes: list[int] = Field(default_factory=list)
     status: str = "edited"
+
+
+class ConversationProposalApprove(BaseModel):
+    version: int = Field(ge=1)
+    draft_id: str | None = None
+    experience_index: int | None = Field(default=None, ge=0)
 
 
 class ConversationJobRecord(BaseModel):
@@ -76,6 +85,15 @@ def _proposal_from_result(result) -> dict:
 
 def _proposal_action(proposal: dict) -> dict:
     return {"type": "experience_proposal", "proposal": proposal}
+
+
+def _replace_proposal_action(message: Message, current_action: dict, proposal: dict) -> None:
+    """다른 메시지 액션은 유지하고 경험 제안 액션만 교체한다."""
+
+    message.actions = [
+        _proposal_action(proposal) if item is current_action else item
+        for item in message.actions
+    ]
 
 
 def _unprocessed_user_messages(conversation, database: Session) -> list[Message]:
@@ -148,6 +166,10 @@ def extract_recent_chat_experiences(
     messages = _unprocessed_user_messages(conversation, database)
     if not messages:
         raise HTTPException(status_code=409, detail="새로 정리할 대화내용이 없습니다.")
+    text_messages = [
+        message for message in messages
+        if message.content.strip()
+    ]
     sources = [
         EvidenceSource(
             id=f"source-{message.id}",
@@ -156,8 +178,7 @@ def extract_recent_chat_experiences(
             message_id=message.id,
             text=message.content,
         )
-        for message in messages
-        if message.content.strip()
+        for message in text_messages
     ]
     attachment_ids = list(dict.fromkeys(
         attachment_id
@@ -207,7 +228,9 @@ def extract_recent_chat_experiences(
                 conversation_id=conversation.id,
                 from_sequence=messages[0].sequence,
                 to_sequence=messages[-1].sequence,
-                message_ids=[message.id for message in messages],
+                # 파일만 첨부한 빈 메시지는 attachment_ids가 원본 근거 계약을 맡는다.
+                # 대화 텍스트 근거가 실제로 만들어진 메시지만 message_ids에 기록한다.
+                message_ids=[message.id for message in text_messages],
                 attachment_ids=attachment_ids,
             ),
             sources=sources,
@@ -406,7 +429,7 @@ def update_chat_experience_proposal(
         "approved_experience_indexes": request.approved_experience_indexes,
         "status": request.status,
     }
-    message.actions = [_proposal_action(proposal)]
+    _replace_proposal_action(message, action, proposal)
     if current.get("status") not in {"approved", "rejected"} and request.status in {"approved", "rejected"}:
         conversation.pending_proposal_count = max(0, conversation.pending_proposal_count - 1)
     if request.status == "rejected":
@@ -427,6 +450,121 @@ def update_chat_experience_proposal(
         conversation.last_successful_extraction_sequence = max(active_sequences, default=0)
     database.commit()
     return proposal
+
+
+@router.post("/{conversation_id}/messages/{message_id}/experience-proposal/approve")
+def approve_chat_experience_proposal(
+    conversation_id: str,
+    message_id: str,
+    request: ConversationProposalApprove,
+    current_user: User = Depends(require_csrf_user),
+    database: Session = Depends(get_database_session),
+):
+    """초안 한 건의 확정 경험 생성과 제안 상태 갱신을 한 트랜잭션으로 처리한다."""
+
+    conversation = get_conversation_or_404(conversation_id, current_user.id, database)
+    message = database.get(Message, message_id)
+    if message is None or message.conversation_id != conversation_id or message.role != "assistant":
+        raise HTTPException(status_code=404, detail="경험 제안 메시지를 찾을 수 없습니다.")
+    action = next((item for item in message.actions if item.get("type") == "experience_proposal"), None)
+    if action is None:
+        raise HTTPException(status_code=404, detail="저장된 경험 제안을 찾을 수 없습니다.")
+
+    current = action["proposal"]
+    payload = deepcopy(current.get("payload") or {})
+    drafts = payload.get("experiences")
+    if not isinstance(drafts, list):
+        raise HTTPException(status_code=422, detail="저장할 경험 초안 형식이 올바르지 않습니다.")
+
+    draft_index = None
+    if request.draft_id:
+        draft_index = next(
+            (index for index, draft in enumerate(drafts) if draft.get("draft_id") == request.draft_id),
+            None,
+        )
+    if draft_index is None:
+        draft_index = request.experience_index
+    if draft_index is None or draft_index >= len(drafts):
+        raise HTTPException(status_code=404, detail="저장할 경험 초안을 찾을 수 없습니다.")
+
+    draft = drafts[draft_index]
+    saved_experience_id = draft.get("saved_experience_id")
+    approved_indexes = set(current.get("approved_experience_indexes") or [])
+
+    # 응답을 받지 못해 동일 저장을 다시 요청해도 경험을 중복 생성하지 않는다.
+    if saved_experience_id or draft_index in approved_indexes:
+        return {
+            "proposal": current,
+            "created": {"experience_id": saved_experience_id},
+            "replayed": True,
+        }
+    if current.get("version") != request.version:
+        raise HTTPException(status_code=409, detail="경험 제안이 변경되었습니다. 새로고침해 주세요.")
+    if current.get("status") == "rejected":
+        raise HTTPException(status_code=409, detail="삭제된 경험 제안은 저장할 수 없습니다.")
+
+    create_request = ExperienceCreate(
+        project_id=draft.get("project_id"),
+        domain=draft.get("domain"),
+        project=draft.get("project"),
+        title=str(draft.get("title") or "제목 없는 경험").strip(),
+        summary=str(draft.get("summary") or ""),
+        situation=str(draft.get("situation") or ""),
+        actions=list(draft.get("actions") or []),
+        results=list(draft.get("results") or []),
+        role=str(draft.get("role") or ""),
+        skills=list(draft.get("skills") or []),
+        facts=list(draft.get("facts") or []),
+        period=draft.get("period"),
+        missing_information=list(draft.get("missing_information") or []),
+        source_ids=list(draft.get("source_ref_ids") or draft.get("source_ids") or []),
+        source_refs=list(draft.get("source_refs") or []),
+    )
+    project = resolve_project(create_request, current_user, database)
+    period = create_request.period if isinstance(create_request.period, dict) else {}
+    experience = Experience(
+        id=create_resource_id("EXP"),
+        user_id=current_user.id,
+        project_id=project.id,
+        title=create_request.title,
+        summary=create_request.summary,
+        situation=create_request.situation,
+        actions=create_request.actions,
+        results=create_request.results,
+        role=create_request.role,
+        skills=create_request.skills,
+        facts=create_request.facts,
+        period=period,
+        missing_information=create_request.missing_information,
+        source_ids=create_request.source_ids,
+        source_refs=create_request.source_refs,
+        status="confirmed",
+    )
+    experience.project = project
+    database.add(experience)
+    database.flush()
+
+    saved_at = utc_now()
+    draft["saved_experience_id"] = experience.id
+    draft["saved_at"] = saved_at.isoformat()
+    approved_indexes.add(draft_index)
+    all_approved = len(approved_indexes) >= len(drafts)
+    proposal = {
+        **current,
+        "version": request.version + 1,
+        "payload": payload,
+        "approved_experience_indexes": sorted(approved_indexes),
+        "status": "approved" if all_approved else "edited",
+    }
+    _replace_proposal_action(message, action, proposal)
+    if current.get("status") not in {"approved", "rejected"} and all_approved:
+        conversation.pending_proposal_count = max(0, conversation.pending_proposal_count - 1)
+    database.commit()
+    return {
+        "proposal": proposal,
+        "created": {"experience_id": experience.id},
+        "replayed": False,
+    }
 
 
 @router.post("/{conversation_id}/job-analysis-record")

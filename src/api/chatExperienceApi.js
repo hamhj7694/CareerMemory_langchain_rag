@@ -26,4 +26,12 @@ export const chatExperienceApi = {
       body: input,
     });
   },
+
+  approveProposalExperience(conversationId, messageId, input) {
+    return http.request({
+      path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/experience-proposal/approve`,
+      method: 'POST',
+      body: input,
+    });
+  },
 };

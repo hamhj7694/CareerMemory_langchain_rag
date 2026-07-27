@@ -408,16 +408,21 @@ def resolve_project(request: ExperienceCreate, user: User, database: Session) ->
     domain = database.scalar(select(ExperienceDomain).where(
         ExperienceDomain.user_id == user.id,
         ExperienceDomain.name == domain_name,
-        ExperienceDomain.deleted_at.is_(None),
     ))
     if domain is None:
         domain = ExperienceDomain(id=resource_id("DOM"), user_id=user.id, name=domain_name)
         database.add(domain)
         database.flush()
+    elif domain.deleted_at is not None:
+        # 경험 분류 이름은 사용자별로 고유하다. 삭제된 동명 분류를 무시하고
+        # 새 행을 만들면 UNIQUE 충돌이 나므로, 구조만 다시 활성화한다.
+        # 기존에 삭제된 경험은 휴지통에 그대로 두고 자동 복구하지 않는다.
+        domain.deleted_at = None
+        domain.updated_at = utc_now()
+        domain.version += 1
     project = database.scalar(select(ExperienceProject).where(
         ExperienceProject.domain_id == domain.id,
         ExperienceProject.name == project_name,
-        ExperienceProject.deleted_at.is_(None),
     ))
     if project is None:
         project = ExperienceProject(
@@ -427,6 +432,12 @@ def resolve_project(request: ExperienceCreate, user: User, database: Session) ->
         )
         database.add(project)
         database.flush()
+    elif project.deleted_at is not None:
+        # 프로젝트·활동 역시 같은 분류 안에서 이름이 고유하므로 삭제된 구조를
+        # 재사용한다. 하위의 과거 경험은 삭제 상태를 유지한다.
+        project.deleted_at = None
+        project.updated_at = utc_now()
+        project.version += 1
     project.domain = domain
     return project
 

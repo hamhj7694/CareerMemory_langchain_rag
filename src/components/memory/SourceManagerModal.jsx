@@ -127,6 +127,10 @@ export function SourceManagerModal({
 
   const reorganize = async () => {
     if (!canReorganize) return;
+    if (!window.confirm(
+      '현재 연결된 근거를 기준으로 상세내용을 다시 정리할까요?\n\n'
+      + '기존 경험은 변경하지 않고, 별도의 “새 정리본” 경험으로 저장됩니다.',
+    )) return;
     setLocalAction('reorganizing');
     try {
       for (const source of pendingTextChanges) {
@@ -173,7 +177,7 @@ export function SourceManagerModal({
             <div>
               <button type="button" disabled={busy || Boolean(localAction)} onClick={() => setAddMode(addMode === 'text' ? '' : 'text')}>+ 텍스트 작성</button>
               <button type="button" disabled={busy || Boolean(localAction)} onClick={() => fileInputRef.current?.click()}>+ 파일 업로드</button>
-              <input ref={fileInputRef} className="sr-only" type="file" accept=".pdf,.txt,text/plain,application/pdf" multiple onChange={(event) => addFileSources([...event.target.files])} />
+              <input ref={fileInputRef} className="sr-only" type="file" accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,text/plain,application/pdf,image/png,image/jpeg,image/webp" multiple onChange={(event) => addFileSources([...event.target.files])} />
             </div>
             {addMode === 'text' && <div className="source-add-text">
               <label>근거 이름 <input value={newTextTitle} placeholder="선택 입력" onChange={(event) => setNewTextTitle(event.target.value)} /></label>

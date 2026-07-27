@@ -24,6 +24,7 @@ class ExperienceExtractionInputType(str, Enum):
 
     CONVERSATION = "conversation"
     DIRECT_INPUT = "direct_input"
+    EVIDENCE_REORGANIZATION = "evidence_reorganization"
 
 
 class ExtractionRunStatus(str, Enum):
@@ -279,6 +280,7 @@ class ExperienceExtractionRequest(SchemaModel):
     text: str | None = None
     manual_input_id: Identifier | None = None
     attachment_ids: list[Identifier] = Field(default_factory=list)
+    source_ref_ids: list[Identifier] = Field(default_factory=list)
 
     @field_validator("text")
     @classmethod
@@ -288,7 +290,7 @@ class ExperienceExtractionRequest(SchemaModel):
         normalized = normalize_newlines(value)
         return normalized if normalized.strip() else None
 
-    @field_validator("message_ids", "attachment_ids")
+    @field_validator("message_ids", "attachment_ids", "source_ref_ids")
     @classmethod
     def normalize_identifier_lists(cls, values: list[str]) -> list[str]:
         return unique_non_empty(values)
@@ -304,6 +306,14 @@ class ExperienceExtractionRequest(SchemaModel):
                 and self.to_sequence < self.from_sequence
             ):
                 raise ValueError("to_sequence는 from_sequence보다 작을 수 없습니다.")
+        elif (
+            self.input_type
+            == ExperienceExtractionInputType.EVIDENCE_REORGANIZATION.value
+        ):
+            if not self.source_ref_ids:
+                raise ValueError(
+                    "evidence_reorganization 입력에는 source_ref_ids가 필요합니다."
+                )
         elif not self.text and not self.attachment_ids:
             raise ValueError(
                 "direct_input에는 text 또는 attachment_ids가 하나 이상 필요합니다."
@@ -324,6 +334,7 @@ class ExtractionRun(SchemaModel):
     to_sequence: SequenceNumber | None = None
     message_ids: list[Identifier] = Field(default_factory=list)
     attachment_ids: list[Identifier] = Field(default_factory=list)
+    source_ref_ids: list[Identifier] = Field(default_factory=list)
 
     model_version: Identifier
     prompt_version: Identifier
@@ -334,7 +345,7 @@ class ExtractionRun(SchemaModel):
     error_code: str | None = None
     error_message: str | None = None
 
-    @field_validator("message_ids", "attachment_ids")
+    @field_validator("message_ids", "attachment_ids", "source_ref_ids")
     @classmethod
     def normalize_run_identifier_lists(cls, values: list[str]) -> list[str]:
         return unique_non_empty(values)

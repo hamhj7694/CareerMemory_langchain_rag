@@ -66,11 +66,16 @@ class CareerMemoryAI:
         user_message: Message,
         stored_history: Sequence[Message],
     ) -> PreparedChatRequest:
+        context_attachment_ids = _conversation_attachment_ids(
+            current_attachment_ids=user_message.attachment_ids,
+            stored_history=stored_history,
+        )
         attachments = self._attachment_context(
             database,
             current_user.id,
-            user_message.attachment_ids,
+            context_attachment_ids,
             query=user_message.content,
+            current_attachment_ids=set(user_message.attachment_ids),
         )
         route_request = AIRouteRequest(
             request_id=user_message.client_request_id or user_message.id,
@@ -183,6 +188,7 @@ class CareerMemoryAI:
         attachment_ids: Sequence[str],
         *,
         query: str,
+        current_attachment_ids: set[str] | None = None,
     ) -> list[ChatContextDocument]:
         if not attachment_ids:
             return []
@@ -205,6 +211,7 @@ class CareerMemoryAI:
 
         result: list[ChatContextDocument] = []
         query_terms = _query_terms(query)
+        current_ids = current_attachment_ids or set()
         for attachment_id in attachment_ids:
             attachment = by_id[attachment_id]
             chunks = split_text_chunks(attachment.extracted_text)
@@ -232,6 +239,11 @@ class CareerMemoryAI:
                         "end_offset": end,
                         "mime_type": attachment.mime_type,
                         "content_hash": attachment.content_hash,
+                        "attachment_scope": (
+                            "current_message"
+                            if attachment.id in current_ids
+                            else "conversation_history"
+                        ),
                     },
                 ))
         return result
@@ -260,6 +272,33 @@ def _routing_attachment_context(
         "\n\n".join(previews),
         budget=2_500,
     )
+
+
+def _conversation_attachment_ids(
+    *,
+    current_attachment_ids: Sequence[str],
+    stored_history: Sequence[Message],
+    limit: int = 5,
+) -> list[str]:
+    """현재 파일을 우선하고 최근 대화의 첨부를 이어지는 질문 문맥에 포함한다."""
+
+    selected: list[str] = []
+
+    def append_unique(attachment_id: str) -> None:
+        normalized = attachment_id.strip()
+        if normalized and normalized not in selected and len(selected) < limit:
+            selected.append(normalized)
+
+    for attachment_id in current_attachment_ids:
+        append_unique(attachment_id)
+    for message in reversed(stored_history):
+        if message.role != "user":
+            continue
+        for attachment_id in reversed(message.attachment_ids):
+            append_unique(attachment_id)
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def _request_type(intent: str) -> AIRequestType:

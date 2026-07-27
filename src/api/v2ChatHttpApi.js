@@ -11,6 +11,14 @@ const http = createHttpAdapter({
   timeoutMs: apiConfig.timeoutMs,
 });
 
+// 경험 구조화는 여러 대화와 첨부 파일을 함께 분석하므로 일반 CRUD보다 오래 걸릴 수 있다.
+// 직접 입력 경험정리 API와 동일하게 최소 3분을 보장해 30초 기본 제한으로 인한
+// 간헐적인 클라이언트 중단을 방지한다.
+const aiHttp = createHttpAdapter({
+  baseUrl: apiConfig.baseUrl,
+  timeoutMs: Math.max(apiConfig.timeoutMs, 180_000),
+});
+
 // 2. 요청 UUID 생성
 // 같은 사용자 동작을 수동 재시도할 때는 호출부에서 기존 UUID를 다시 전달할 수 있다.
 function createRequestId() {
@@ -248,7 +256,7 @@ export function getConversationExtractionStatus(conversationId) {
 
 // 11. 최근 사용자 대화를 기존 ExperienceAI로 분석해 복원 가능한 제안 카드를 만든다.
 export function extractConversationExperiences(conversationId, input = {}) {
-  return http.request({
+  return aiHttp.request({
     path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/experience-extractions`,
     method: 'POST',
     body: {

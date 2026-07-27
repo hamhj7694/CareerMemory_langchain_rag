@@ -4,7 +4,6 @@ import { ChatComposer, ConversationSidebar, MessageThread } from '../features/ch
 import { applyProposalPanelChanges, toProposalView } from '../features/chat/proposalMapper.js';
 import { toEmbeddedProposalView, toUiMessage } from '../features/chat/chatMessageMapper.js';
 import { chatExperienceApi, experienceTrashApi, jobApi, v2ChatApi } from '../api/index.js';
-import { markProposalExperienceSaved, saveProposalExperience } from '../features/experience/api/experienceProposalService.js';
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
 import '../styles/v2-chat.css';
 
@@ -27,6 +26,7 @@ export function ChatPage({ onSend }) {
   const [extractionStatus, setExtractionStatus] = useState(null);
   const [notice, setNotice] = useState('');
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const extractionRequestInFlight = useRef(false);
 
   const openEvidence = (evidence) => setNotice(`원본 근거 ‘${evidence.label}’가 이 답변과 연결되어 있습니다.`);
 
@@ -257,7 +257,8 @@ export function ChatPage({ onSend }) {
 
   const start = ({ prompt }) => { setText(prompt); };
   const extractRecentConversation = async () => {
-    if (!conversationId.current || extracting || busy || !extractionStatus?.unprocessed_message_count) return;
+    if (!conversationId.current || extractionRequestInFlight.current || extracting || busy || !extractionStatus?.unprocessed_message_count) return;
+    extractionRequestInFlight.current = true;
     setExtracting(true);
     setNotice('');
     try {
@@ -274,12 +275,17 @@ export function ChatPage({ onSend }) {
         } : null);
       setMessages((current) => [...current, resultMessage]);
       if (proposal) setProposals((current) => ({ ...current, [proposal.id]: proposal }));
-      setNotice(`최근 대화 ${result.run.message_ids.length}개를 경험 초안으로 정리했습니다. 저장 전 내용을 확인해 주세요.`);
+      const processedMessageCount = result.proposal?.analysis_scope?.message_count
+        ?? result.run?.message_ids?.length
+        ?? extractionStatus?.unprocessed_message_count
+        ?? 0;
+      setNotice(`최근 대화 ${processedMessageCount}개를 경험 초안으로 정리했습니다. 저장 전 내용을 확인해 주세요.`);
       await Promise.all([refreshConversations(), refreshExtractionStatus()]);
     } catch (error) {
       setNotice(error?.message ?? '최근 대화를 경험으로 정리하지 못했습니다.');
       await refreshExtractionStatus();
     } finally {
+      extractionRequestInFlight.current = false;
       setExtracting(false);
     }
   };
@@ -310,28 +316,23 @@ export function ChatPage({ onSend }) {
       const index = draftIndex >= 0 ? draftIndex : (proposal.selection?.experience_indexes?.[0] ?? 0);
       const item = proposal.experiences[index];
       if (!item || item.approved) return proposal;
-      const saved = await saveProposalExperience(item);
-      const marked = markProposalExperienceSaved(proposal, index, saved);
-      const approvedIndexes = marked.experiences
-        .map((entry, entryIndex) => entry.approved ? entryIndex : null)
-        .filter((entryIndex) => entryIndex !== null);
-      const updated = await chatExperienceApi.updateProposal(
+      const result = await chatExperienceApi.approveProposalExperience(
         proposal.conversationId,
         proposal.chatMessageId,
         {
           version: proposal.version,
-          payload: applyProposalPanelChanges(proposal, marked),
-          approvedExperienceIndexes: approvedIndexes,
-          status: approvedIndexes.length === marked.experiences.length ? 'approved' : 'edited',
+          draftId: item.draft_id,
+          experienceIndex: index,
         },
       );
       const nextProposal = {
-        ...toProposalView(updated),
+        ...toProposalView(result.proposal),
         chatMessageId: proposal.chatMessageId,
         conversationId: proposal.conversationId,
       };
       setProposals((current) => ({ ...current, [nextProposal.id]: nextProposal }));
-      setNotice(approvedIndexes.length === marked.experiences.length
+      const approvedCount = nextProposal.experiences.filter((entry) => entry.approved).length;
+      setNotice(approvedCount === nextProposal.experiences.length
         ? '경험으로 확정해 저장했습니다.'
         : '선택한 경험을 저장했습니다. 다른 초안도 계속 검토할 수 있습니다.');
       return nextProposal;

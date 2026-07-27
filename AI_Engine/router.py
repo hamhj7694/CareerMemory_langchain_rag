@@ -19,6 +19,7 @@ from AI_Engine.api import (
     conversation_experiences_router,
     experience_extractions_router,
     experiences_router,
+    experience_sources_router,
     experience_draft_trash_router,
     jobs_router,
 )
@@ -82,6 +83,7 @@ app.include_router(attachments_router)
 app.include_router(conversation_experiences_router)
 app.include_router(experience_extractions_router)
 app.include_router(experiences_router)
+app.include_router(experience_sources_router)
 app.include_router(experience_draft_trash_router)
 app.include_router(jobs_router)
 app.include_router(auth_router)

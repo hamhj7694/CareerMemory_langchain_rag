@@ -272,6 +272,47 @@ class ConversationApiTests(unittest.TestCase):
         self.assertIn("18%", context.attachments[0].content)
         self.assertGreater(context.token_usage.estimated_input_tokens, 0)
 
+    def test_previous_message_attachment_reaches_followup_question_context(self) -> None:
+        attachment = self.client.post(
+            "/api/v2/attachments",
+            files={
+                "file": (
+                    "career-history.txt",
+                    "운영 대시보드로 보고서 작성 시간을 4시간에서 1시간으로 줄였습니다.".encode("utf-8"),
+                    "text/plain",
+                )
+            },
+        ).json()
+        conversation = self.create_conversation().json()
+        first = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "이 파일 안에 내 경험이 적혀 있어.",
+                "intent": "auto",
+                "attachment_ids": [attachment["id"]],
+                "client_request_id": str(uuid4()),
+            },
+        )
+        followup = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "아까 파일 안에는 어떤 내용이 있어?",
+                "intent": "auto",
+                "attachment_ids": [],
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(followup.status_code, 201)
+        followup_context = self.chatbot.requests[1].context
+        self.assertEqual(followup_context.attachments[0].source_id, attachment["id"])
+        self.assertEqual(
+            followup_context.attachments[0].metadata["attachment_scope"],
+            "conversation_history",
+        )
+        self.assertIn("4시간에서 1시간", followup_context.attachments[0].content)
+
     def test_auto_message_with_attachment_only_chats_until_extract_button(self) -> None:
         upload = self.client.post(
             "/api/v2/attachments",
@@ -311,6 +352,73 @@ class ConversationApiTests(unittest.TestCase):
         ).json()
         self.assertEqual(extraction_status["unprocessed_message_count"], 1)
         self.assertEqual(extraction_status["unprocessed_attachment_count"], 1)
+
+    def test_file_only_chat_message_is_extracted_as_attachment_evidence(self) -> None:
+        attachment = self.client.post(
+            "/api/v2/attachments",
+            files={
+                "file": (
+                    "file-only-experience.txt",
+                    "장바구니 결제 완료율을 14% 높였습니다.".encode("utf-8"),
+                    "text/plain",
+                )
+            },
+        ).json()
+        conversation = self.create_conversation().json()
+        sent = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "",
+                "intent": "auto",
+                "attachment_ids": [attachment["id"]],
+                "client_request_id": str(uuid4()),
+            },
+        )
+        file_message_id = sent.json()["request_message_id"]
+        captured = {}
+        draft = SimpleNamespace(model_dump=lambda mode: {
+            "draft_id": "file-only-draft",
+            "domain": {"name": "서비스 기획"},
+            "project": {"name": "결제 개선"},
+            "title": "결제 완료율 개선",
+            "summary": "결제 완료율을 높였습니다.",
+            "source_ref_ids": [f"source-{attachment['id']}"],
+        })
+        run = SimpleNamespace(
+            message_ids=[],
+            model_dump=lambda mode: {
+                "id": "file-only-run",
+                "message_ids": [],
+                "attachment_ids": [attachment["id"]],
+            },
+        )
+
+        def organize(request, sources):
+            captured["request"] = request
+            captured["sources"] = sources
+            return SimpleNamespace(
+                experience_drafts=[draft],
+                sources=sources,
+                run=run,
+            )
+
+        app.dependency_overrides[get_experience_ai] = lambda: SimpleNamespace(
+            organize=organize,
+        )
+        try:
+            extracted = self.client.post(
+                f"/api/v2/conversations/{conversation['id']}/experience-extractions",
+                json={"client_request_id": str(uuid4())},
+            )
+        finally:
+            app.dependency_overrides.pop(get_experience_ai, None)
+
+        self.assertEqual(extracted.status_code, 200)
+        self.assertNotIn(file_message_id, captured["request"].message_ids)
+        self.assertEqual(captured["request"].attachment_ids, [attachment["id"]])
+        self.assertEqual(len(captured["sources"]), 1)
+        self.assertEqual(captured["sources"][0].attachment_id, attachment["id"])
+        self.assertIn("14%", captured["sources"][0].text)
 
     def test_message_retry_returns_existing_answer(self) -> None:
         conversation = self.create_conversation().json()
@@ -640,6 +748,126 @@ class ConversationApiTests(unittest.TestCase):
             f"/api/v2/conversations/{conversation['id']}/experience-extraction-status"
         ).json()
         self.assertEqual(after["unprocessed_message_count"], 0)
+
+    def test_chat_proposal_approval_is_atomic_and_idempotent(self) -> None:
+        conversation = self.create_conversation().json()
+        with self.session_factory() as database:
+            deleted_domain = models.ExperienceDomain(
+                id="DOM-deleted-service-planning",
+                user_id=self.current_user.id,
+                name="서비스 기획",
+                deleted_at=datetime.now(timezone.utc),
+            )
+            deleted_project = models.ExperienceProject(
+                id="PROJ-deleted-payment",
+                user_id=self.current_user.id,
+                domain_id=deleted_domain.id,
+                name="결제 개선",
+                organization="",
+                deleted_at=datetime.now(timezone.utc),
+            )
+            database.add_all([deleted_domain, deleted_project])
+            database.commit()
+        self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "결제 단계를 줄여 완료율을 높였습니다.",
+                "intent": "auto",
+                "client_request_id": str(uuid4()),
+            },
+        )
+        first_draft = SimpleNamespace(model_dump=lambda mode: {
+            "draft_id": "atomic-draft-1",
+            "domain": {"name": "서비스 기획"},
+            "project": {"name": "결제 개선"},
+            "title": "결제 완료율 개선",
+            "summary": "결제 단계를 줄였습니다.",
+            "situation": "결제 이탈이 많았습니다.",
+            "actions": ["결제 단계를 개선했습니다."],
+            "results": ["완료율이 높아졌습니다."],
+            "role": "서비스 기획자",
+            "skills": ["데이터 분석"],
+            "facts": ["결제 완료율 향상"],
+            "source_ref_ids": [],
+        })
+        second_draft = SimpleNamespace(model_dump=lambda mode: {
+            "draft_id": "atomic-draft-2",
+            "domain": {"name": "서비스 기획"},
+            "project": {"name": "운영 대시보드"},
+            "title": "보고서 작성시간 단축",
+            "summary": "운영 지표를 통합했습니다.",
+            "source_ref_ids": [],
+        })
+        run = SimpleNamespace(
+            message_ids=[],
+            model_dump=lambda mode: {"id": "atomic-run-1", "message_ids": []},
+        )
+        fake_ai = SimpleNamespace(organize=lambda request, sources: SimpleNamespace(
+            experience_drafts=[first_draft, second_draft],
+            sources=[],
+            run=run,
+        ))
+        app.dependency_overrides[get_experience_ai] = lambda: fake_ai
+        try:
+            extracted = self.client.post(
+                f"/api/v2/conversations/{conversation['id']}/experience-extractions",
+                json={"client_request_id": str(uuid4())},
+            ).json()
+        finally:
+            app.dependency_overrides.pop(get_experience_ai, None)
+
+        message_id = extracted["message"]["id"]
+        proposal = extracted["proposal"]
+        approval_input = {
+            "version": proposal["version"],
+            "draft_id": "atomic-draft-1",
+            "experience_index": 0,
+        }
+        approved = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-proposal/approve",
+            json=approval_input,
+        )
+        second_approval = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-proposal/approve",
+            json={
+                "version": approved.json()["proposal"]["version"],
+                "draft_id": "atomic-draft-2",
+                "experience_index": 1,
+            },
+        )
+        replayed = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-proposal/approve",
+            json=approval_input,
+        )
+
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["proposal"]["status"], "edited")
+        self.assertEqual(approved.json()["proposal"]["approved_experience_indexes"], [0])
+        self.assertFalse(approved.json()["replayed"])
+        self.assertEqual(second_approval.status_code, 200)
+        self.assertEqual(second_approval.json()["proposal"]["status"], "approved")
+        self.assertEqual(
+            second_approval.json()["proposal"]["approved_experience_indexes"],
+            [0, 1],
+        )
+        self.assertEqual(replayed.status_code, 200)
+        self.assertTrue(replayed.json()["replayed"])
+        self.assertEqual(
+            replayed.json()["created"]["experience_id"],
+            approved.json()["created"]["experience_id"],
+        )
+        with self.session_factory() as database:
+            self.assertEqual(database.query(models.Experience).count(), 2)
+            restored_domain = database.get(
+                models.ExperienceDomain,
+                "DOM-deleted-service-planning",
+            )
+            restored_project = database.get(
+                models.ExperienceProject,
+                "PROJ-deleted-payment",
+            )
+            self.assertIsNone(restored_domain.deleted_at)
+            self.assertIsNone(restored_project.deleted_at)
 
     def test_unknown_conversation_returns_not_found(self) -> None:
         response = self.client.get(
