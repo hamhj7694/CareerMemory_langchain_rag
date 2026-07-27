@@ -17,7 +17,8 @@ Career Memory RAG는 사용자와의 대화, 직접 입력한 글, 첨부 파일
 - 대화와 PDF/TXT/이미지 첨부 파일 누적
 - 저장된 경험과 원본 근거를 RAG로 검색하여 답변
 - 오래된 대화 요약 메모리와 토큰 예산 관리
-- 사용자의 실행 의도를 일반 대화, 경험 정리, 공고 분석으로 자동 분류
+- 파일 첨부 시 일반 대화를 유지하고, 사용자가 `대화내용으로 경험 정리하기`를
+  실행한 경우에만 누적 대화와 파일을 경험 초안으로 변환
 
 ### 경험 관리
 
@@ -70,7 +71,6 @@ Career Memory RAG는 사용자와의 대화, 직접 입력한 글, 첨부 파일
 - 경험정리 Prompt: [experience_ai.py](AI_Engine/experience_ai.py)의 `EXPERIENCE_SYSTEM_PROMPT`
 - 공고 요구사항 Prompt: [job_analysis_ai.py](AI_Engine/job_analysis_ai.py)의 `JOB_REQUIREMENT_SYSTEM_PROMPT`
 - 요구사항별 경험 매칭 Prompt: [job_analysis_ai.py](AI_Engine/job_analysis_ai.py)의 `JOB_MATCH_SYSTEM_PROMPT`
-- 자동 의도 분류 Prompt: [intent_classifier.py](AI_Engine/intent_classifier.py)의 `AUTO_INTENT_PROMPT`
 - 대화 요약 Prompt: [conversation_memory.py](AI_Engine/conversation_memory.py)의 `CONVERSATION_MEMORY_SYSTEM_PROMPT`
 
 ### Prompt 설계 의도
@@ -79,7 +79,7 @@ Career Memory RAG는 사용자와의 대화, 직접 입력한 글, 첨부 파일
 
 - `temperature=0.3`으로 조정하여 안정성을 유지하면서 자연스러운 대화 유도
 - 첫 대화에서 서비스 설명과 시작 선택지를 능동적으로 제시
-- 단어 포함 여부가 아니라 요청 문맥으로 AI 기능 실행 여부 판단
+- 경험 구조화는 대화 중 자동 실행하지 않고 사용자의 명시적인 버튼으로만 실행
 - 여러 경험이 섞인 긴 글과 파일을 각각의 경험 초안으로 분리
 - 모르는 정보는 추측하지 않고 빈 값 또는 `missing_information`으로 반환
 - 원본 근거 ID를 유지하여 결과가 어떤 대화·텍스트·파일에서 나왔는지 추적
@@ -119,7 +119,7 @@ Pydantic Schema 검증
 
 ### Prompt
 
-대화, 경험 정리, 공고 분석, 자동 라우팅, 장기 메모리는 각각 독립 Prompt를 사용합니다. Prompt에는 공통적으로 `role`, `task`, `context`, `constraint`, `format`을 구분하여 책임과 출력 범위를 명확히 했습니다.
+대화, 경험 정리, 공고 분석, 장기 메모리는 각각 독립 Prompt를 사용합니다. Prompt에는 공통적으로 `role`, `task`, `context`, `constraint`, `format`을 구분하여 책임과 출력 범위를 명확히 했습니다.
 
 ### Retriever
 
@@ -190,20 +190,17 @@ npm.cmd run dev
 
 > 이미지와 스캔 PDF의 OCR이 필요하면 실행 PC에 Tesseract OCR과 `kor`, `eng` 언어 모델이 설치되어 있어야 합니다.
 
-## 5. 검증 명령
+## 5. 제출 브랜치 검증 명령
 
 ```powershell
 npm.cmd run lint
-npm.cmd test
 npm.cmd run build
-.\.venv\Scripts\python.exe -m unittest discover -s AI_Engine\tests -v
+.\.venv\Scripts\python.exe -m compileall -q AI_Engine
 ```
 
-## 6. 주요 문서
+## 6. 주요 구현 위치
 
-- 제품 요구사항: [PRD.md](PRD.md)
-- AI 데이터 흐름: [Data_Flow_Summary.md](Data_Flow_Summary.md)
-- AI 작업 매핑: [AI_ENGINE_WORK_MAP.md](AI_Engine/AI_ENGINE_WORK_MAP.md)
-- AI·프론트엔드 계약: [AI_FRONTEND_CONTRACT_MAPPING.md](AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md)
-- 스키마 개선 기록: [DATA_SCHEMA_AUDIT_improvement.md](docs/DATA_SCHEMA_AUDIT_improvement.md)
-- 작업 목록: [TODO.md](docs/TODO.md)
+- 프론트엔드: [src](src/)
+- 백엔드·AI 엔진: [AI_Engine](AI_Engine/)
+- 공통 AI 스키마: [AI_Engine/schemas](AI_Engine/schemas/)
+- 환경 변수 예시: [.env.example](.env.example)
