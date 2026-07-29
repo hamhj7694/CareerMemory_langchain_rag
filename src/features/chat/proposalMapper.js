@@ -134,27 +134,36 @@ export function applyProposalPanelChanges(proposal, panel) {
   payload.domain = { ...(payload.domain || {}), name: panel.domain };
   payload.project = { ...(payload.project || {}), name: panel.project };
   const panels = list(panel.experiences).length ? panel.experiences : [panel];
-  payload.experiences = panels.map((item, index) => ({
-    ...(payload.experiences?.[index] || {}),
-    draft_id: item.draft_id,
-    title: item.title,
-    domain: { ...(payload.experiences?.[index]?.domain || {}), name: item.domain },
-    project: { ...(payload.experiences?.[index]?.project || {}), name: item.project },
-    role: item.role,
-    summary: item.summary,
-    situation: item.situation,
-    actions: list(item.actions),
-    results: list(item.results),
-    facts: list(item.facts),
-    skills: list(item.skills),
-    missing_information: list(item.missingInformation || item.missing_information),
-    source_ref_ids: list(item.source_ref_ids),
-    source_refs: list(item.source_refs),
-    field_citations: item.fieldCitations || item.field_citations || {},
-    confidence: item.confidence,
-    skill_groups: list(item.skillGroups || item.skill_groups),
-    saved_experience_id: item.savedExperienceId || item.saved_experience_id || undefined,
-    saved_at: item.savedAt || item.saved_at || undefined,
-  }));
+  const sourceExperiences = list(payload.experiences);
+  const sourceByDraftId = new Map(
+    sourceExperiences
+      .filter((item) => item?.draft_id || item?.draftId)
+      .map((item) => [item.draft_id || item.draftId, item]),
+  );
+  payload.experiences = panels.map((item, index) => {
+    const source = sourceByDraftId.get(item.draft_id || item.draftId) || sourceExperiences[index] || {};
+    return {
+      ...source,
+      draft_id: item.draft_id,
+      title: item.title,
+      domain: { ...(source.domain || {}), name: item.domain },
+      project: { ...(source.project || {}), name: item.project },
+      role: item.role,
+      summary: item.summary,
+      situation: item.situation,
+      actions: list(item.actions),
+      results: list(item.results),
+      facts: list(item.facts),
+      skills: list(item.skills),
+      missing_information: list(item.missingInformation || item.missing_information),
+      source_ref_ids: list(item.source_ref_ids),
+      source_refs: list(item.source_refs),
+      field_citations: item.fieldCitations || item.field_citations || {},
+      confidence: item.confidence,
+      skill_groups: list(item.skillGroups || item.skill_groups),
+      saved_experience_id: item.savedExperienceId || item.saved_experience_id || undefined,
+      saved_at: item.savedAt || item.saved_at || undefined,
+    };
+  });
   return payload;
 }

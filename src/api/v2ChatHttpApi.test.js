@@ -137,7 +137,7 @@ describe('실제 대화 HTTP API', () => {
     ]);
     expect(events[1].delta).toBe('안녕');
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/api/v2/conversations/CONV-001/messages/stream',
+      'http://localhost:5173/api/v2/conversations/CONV-001/messages/stream',
       expect.objectContaining({
         method: 'POST',
         headers: {

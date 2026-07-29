@@ -3,23 +3,21 @@ import { ExperienceRichList, ExperienceRichText } from '../experience/components
 import { listToText, textToMarkdownLines, textToSkills } from '../experience/model/experienceContent.js';
 import { ProposalEvidenceDialog } from './ProposalEvidenceDialog.jsx';
 import { splitProposalSources } from './proposalMapper.js';
-
-const collapsedDrafts = new Map();
-const collapsedProjects = new Map();
+import { readDraftCollapseState, writeDraftCollapseState } from './draftCollapseState.js';
 
 export function ExperienceDraftEditor({ item, index, collapseKey, grouped = false, editing, approved, saving, onUpdate, onEdit, onSave, onCancel, onDelete, onApprove }) {
-  const [collapsed, setCollapsed] = useState(() => collapsedDrafts.get(collapseKey) ?? false);
+  const [collapsed, setCollapsed] = useState(() => readDraftCollapseState(collapseKey));
   const projectCollapseKey = `${collapseKey}:project`;
-  const [projectCollapsed, setProjectCollapsed] = useState(() => collapsedProjects.get(projectCollapseKey) ?? false);
+  const [projectCollapsed, setProjectCollapsed] = useState(() => readDraftCollapseState(projectCollapseKey));
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const toggleCollapsed = () => setCollapsed((value) => {
     const next = !value;
-    collapsedDrafts.set(collapseKey, next);
+    writeDraftCollapseState(collapseKey, next);
     return next;
   });
   const toggleProjectCollapsed = () => setProjectCollapsed((value) => {
     const next = !value;
-    collapsedProjects.set(projectCollapseKey, next);
+    writeDraftCollapseState(projectCollapseKey, next);
     return next;
   });
   const update = (key, value) => onUpdate(index, key, value);

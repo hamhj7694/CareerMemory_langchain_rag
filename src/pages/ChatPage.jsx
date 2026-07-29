@@ -26,7 +26,9 @@ export function ChatPage({ onSend }) {
   const [extractionStatus, setExtractionStatus] = useState(null);
   const [notice, setNotice] = useState('');
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [restoring, setRestoring] = useState(Boolean(routeConversationId));
   const extractionRequestInFlight = useRef(false);
+  const initialScrollPending = useRef(Boolean(routeConversationId));
 
   const openEvidence = (evidence) => setNotice(`원본 근거 ‘${evidence.label}’가 이 답변과 연결되어 있습니다.`);
 
@@ -76,15 +78,30 @@ export function ChatPage({ onSend }) {
   }, [routeConversationId, navigate]);
 
   useEffect(() => {
-    const area = scrollArea.current;
-    if (area) area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
-  }, [messages, busy]);
+    if (restoring) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const area = scrollArea.current;
+      if (!area) return;
+      area.scrollTo({
+        top: area.scrollHeight,
+        behavior: initialScrollPending.current ? 'auto' : 'smooth',
+      });
+      initialScrollPending.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, busy, restoring]);
 
   useEffect(() => {
     conversationId.current = routeConversationId ?? null;
-    if (!routeConversationId) return undefined;
+    if (!routeConversationId) {
+      setRestoring(false);
+      initialScrollPending.current = false;
+      return undefined;
+    }
     let active = true;
     const restore = async () => {
+      initialScrollPending.current = true;
+      setRestoring(true);
       setBusy(true);
       setNotice('');
       try {
@@ -92,7 +109,6 @@ export function ChatPage({ onSend }) {
         let result = await v2ChatApi.listMessages(routeConversationId);
         if (!active) return;
         const restoredMessages = result.items.map(toUiMessage);
-        setMessages(restoredMessages);
         const proposalIds = restoredMessages
           .flatMap((message) => message.proposalIds || [])
           .reverse();
@@ -102,16 +118,27 @@ export function ChatPage({ onSend }) {
             .filter((proposal) => proposal.status !== 'rejected')
             .map((proposal) => [proposal.id, proposal]),
         );
-        for (const proposalId of proposalIds) {
-          if (restoredProposals[proposalId]) continue;
-          const candidate = await v2ChatApi.getProposal(proposalId);
-          if (['pending', 'edited'].includes(candidate.status) || (candidate.status === 'approved' && candidate.type === 'create_experiences')) {
-            restoredProposals[proposalId] = toProposalView(candidate);
+        const missingProposalIds = [...new Set(
+          proposalIds.filter((proposalId) => !restoredProposals[proposalId]),
+        )];
+        const candidates = await Promise.all(missingProposalIds.map(async (proposalId) => {
+          try {
+            return await v2ChatApi.getProposal(proposalId);
+          } catch {
+            return null;
           }
-        }
+        }));
+        candidates.forEach((candidate, index) => {
+          if (!candidate) return;
+          if (['pending', 'edited'].includes(candidate.status) || (candidate.status === 'approved' && candidate.type === 'create_experiences')) {
+            restoredProposals[missingProposalIds[index]] = toProposalView(candidate);
+          }
+        });
         if (active) {
+          setMessages(restoredMessages);
           setProposals(restoredProposals);
           await refreshExtractionStatus(routeConversationId);
+          setRestoring(false);
         }
 
         // 다른 화면에 있는 동안 생성 중이던 답변이 있다면
@@ -138,7 +165,10 @@ export function ChatPage({ onSend }) {
           }
         }
       } finally {
-        if (active) setBusy(false);
+        if (active) {
+          setBusy(false);
+          setRestoring(false);
+        }
       }
       refreshConversations();
     };
@@ -508,6 +538,8 @@ export function ChatPage({ onSend }) {
 
   const startNewConversation = () => {
     conversationId.current = null;
+    initialScrollPending.current = false;
+    setRestoring(false);
     setMessages([]); setProposals({}); setNotice(''); setExtractionStatus(null);
     if (routeConversationId) {
       keepNewConversationOpen.current = true;
@@ -521,6 +553,9 @@ export function ChatPage({ onSend }) {
       latestMessage?.role === 'assistant'
       && ['completed', 'failed'].includes(latestMessage.status)
     )
+  );
+  const changingConversation = Boolean(
+    routeConversationId && conversationId.current !== routeConversationId,
   );
   const renameConversation = async (conversation) => {
     const title = window.prompt('대화 제목 변경', conversation.title || '새 대화');
@@ -560,7 +595,9 @@ export function ChatPage({ onSend }) {
         </div>
       </header>
       <div className="v2-conversation__scroll" ref={scrollArea}>
-        <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />
+        {restoring || changingConversation
+          ? <p className="v2-conversation__loading" role="status">최근 대화를 불러오는 중입니다.</p>
+          : <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />}
       </div>
       <div className="v2-analysis-progress">
         <AnalysisProgress

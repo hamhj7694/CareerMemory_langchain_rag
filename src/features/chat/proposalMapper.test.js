@@ -99,4 +99,44 @@ describe('proposal mapper', () => {
       saved_at: '2026-07-27T12:00:00+00:00',
     });
   });
+
+  it('keeps each draft metadata attached by draft id after editing or reordering', () => {
+    const secondExperience = {
+      ...rawExperience,
+      draft_id: 'DRF-2',
+      title: '두 번째 경험',
+      domain: { id: 'DOM-2', name: '교육 경험' },
+      project: { id: 'PROJ-2', name: '분석 교육' },
+      source_ref_ids: ['SRC-SECOND'],
+      source_refs: [{ id: 'SRC-SECOND', source_type: 'message_text', text: '두 번째 근거' }],
+    };
+    const proposal = toProposalView({
+      id: 'PRP-REORDER',
+      version: 1,
+      type: 'create_experiences',
+      payload: { experiences: [rawExperience, secondExperience] },
+    });
+    const reorderedPanel = {
+      ...proposal,
+      experiences: [
+        { ...proposal.experiences[1], title: '수정한 두 번째 경험' },
+        { ...proposal.experiences[0], title: '수정한 첫 번째 경험' },
+      ],
+    };
+
+    const payload = applyProposalPanelChanges(proposal, reorderedPanel);
+
+    expect(payload.experiences[0]).toMatchObject({
+      draft_id: 'DRF-2',
+      title: '수정한 두 번째 경험',
+      source_ref_ids: ['SRC-SECOND'],
+    });
+    expect(payload.experiences[0].domain).toMatchObject({ id: 'DOM-2', name: '교육 경험' });
+    expect(payload.experiences[1]).toMatchObject({
+      draft_id: 'DRF-1',
+      title: '수정한 첫 번째 경험',
+      source_ref_ids: ['SRC-MSG-1', 'SRC-FILE-1'],
+    });
+    expect(payload.experiences[1].domain).toMatchObject({ id: 'DOM-1', name: '직장 경험' });
+  });
 });

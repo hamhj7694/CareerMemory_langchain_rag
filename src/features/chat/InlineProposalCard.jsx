@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ExperienceDraftEditor } from './ExperienceDraftEditor.jsx';
+import { readDraftCollapseState, writeDraftCollapseState } from './draftCollapseState.js';
 
 export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRemainingExperiences, onChange, onRemoveExperience, onEditingChange, showBatchActions = false }) {
   const [editing, setEditing] = useState(false);
@@ -7,10 +8,11 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
   const [draft, setDraft] = useState(() => proposal ? structuredClone(proposal) : {});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [collapsedDomains, setCollapsedDomains] = useState(() => new Set());
+  const [domainCollapseOverrides, setDomainCollapseOverrides] = useState(() => new Map());
 
   if (!proposal) return null;
-  const activeDraft = draft && typeof draft === 'object' ? draft : proposal;
+  const hasLocalEdits = editing || editingIndex !== null;
+  const activeDraft = hasLocalEdits && draft && typeof draft === 'object' ? draft : proposal;
   const beginEditing = () => { setDraft(structuredClone(proposal)); setError(''); setEditing(true); onEditingChange?.(true); };
   const update = (key, value) => setDraft((current) => ({ ...(current ?? proposal), [key]: value }));
   const updateExperience = (index, key, value) => setDraft((current) => {
@@ -21,7 +23,13 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
   const beginExperienceEditing = (index) => { setDraft(structuredClone(activeDraft)); setEditingIndex(index); setError(''); onEditingChange?.(true); };
   const saveExperience = async () => {
     setSaving(true); setError('');
-    try { const updated = await onChange(activeDraft); setDraft(updated); setEditingIndex(null); onEditingChange?.(false); return updated; }
+    try {
+      const updated = await onChange(activeDraft);
+      if (updated) setDraft(updated);
+      setEditingIndex(null);
+      onEditingChange?.(false);
+      return updated;
+    }
     catch (reason) { setError(reason?.message ?? '초안을 저장하지 못했습니다.'); return null; }
     finally { setSaving(false); }
   };
@@ -123,7 +131,13 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
   const experienceDrafts = Array.isArray(activeDraft.experiences) ? activeDraft.experiences : [activeDraft];
   const pendingExperienceCount = experienceDrafts.filter((item) => !item.approved).length;
   const domainGroups = experienceDrafts.reduce((groups, item, index) => {
-    const domainName = String(item.domain || '미분류 경험').trim() || '미분류 경험';
+    // 분류명 편집 중에는 입력할 때마다 카드가 다른 그룹으로 이동하지 않도록
+    // 저장 전까지 기존 분류 그룹의 위치를 유지한다.
+    const committedItem = proposal.experiences?.[index];
+    const groupingDomain = editingIndex === index
+      ? committedItem?.domain
+      : item.domain;
+    const domainName = String(groupingDomain || '미분류 경험').trim() || '미분류 경험';
     const domainKey = domainName.normalize('NFKC').replace(/\s+/g, ' ').toLocaleLowerCase('ko-KR');
     const current = groups.find((group) => group.key === domainKey);
     if (current) current.entries.push({ item, index });
@@ -131,10 +145,14 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
     return groups;
   }, []);
   const toggleDomain = (domainKey) => {
-    setCollapsedDomains((current) => {
-      const next = new Set(current);
-      if (next.has(domainKey)) next.delete(domainKey);
-      else next.add(domainKey);
+    const collapseKey = `${proposal.id}:domain:${domainKey}`;
+    setDomainCollapseOverrides((current) => {
+      const next = new Map(current);
+      const collapsed = next.has(collapseKey)
+        ? next.get(collapseKey)
+        : readDraftCollapseState(collapseKey);
+      next.set(collapseKey, !collapsed);
+      writeDraftCollapseState(collapseKey, !collapsed);
       return next;
     });
   };
@@ -142,7 +160,10 @@ export function InlineProposalCard({ proposal, onApprove, onReject, onDiscardRem
     <div className="v2-inline-proposal__heading"><span>경험 초안 · {experienceDrafts.length}개{activeDraft.analysisScope && <small>대화 {activeDraft.analysisScope.message_count}개 · 파일 {activeDraft.analysisScope.attachment_count}개 기준</small>}</span><em>{editing ? '수정 모드' : 'AI 초안'}</em></div>
     {experienceDrafts.length
       ? <div className="v2-experience-draft-list">{domainGroups.map((group) => {
-          const domainCollapsed = collapsedDomains.has(group.key);
+          const domainCollapseKey = `${proposal.id}:domain:${group.key}`;
+          const domainCollapsed = domainCollapseOverrides.has(domainCollapseKey)
+            ? domainCollapseOverrides.get(domainCollapseKey)
+            : readDraftCollapseState(domainCollapseKey);
           return <section className={`v2-draft-domain-group ${domainCollapsed ? 'is-collapsed' : ''}`} key={group.key}>
             <header onClick={() => toggleDomain(group.key)}><span>경험 분류</span><strong>{group.name}</strong><small>{group.entries.length}개 프로젝트·활동</small><button type="button" aria-label={`${group.name} ${domainCollapsed ? '펼치기' : '접기'}`} aria-expanded={!domainCollapsed} onClick={(event) => { event.stopPropagation(); toggleDomain(group.key); }}>{domainCollapsed ? '⌄' : '⌃'}</button></header>
             {!domainCollapsed && <div>{group.entries.map(({ item, index }) => <ExperienceDraftEditor key={`${item.draft_id || item.sourceIndex || 'draft'}-${index}`} grouped collapseKey={`${proposal.id}:${item.draft_id || item.sourceIndex || `draft-${index}`}`} item={item} index={index} approved={item.approved} saving={saving} editing={editingIndex === index} onUpdate={updateExperience} onEdit={() => beginExperienceEditing(index)} onSave={saveExperience} onCancel={cancelExperienceEditing} onDelete={() => removeExperience(index)} onApprove={() => approveExperience(index)} />)}</div>}
