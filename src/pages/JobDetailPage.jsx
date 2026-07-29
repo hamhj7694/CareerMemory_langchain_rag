@@ -4,6 +4,8 @@ import { jobApi } from '../api/index.js';
 import { v2ChatApi } from '../api/v2ChatApi.js';
 import { EmptyState, ErrorState, LoadingState, Tag } from '../components/common/index.js';
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
+import { aiRecommendedExperienceIds } from '../features/jobs/jobMatchViewModel.js';
+import { JobPostingSourcePanel } from '../features/jobs/JobPostingSourcePanel.jsx';
 import './jobs.css';
 import { failureRequirementIds } from '../utils/contractFields.js';
 
@@ -95,6 +97,7 @@ export function JobDetailPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const autoMatchStarted = useRef(false);
+  const postingSourceRef = useRef(null);
   const [job, setJob] = useState(location.state?.job || null);
   const [matches, setMatches] = useState([]);
   const [failures, setFailures] = useState([]);
@@ -104,7 +107,8 @@ export function JobDetailPage() {
   const [experienceView, setExperienceView] = useState('recommended');
   const [detailExperience, setDetailExperience] = useState(null);
   const [activeLinkedChip, setActiveLinkedChip] = useState('');
-  const [expandedRequirementSources, setExpandedRequirementSources] = useState(() => new Set());
+  const [collapsedRequirementIds, setCollapsedRequirementIds] = useState(() => new Set());
+  const [postingSourceExpanded, setPostingSourceExpanded] = useState(false);
   const [phase, setPhase] = useState(job ? 'ready' : 'loading');
   const [error, setError] = useState('');
 
@@ -115,7 +119,7 @@ export function JobDetailPage() {
     setRequirementLinks((current) => {
       const next = { ...current };
       nextMatches.forEach((match) => {
-        if (!(match.requirementId in next)) next[match.requirementId] = match.linkedExperienceIds || (match.experiences || []).map((item) => item.experienceId);
+        next[match.requirementId] = match.linkedExperienceIds || (match.experiences || []).map((item) => item.experienceId);
       });
       return next;
     });
@@ -149,7 +153,7 @@ export function JobDetailPage() {
   const orderedRequirements = useMemo(() => [...(job?.requirements || [])].sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)), [job]);
   const activeRequirement = orderedRequirements.find((item) => item.id === activeRequirementId) || orderedRequirements[0];
   const activeMatch = matches.find((item) => item.requirementId === activeRequirement?.id);
-  const recommendedIds = useMemo(() => new Set((activeMatch?.experiences || []).map((item) => item.experienceId)), [activeMatch]);
+  const recommendedIds = useMemo(() => aiRecommendedExperienceIds(activeMatch), [activeMatch]);
   const linkedIds = useMemo(() => new Set(requirementLinks[activeRequirement?.id] || []), [requirementLinks, activeRequirement]);
   const visibleExperiences = experienceView === 'all' ? experienceCatalog : experienceCatalog.filter((item) => recommendedIds.has(item.experienceId));
 
@@ -182,11 +186,20 @@ export function JobDetailPage() {
       setError(reason.message || '경험 연결을 해제하지 못했습니다.');
     }
   };
-  const toggleRequirementSource = (requirementId) => setExpandedRequirementSources((current) => {
+  const toggleRequirement = (requirementId) => setCollapsedRequirementIds((current) => {
     const next = new Set(current);
     next.has(requirementId) ? next.delete(requirementId) : next.add(requirementId);
     return next;
   });
+  const openPostingSource = () => {
+    setPostingSourceExpanded(true);
+    window.requestAnimationFrame(() => {
+      postingSourceRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  };
 
   if (phase === 'loading') return <LoadingState title="공고를 불러오는 중" />;
   if (phase === 'error') return <ErrorState title="공고를 찾을 수 없습니다" description={error} actionLabel="공고 목록으로" onRetry={() => navigate('/jobs')} />;
@@ -196,31 +209,31 @@ export function JobDetailPage() {
     <header className="feature-heading split"><div><span className="eyebrow">{job.companyName || '회사 미입력'} · {job.roleName || '직무 미입력'}</span><h1>{job.postingTitle || job.roleName || '채용공고 분석'}</h1><p>{orderedRequirements.length}개의 요구사항과 내 경험을 함께 분석합니다.</p></div><div className="header-actions">{job.sourceUrl && <a className="ui-button ui-button--secondary" href={job.sourceUrl} target="_blank" rel="noreferrer">원문 공고 열기</a>}<button className="ui-button ui-button--secondary" onClick={() => navigate('/jobs')}>다른 공고 분석</button></div></header>
     {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="job-result-flow">
-      <section className="surface job-step-panel requirements-panel"><div className="section-title"><div><span className="step">1</span><div><h2>공고 요구사항</h2><p>카드를 선택하면 연결된 경험을 확인할 수 있습니다.</p></div></div></div>
+      <section className="surface job-step-panel requirements-panel"><div className="section-title"><div><span className="step">1</span><div><h2>공고 요구사항</h2><p>카드를 선택하면 연결된 경험을 확인할 수 있습니다.</p></div></div><button type="button" className="tool-button" onClick={openPostingSource}>전체 공고 원문 보기</button></div>
         {failures.length > 0 && <div className="warning-box" role="status"><strong>{failures.length}개 요구사항을 대조하지 못했습니다.</strong><button className="tool-button" onClick={() => retryMatch(failureRequirementIds(failures))}>실패 항목 다시 시도</button></div>}
         <div className="requirement-list">{orderedRequirements.map((requirement, index) => {
           const isActive = activeRequirement?.id === requirement.id;
           const connected = (requirementLinks[requirement.id] || []).map((id) => experienceCatalog.find((item) => item.experienceId === id)).filter(Boolean);
           const summary = requirementSummary(requirement);
-          const sourceExcerpt = requirementSourceExcerpt(requirement);
-          const sourceExpanded = expandedRequirementSources.has(requirement.id);
           const importance = requirementImportance(requirement);
           const needsReview = requirementNeedsReview(requirement);
-          return <article className={`requirement-card requirement-card--selectable ${isActive ? 'is-focused' : ''}`} key={requirement.id}>
-            <button type="button" className="requirement-card__main" onClick={() => { setActiveRequirementId(requirement.id); setExperienceView('recommended'); }} aria-pressed={isActive}>
-              <div className="requirement-card__title-row"><span className="requirement-number">{requirement.order || index + 1}</span><h3>{requirementTitle(requirement)}</h3><span className="requirement-card__tags"><Tag tone={importance.tone}>{importance.label}</Tag>{needsReview && <Tag tone="warning">검토 필요</Tag>}</span></div>
+          const requirementCollapsed = collapsedRequirementIds.has(requirement.id);
+          const bodyId = `requirement-card-body-${requirement.id}`;
+          return <article className={`requirement-card requirement-card--selectable ${isActive ? 'is-focused' : ''} ${requirementCollapsed ? 'is-collapsed' : ''}`} key={requirement.id}>
+            <div className="requirement-card__header">
+              <button type="button" className="requirement-card__main" onClick={() => { setActiveRequirementId(requirement.id); setExperienceView('recommended'); }} aria-pressed={isActive}>
+                <div className="requirement-card__title-row"><span className="requirement-number">{requirement.order || index + 1}</span><h3>{requirementTitle(requirement)}</h3><span className="requirement-card__tags"><Tag tone={importance.tone}>{importance.label}</Tag>{needsReview && <Tag tone="warning">검토 필요</Tag>}</span></div>
+              </button>
+              <button type="button" className="requirement-card__collapse" onClick={() => toggleRequirement(requirement.id)} aria-expanded={!requirementCollapsed} aria-controls={bodyId} aria-label={`${requirementTitle(requirement)} ${requirementCollapsed ? '펼치기' : '접기'}`}><span aria-hidden="true">⌃</span></button>
+            </div>
+            {!requirementCollapsed && <div id={bodyId} className="requirement-card__body">
               {summary && <p className="requirement-card__summary">{summary}</p>}
-            </button>
-            {sourceExcerpt && <div className={`requirement-card__source ${sourceExpanded ? 'is-expanded' : ''}`}>
-              <span>공고 원문</span>
-              <blockquote id={`requirement-source-${requirement.id}`}>{sourceExcerpt}</blockquote>
-              {sourceExcerpt.length > 70 && <button type="button" onClick={() => toggleRequirementSource(requirement.id)} aria-expanded={sourceExpanded} aria-controls={`requirement-source-${requirement.id}`}>{sourceExpanded ? '원문 접기' : '원문 더보기'}</button>}
+              <div className={`requirement-linked-experiences ${connected.length ? '' : 'is-empty'}`}>{connected.length ? connected.map((experience) => {
+                const chipId = `${requirement.id}:${experience.experienceId}`;
+                const isOpen = activeLinkedChip === chipId;
+                return <span className={`requirement-linked-chip ${isOpen ? 'is-open' : ''}`} key={experience.experienceId}><button type="button" className="requirement-linked-chip__label" onClick={() => setActiveLinkedChip(isOpen ? '' : chipId)} aria-expanded={isOpen}>{experience.title}</button>{isOpen && <span className="requirement-linked-chip__actions"><button type="button" onClick={() => setDetailExperience(experience)} aria-label={`${experience.title} 상세 보기`} title="상세 보기"><SearchIcon /></button><button type="button" className="is-danger" onClick={() => unlinkRequirementExperience(requirement.id, experience.experienceId)} aria-label={`${experience.title} 연결 해제`} title="연결 해제"><TrashIcon /></button></span>}</span>;
+              }) : <span className="requirement-linked-empty">연결된 경험이 없습니다.</span>}</div>
             </div>}
-            <div className={`requirement-linked-experiences ${connected.length ? '' : 'is-empty'}`}>{connected.length ? connected.map((experience) => {
-              const chipId = `${requirement.id}:${experience.experienceId}`;
-              const isOpen = activeLinkedChip === chipId;
-              return <span className={`requirement-linked-chip ${isOpen ? 'is-open' : ''}`} key={experience.experienceId}><button type="button" className="requirement-linked-chip__label" onClick={() => setActiveLinkedChip(isOpen ? '' : chipId)} aria-expanded={isOpen}>{experience.title}</button>{isOpen && <span className="requirement-linked-chip__actions"><button type="button" onClick={() => setDetailExperience(experience)} aria-label={`${experience.title} 상세 보기`} title="상세 보기"><SearchIcon /></button><button type="button" className="is-danger" onClick={() => unlinkRequirementExperience(requirement.id, experience.experienceId)} aria-label={`${experience.title} 연결 해제`} title="연결 해제"><TrashIcon /></button></span>}</span>;
-            }) : <span className="requirement-linked-empty">연결된 경험이 없습니다.</span>}</div>
           </article>;
         })}</div>
       </section>
@@ -233,6 +246,13 @@ export function JobDetailPage() {
           <RequirementExperienceTree experiences={visibleExperiences} linkedIds={linkedIds} recommendedIds={recommendedIds} onToggle={toggleRequirementLink} onOpenDetail={setDetailExperience} />
         </div>
       </section>
+    </div>
+    <div ref={postingSourceRef} className="job-posting-source-anchor">
+      <JobPostingSourcePanel
+        job={job}
+        expanded={postingSourceExpanded}
+        onToggle={() => setPostingSourceExpanded((current) => !current)}
+      />
     </div>
     {detailExperience && <div className="job-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetailExperience(null); }}><aside className="job-experience-detail" role="dialog" aria-modal="true" aria-labelledby="job-experience-detail-title"><header><div><span className="eyebrow">EXPERIENCE DETAIL</span><h2 id="job-experience-detail-title">{detailExperience.title}</h2><p>{detailExperience.domainName} · {detailExperience.projectName}</p></div><button type="button" onClick={() => setDetailExperience(null)} aria-label="닫기">×</button></header><section><h3>경험 요약</h3><p>{detailExperience.summary || '등록된 경험 요약이 없습니다.'}</p></section>{detailExperience.role && <section><h3>담당 역할</h3><p>{detailExperience.role}</p></section>}<section><h3>역량</h3><div className="job-detail-skills">{detailExperience.skills.length ? detailExperience.skills.map((skill) => <span key={skill}>{skill}</span>) : <p>등록된 역량이 없습니다.</p>}</div></section>{detailExperience.results.length > 0 && <section><h3>성과</h3><ul>{detailExperience.results.map((result, index) => <li key={`${result}-${index}`}>{result}</li>)}</ul></section>}<footer><span>연결된 근거 {detailExperience.evidenceCount}개</span><button type="button" className="ui-button ui-button--secondary" onClick={() => navigate(`/memory/${detailExperience.experienceId}`)}>경험 상세 페이지</button></footer></aside></div>}
   </section>;

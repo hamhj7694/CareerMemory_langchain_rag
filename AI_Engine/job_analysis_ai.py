@@ -5,6 +5,8 @@ from __future__ import annotations
 # 1. Python 기본 기능
 # 함수 호출 JSON, 실행 시간, 고유 ID, 타입 표기에 사용한다.
 import json
+import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -45,11 +47,41 @@ from AI_Engine.schemas import (
 # 5. 모델·프롬프트·스키마·검색 인덱스 버전
 # 분석 결과와 추천 결과가 어떤 구성으로 생성됐는지 추적하기 위한 값이다.
 DEFAULT_JOB_ANALYSIS_MODEL = "gpt-4o-mini"
-JOB_ANALYSIS_PROMPT_VERSION = "job-analysis-prompt-v1"
+JOB_ANALYSIS_PROMPT_VERSION = "job-analysis-prompt-v2"
 JOB_ANALYSIS_SCHEMA_VERSION = "job-analysis-schema-v1"
 DEFAULT_EXPERIENCE_INDEX_VERSION = "experience-index-v2"
 DEFAULT_EXPERIENCE_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EXPERIENCE_COLLECTION_NAME = "career_memory_experiences"
+DEFAULT_JOB_MATCH_MIN_SCORE = 0.65
+
+_CREDENTIAL_MARKERS = {
+    "자격",
+    "자격증",
+    "기능사",
+    "기사",
+    "산업기사",
+    "면허",
+    "certification",
+    "certificate",
+    "license",
+}
+_CREDENTIAL_GENERIC_TERMS = _CREDENTIAL_MARKERS | {
+    "관련",
+    "보유",
+    "소지",
+    "취득",
+    "우대",
+    "필수",
+    "요건",
+    "경험",
+    "능력",
+    "가능",
+    "지원자",
+    "소지자",
+    "해당",
+    "있는",
+    "관련자",
+}
 
 # 6. 모델이 호출해야 하는 함수 이름
 # 공고 요구사항 추출과 경험 추천을 서로 다른 구조화 함수로 구분한다.
@@ -108,6 +140,11 @@ confirmed_experience_candidates가 함께 전달돼.
 - 해당 요구사항의 후보로 제공되지 않은 경험을 연결하지 마.
 - 초안이 아닌 확정 경험 후보만 사용해.
 - 관련성이 낮거나 근거가 부족하면 추천하지 마.
+- similarity_score가 0.65 미만인 연결은 결과에 포함하지 마.
+- 자격증·면허처럼 명칭이 중요한 요구사항은 같은 분야의 자격 명칭이나
+  명백한 동의어가 경험에 확인될 때만 추천해.
+- 공통적으로 "자격증"이라는 단어만 있다는 이유로 서로 다른 분야의
+  자격증 경험을 연결하지 마.
 - recommendation evidence_ids는 후보에 제공된 ID만 사용해.
 - evidence_ids가 없는 후보는 추천하지 마.
 - similarity_score는 0 이상 1 이하로 작성해.
@@ -269,6 +306,7 @@ class JobAnalysisAI:
         prompt_version: str = JOB_ANALYSIS_PROMPT_VERSION,
         schema_version: str = JOB_ANALYSIS_SCHEMA_VERSION,
         index_version: str | None = None,
+        match_min_score: float | None = None,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -292,6 +330,7 @@ class JobAnalysisAI:
             index_version or get_experience_index_version(provider),
             "index_version",
         )
+        self.match_min_score = get_job_match_min_score(match_min_score)
         self.id_factory = id_factory or (lambda: str(uuid4()))
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
@@ -561,9 +600,15 @@ class JobAnalysisAI:
                 raise JobAnalysisAIRetrievalError(
                     "경험 검색기는 문서 배열을 반환해야 합니다."
                 )
-            candidates_by_requirement[requirement.id] = (
-                self._normalize_candidates(documents)
-            )
+            normalized_candidates = self._normalize_candidates(documents)
+            candidates_by_requirement[requirement.id] = [
+                candidate
+                for candidate in normalized_candidates
+                if _candidate_meets_explicit_constraints(
+                    requirement,
+                    candidate,
+                )
+            ]
         return candidates_by_requirement
 
     # 12-8. 검색 문서를 모델 문맥용 후보로 정규화
@@ -693,6 +738,14 @@ class JobAnalysisAI:
                     "AI가 해당 요구사항의 RAG 후보에 없는 경험을 추천했습니다."
                 )
 
+            raw_score = raw_link.get("similarity_score")
+            if (
+                isinstance(raw_score, (int, float))
+                and not isinstance(raw_score, bool)
+                and float(raw_score) < self.match_min_score
+            ):
+                continue
+
             candidate = allowed_candidates[requirement_id][experience_id]
             evidence_ids = raw_link.get("evidence_ids")
             if (
@@ -713,9 +766,7 @@ class JobAnalysisAI:
                         experience_id=experience_id,
                         source=RequirementExperienceLinkSource.AI,
                         status=RequirementExperienceLinkStatus.SUGGESTED,
-                        similarity_score=raw_link.get(
-                            "similarity_score"
-                        ),
+                        similarity_score=raw_score,
                         reason=raw_link.get("reason", ""),
                         evidence_ids=evidence_ids,
                         model_version=self.model_version,
@@ -1030,12 +1081,81 @@ def _require_text(value: str, field_name: str) -> str:
     return normalized
 
 
+def get_job_match_min_score(value: float | str | None = None) -> float:
+    """현재 채용공고 추천에 적용할 최소 점수를 한 곳에서 읽는다."""
+
+    configured = (
+        value
+        if value is not None
+        else os.getenv(
+            "AI_JOB_MATCH_MIN_SCORE",
+            str(DEFAULT_JOB_MATCH_MIN_SCORE),
+        )
+    )
+    try:
+        score = float(configured)
+    except (TypeError, ValueError) as error:
+        raise JobAnalysisAIInputError(
+            "AI_JOB_MATCH_MIN_SCORE는 0 이상 1 이하의 숫자여야 합니다."
+        ) from error
+    if not 0 <= score <= 1:
+        raise JobAnalysisAIInputError(
+            "AI_JOB_MATCH_MIN_SCORE는 0 이상 1 이하의 숫자여야 합니다."
+        )
+    return score
+
+
+def _candidate_meets_explicit_constraints(
+    requirement: JobRequirement,
+    candidate: Mapping[str, Any],
+) -> bool:
+    """자격증처럼 명칭이 중요한 요구사항의 분야 불일치를 차단한다."""
+
+    requirement_text = " ".join((
+        requirement.title,
+        requirement.summary,
+        requirement.source_excerpt,
+        " ".join(requirement.keywords),
+    )).casefold()
+    if not any(marker in requirement_text for marker in _CREDENTIAL_MARKERS):
+        return True
+
+    constraint_text = " ".join((
+        requirement.title,
+        requirement.source_excerpt,
+        " ".join(requirement.keywords),
+    )).casefold()
+    requirement_tokens = set(
+        re.findall(r"[0-9a-zA-Z가-힣+#.]+", constraint_text)
+    )
+    specific_terms = {
+        token
+        for token in requirement_tokens
+        if len(token) >= 2
+        and not any(
+            token.startswith(generic)
+            for generic in _CREDENTIAL_GENERIC_TERMS
+        )
+    }
+    if not specific_terms:
+        return True
+
+    candidate_text = " ".join((
+        str(candidate.get("title", "")),
+        str(candidate.get("domain_name", "")),
+        str(candidate.get("project_name", "")),
+        str(candidate.get("content", "")),
+    )).casefold()
+    return any(term in candidate_text for term in specific_terms)
+
+
 # 21. 외부 공개 목록
 __all__ = [
     "DEFAULT_EXPERIENCE_COLLECTION_NAME",
     "DEFAULT_EXPERIENCE_EMBEDDING_MODEL",
     "DEFAULT_EXPERIENCE_INDEX_VERSION",
     "DEFAULT_JOB_ANALYSIS_MODEL",
+    "DEFAULT_JOB_MATCH_MIN_SCORE",
     "JOB_ANALYSIS_PROMPT_VERSION",
     "JOB_ANALYSIS_SCHEMA_VERSION",
     "JOB_MATCH_SYSTEM_PROMPT",
@@ -1052,5 +1172,6 @@ __all__ = [
     "build_experience_search_documents",
     "create_experience_retriever",
     "create_job_analysis_ai",
+    "get_job_match_min_score",
     "sync_experience_vector_store",
 ]

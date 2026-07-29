@@ -27,6 +27,7 @@ from AI_Engine.job_analysis_ai import (
     JobAnalysisAIRetrievalError,
     create_experience_retriever,
     create_job_analysis_ai,
+    get_job_match_min_score,
 )
 from AI_Engine.job_file_text import (
     JobFile,
@@ -107,6 +108,39 @@ def _frontend_experience(item: Experience) -> dict[str, Any]:
         "projectName": item.project.name,
         "evidenceCount": len(item.source_ids),
     }
+
+
+def _linked_experience_to_frontend(
+    item: Experience,
+    link: dict[str, Any],
+) -> dict[str, Any]:
+    """경험 본문과 요구사항 연결의 생성 주체·상태를 함께 전달한다."""
+
+    return {
+        **_frontend_experience(item),
+        "linkSource": link.get("source", "ai"),
+        "linkStatus": link.get("status", "suggested"),
+        "score": link.get("similarity_score"),
+        "matchReason": link.get("reason", ""),
+        "evidence": [
+            {"sourceId": source_id}
+            for source_id in link.get("evidence_ids", [])
+        ],
+    }
+
+
+def _link_meets_recommendation_threshold(
+    link: dict[str, Any],
+    minimum_score: float,
+) -> bool:
+    if link.get("source") != "ai":
+        return True
+    score = link.get("similarity_score")
+    return (
+        isinstance(score, (int, float))
+        and not isinstance(score, bool)
+        and float(score) >= minimum_score
+    )
 
 
 def _requirement_to_frontend(requirement: dict[str, Any]) -> dict[str, Any]:
@@ -406,6 +440,7 @@ def match_job(
         for experience in _load_rag_experiences(current_user.id, database)
         if experience.id in experience_ids
     }
+    minimum_ai_score = get_job_match_min_score()
     matches = []
     for requirement_id, requirement in requirements.items():
         links = [
@@ -413,6 +448,10 @@ def match_job(
             if link.get("requirement_id") == requirement_id
             and link.get("status") != "rejected"
             and link.get("experience_id") in experiences
+            and _link_meets_recommendation_threshold(
+                link,
+                minimum_ai_score,
+            )
         ]
         linked = [str(link["experience_id"]) for link in links]
         matches.append({
@@ -422,23 +461,11 @@ def match_job(
             "reason": links[0].get("reason", "") if links else "",
             "linkedExperienceIds": linked,
             "experiences": [
-                {
-                    **_frontend_experience(experiences[experience_id]),
-                    "score": next(
-                        link.get("similarity_score")
-                        for link in links
-                        if link["experience_id"] == experience_id
-                    ),
-                    "evidence": [
-                        {"sourceId": source_id}
-                        for source_id in next(
-                            link.get("evidence_ids", [])
-                            for link in links
-                            if link["experience_id"] == experience_id
-                        )
-                    ],
-                }
-                for experience_id in linked
+                _linked_experience_to_frontend(
+                    experiences[str(link["experience_id"])],
+                    link,
+                )
+                for link in links
             ],
             "missingInformation": [] if linked else ["연결할 근거 경험이 없습니다."],
         })

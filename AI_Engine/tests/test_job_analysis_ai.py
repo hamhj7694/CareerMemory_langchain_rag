@@ -258,6 +258,121 @@ class JobAnalysisAITests(unittest.TestCase):
         )
         self.assertIn("experience-1", match_call["input"])
 
+    def test_low_score_match_is_not_recommended(self) -> None:
+        document = SimpleNamespace(
+            page_content="퍼널 분석 경험",
+            metadata={
+                "experience_id": "experience-1",
+                "title": "지원 전환율 개선",
+                "evidence_ids": ["evidence-1"],
+            },
+        )
+        retriever = FakeRetriever([document])
+        ai, _client = self.create_ai(
+            [
+                {"requirements": [raw_requirement()]},
+                {
+                    "experience_links": [{
+                        "requirement_id": "job-requirement-1",
+                        "experience_id": "experience-1",
+                        "similarity_score": 0.4,
+                        "reason": "관련성이 낮은 추천입니다.",
+                        "evidence_ids": ["evidence-1"],
+                    }],
+                },
+            ],
+            retriever=retriever,
+        )
+
+        result = ai.invoke(self.request)
+
+        self.assertEqual(result.experience_links, [])
+
+    def test_unrelated_certificate_candidate_is_removed_before_matching(self) -> None:
+        posting_content = "제과 또는 제빵 관련 자격증을 보유한 지원자"
+        request = JobAnalysisRequest(
+            client_request_id="certificate-request",
+            posting_id="certificate-posting",
+            posting_content=posting_content,
+        )
+        requirement = {
+            "type": "qualification",
+            "title": "제과·제빵 관련 자격증",
+            "summary": "제과 또는 제빵 분야의 자격증을 요구합니다.",
+            "source": "posting_content",
+            "source_excerpt": posting_content,
+            "importance": "required",
+            "keywords": ["제과", "제빵", "자격증"],
+            "confidence": 0.98,
+        }
+        unrelated_document = SimpleNamespace(
+            page_content="빅데이터분석기사 자격증을 취득했습니다.",
+            metadata={
+                "experience_id": "bigdata-certificate",
+                "title": "빅데이터 분석 자격증 취득",
+                "evidence_ids": ["evidence-bigdata"],
+            },
+        )
+        retriever = FakeRetriever([unrelated_document])
+        ai, client = self.create_ai(
+            [{"requirements": [requirement]}],
+            retriever=retriever,
+        )
+
+        result = ai.invoke(request)
+
+        self.assertEqual(result.experience_links, [])
+        self.assertEqual(len(client.responses.calls), 1)
+
+    def test_same_field_certificate_candidate_can_be_recommended(self) -> None:
+        posting_content = "제과 또는 제빵 관련 자격증을 보유한 지원자"
+        request = JobAnalysisRequest(
+            client_request_id="bakery-certificate-request",
+            posting_id="bakery-certificate-posting",
+            posting_content=posting_content,
+        )
+        requirement = {
+            "type": "qualification",
+            "title": "제과·제빵 관련 자격증",
+            "summary": "제과 또는 제빵 분야의 자격증을 요구합니다.",
+            "source": "posting_content",
+            "source_excerpt": posting_content,
+            "importance": "required",
+            "keywords": ["제과", "제빵", "자격증"],
+            "confidence": 0.98,
+        }
+        related_document = SimpleNamespace(
+            page_content="제빵기능사 자격증을 취득했습니다.",
+            metadata={
+                "experience_id": "bakery-certificate",
+                "title": "제빵기능사 취득",
+                "evidence_ids": ["evidence-bakery"],
+            },
+        )
+        retriever = FakeRetriever([related_document])
+        ai, _client = self.create_ai(
+            [
+                {"requirements": [requirement]},
+                {
+                    "experience_links": [{
+                        "requirement_id": "job-requirement-1",
+                        "experience_id": "bakery-certificate",
+                        "similarity_score": 0.92,
+                        "reason": "제빵기능사 자격증이 요구 분야와 일치합니다.",
+                        "evidence_ids": ["evidence-bakery"],
+                    }],
+                },
+            ],
+            retriever=retriever,
+        )
+
+        result = ai.invoke(request)
+
+        self.assertEqual(
+            [link.experience_id for link in result.experience_links],
+            ["bakery-certificate"],
+        )
+
     def test_zero_requirements_is_valid(self) -> None:
         retriever = FakeRetriever([])
         ai, _client = self.create_ai(

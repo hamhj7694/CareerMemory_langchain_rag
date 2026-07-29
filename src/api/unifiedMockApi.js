@@ -295,7 +295,7 @@ export const unifiedMockApi = {
       const selected = recommended.length ? recommended : (requirementIndex === 0 && ranked[0] ? [ranked[0]] : []);
       const linkKey = `${jobId}:${requirement.id}`;
       if (!requirementLinks.has(linkKey)) requirementLinks.set(linkKey, new Set(selected.map((item) => item.experience.id)));
-      return { requirementId: requirement.id, requirementText: requirement.text, status: selected.length ? 'direct' : 'noEvidence', reason: '', linkedExperienceIds: [...requirementLinks.get(linkKey)], experiences: selected.map(({ experience, score }) => ({ ...toExperience(experience), experienceId: experience.id, score, evidence: (experience.source_ids || []).map((sourceId) => ({ sourceId })) })), missingInformation: [] };
+      return { requirementId: requirement.id, requirementText: requirement.text, status: selected.length ? 'direct' : 'noEvidence', reason: '', linkedExperienceIds: [...requirementLinks.get(linkKey)], experiences: selected.map(({ experience, score }) => ({ ...toExperience(experience), experienceId: experience.id, linkSource: 'ai', linkStatus: 'suggested', score, evidence: (experience.source_ids || []).map((sourceId) => ({ sourceId })) })), missingInformation: [] };
     });
     return { jobId, matches, failures: [] };
   },

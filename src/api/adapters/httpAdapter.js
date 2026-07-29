@@ -12,9 +12,21 @@ function buildUrl(baseUrl, path, query) {
 
 export function createHttpAdapter({ baseUrl, timeoutMs, fetchImpl = fetch }) {
   return {
-    async request({ path, method = 'GET', query, body, headers = {}, signal }) {
+    async request({
+      path,
+      method = 'GET',
+      query,
+      body,
+      headers = {},
+      signal,
+      timeoutMs: requestTimeoutMs,
+    }) {
       const timeoutController = new AbortController();
-      const timeoutId = setTimeout(() => timeoutController.abort('timeout'), timeoutMs);
+      const effectiveTimeoutMs = Number.isFinite(Number(requestTimeoutMs))
+        && Number(requestTimeoutMs) > 0
+        ? Number(requestTimeoutMs)
+        : timeoutMs;
+      const timeoutId = setTimeout(() => timeoutController.abort(), effectiveTimeoutMs);
       const combinedSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal;
       const isFormData = body instanceof FormData;
 
@@ -40,11 +52,14 @@ export function createHttpAdapter({ baseUrl, timeoutMs, fetchImpl = fetch }) {
         return payload;
       } catch (error) {
         if (error instanceof AppError) throw error;
-        if (error?.name === 'AbortError') {
-          const timedOut = timeoutController.signal.aborted && !signal?.aborted;
+        const timedOut = timeoutController.signal.aborted && !signal?.aborted;
+        const requestAborted = Boolean(signal?.aborted) || error?.name === 'AbortError';
+        if (timedOut || requestAborted) {
           throw new AppError({
             code: timedOut ? 'AI_PROCESSING_TIMEOUT' : 'REQUEST_ABORTED',
-            message: timedOut ? '처리 시간이 초과되었습니다. 다시 시도해 주세요.' : '요청이 취소되었습니다.',
+            message: timedOut
+              ? '분석 시간이 예상보다 오래 걸리고 있습니다. 입력 내용은 유지되므로 다시 시도해 주세요.'
+              : '요청이 취소되었습니다.',
             retryable: timedOut,
             cause: error,
           });

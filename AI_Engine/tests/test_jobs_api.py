@@ -264,6 +264,102 @@ class JobsApiTests(unittest.TestCase):
         self.assertIn("experience-new", linked_ids)
         self.assertIn("experience-manual", linked_ids)
         self.assertNotIn("experience-old", linked_ids)
+        returned_experiences = {
+            item["experienceId"]: item
+            for item in response.json()["matches"][0]["experiences"]
+        }
+        self.assertEqual(
+            returned_experiences["experience-new"]["linkSource"],
+            "ai",
+        )
+        self.assertEqual(
+            returned_experiences["experience-new"]["linkStatus"],
+            "suggested",
+        )
+        self.assertEqual(
+            returned_experiences["experience-manual"]["linkSource"],
+            "user",
+        )
+
+    def test_low_score_ai_link_is_hidden_but_user_link_is_preserved(self) -> None:
+        client = TestClient(app)
+        csrf = self.register(client, "threshold_owner")
+        with self.session_factory() as database:
+            user = database.query(models.User).filter_by(
+                username="job_threshold_owner"
+            ).one()
+            domain = models.ExperienceDomain(
+                id="threshold-domain",
+                user_id=user.id,
+                name="자격 경험",
+            )
+            project = models.ExperienceProject(
+                id="threshold-project",
+                user_id=user.id,
+                domain_id=domain.id,
+                name="자격증",
+            )
+            low_score = models.Experience(
+                id="low-score-experience",
+                user_id=user.id,
+                project_id=project.id,
+                title="낮은 점수 추천",
+                source_ids=["source-low"],
+                status="confirmed",
+            )
+            manual = models.Experience(
+                id="manual-experience",
+                user_id=user.id,
+                project_id=project.id,
+                title="사용자 직접 연결",
+                source_ids=["source-manual"],
+                status="confirmed",
+            )
+            requirement = self.fake_result(
+                "threshold-request"
+            ).model_dump("json")["requirements"][0]
+            job = models.JobAnalysisRecord(
+                id="job-threshold-1",
+                user_id=user.id,
+                client_request_id="threshold-request",
+                posting_content="데이터 분석 자격증",
+                requirements=[requirement],
+                experience_links=[
+                    {
+                        "requirement_id": "requirement-1",
+                        "experience_id": "low-score-experience",
+                        "source": "ai",
+                        "status": "suggested",
+                        "similarity_score": 0.4,
+                        "reason": "낮은 추천",
+                        "evidence_ids": ["source-low"],
+                    },
+                    {
+                        "requirement_id": "requirement-1",
+                        "experience_id": "manual-experience",
+                        "source": "user",
+                        "status": "selected",
+                        "reason": "사용자 직접 연결",
+                        "evidence_ids": ["source-manual"],
+                    },
+                ],
+            )
+            database.add_all([domain, project, low_score, manual, job])
+            database.commit()
+
+        response = client.post(
+            "/api/jobs/job-threshold-1/match",
+            headers={"X-CSRF-Token": csrf},
+            json={"requirement_ids": [], "refresh": False},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        experiences = response.json()["matches"][0]["experiences"]
+        self.assertEqual(
+            [item["experienceId"] for item in experiences],
+            ["manual-experience"],
+        )
+        self.assertEqual(experiences[0]["linkSource"], "user")
 
 
 if __name__ == "__main__":

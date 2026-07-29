@@ -17,6 +17,10 @@ export const apiConfig = Object.freeze({
   useMock: import.meta.env.MODE === 'test' || import.meta.env.VITE_USE_MOCK !== 'false',
   baseUrl: readApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
   timeoutMs: readPositiveNumber(import.meta.env.VITE_API_TIMEOUT_MS, 30_000),
+  jobAnalysisTimeoutMs: readPositiveNumber(
+    import.meta.env.VITE_JOB_ANALYSIS_TIMEOUT_MS,
+    180_000,
+  ),
   mockScenario: import.meta.env.VITE_MOCK_SCENARIO || 'success',
   mockLatencyMs: readPositiveNumber(import.meta.env.VITE_MOCK_LATENCY_MS, 250),
 });

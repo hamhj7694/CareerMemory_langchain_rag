@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { jobApi } from '../api/index.js';
 import { ErrorState } from '../components/common/index.js';
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
+import { resolveJobAnalysisAttempt } from '../features/jobs/jobAnalysisAttempt.js';
 import './jobs.css';
 
 export function JobsPage() {
@@ -15,6 +16,7 @@ export function JobsPage() {
   const [postingFiles, setPostingFiles] = useState([]);
   const [extractingFiles, setExtractingFiles] = useState(false);
   const [fileInputKey, setFileInputKey] = useState(0);
+  const analysisAttemptRef = useRef(null);
 
   // 분석 기록은 브라우저가 아니라 현재 로그인한 사용자의 DB에서 불러온다.
   useEffect(() => {
@@ -70,14 +72,24 @@ export function JobsPage() {
     if (form.sourceUrl.trim() && !/^https?:\/\/\S+$/i.test(form.sourceUrl.trim())) { setError('공고 링크는 http:// 또는 https://로 시작하는 주소를 입력해 주세요.'); return; }
     setPending(true); setError('');
     try {
-      const job = await jobApi.analyze({
+      const analysisInput = {
         companyName: form.companyName.trim() || undefined,
         roleName: form.roleName.trim() || undefined,
         postingTitle: form.postingTitle.trim() || undefined,
         sourceUrl: form.sourceUrl.trim() || undefined,
         postingContent: form.postingContent.trim(),
         coverLetterQuestions: [],
+      };
+      const attempt = resolveJobAnalysisAttempt(
+        analysisAttemptRef.current,
+        analysisInput,
+      );
+      analysisAttemptRef.current = attempt;
+      const job = await jobApi.analyze({
+        ...analysisInput,
+        clientRequestId: attempt.clientRequestId,
       });
+      analysisAttemptRef.current = null;
       setHistory((current) => [job, ...current.filter((item) => item.jobId !== job.jobId)]);
       navigate(`/jobs/${job.jobId}`, { state: { job } });
     } catch (reason) { setError(reason.message || '공고를 분석하지 못했습니다.'); }
