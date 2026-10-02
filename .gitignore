@@ -11,3 +11,6 @@ data/
 *.db
 *.sqlite
 *.sqlite3
+
+release/
+CareerMemory.spec

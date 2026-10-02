@@ -152,3 +152,7 @@ Pydantic Schema 검증
 - AI·프론트엔드 계약: [AI_FRONTEND_CONTRACT_MAPPING.md](AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md)
 - 스키마 개선 기록: [DATA_SCHEMA_AUDIT_improvement.md](docs/DATA_SCHEMA_AUDIT_improvement.md)
 - 작업 목록: [TODO.md](docs/TODO.md)
+
+## Windows 실행 파일
+
+실행 파일 사용법과 재빌드 방법은 [WINDOWS_EXE.md](WINDOWS_EXE.md)를 참고하세요.

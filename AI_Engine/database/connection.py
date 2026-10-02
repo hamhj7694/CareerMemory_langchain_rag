@@ -18,7 +18,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 # 3. 프로젝트 환경 변수
 load_dotenv()
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(os.getenv("CAREER_MEMORY_DATA_ROOT") or Path(__file__).resolve().parents[2])
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "career_memory.db"
 DEFAULT_DATABASE_URL = (
     f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
