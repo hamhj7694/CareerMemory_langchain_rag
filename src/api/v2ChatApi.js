@@ -316,9 +316,13 @@ function makeProposal(conversationId, messageId, content, intents, attachmentIds
   return proposal;
 }
 
-function assistantText(intents, proposal) {
+function assistantText(intents, proposal, modeHint = 'general') {
   if (proposal?.type === 'analyze_job') return '공고 내용을 확인했습니다. 요구사항과 저장된 경험을 비교할 수 있도록 분석 제안을 만들었어요.';
   if (proposal) return '말씀해 주신 내용을 경험 후보로 정리했습니다. 제안 카드를 확인하고 수정하거나 저장해 주세요.';
+  if (modeHint === 'experience') return '경험 정리 모드로 함께 살펴볼게요. 먼저 그 경험에서 맡았던 역할을 알려주세요.';
+  if (modeHint === 'job') return '채용공고 분석 모드로 살펴볼게요. 공고 내용을 붙여넣거나 파일로 첨부해 주세요.';
+  if (modeHint === 'document_feedback') return '문서 피드백 모드로 검토할게요. 확인할 내용을 입력하거나 문서를 첨부해 주세요.';
+  if (modeHint === 'interview') return '면접 준비 모드로 함께 준비할게요. 지원하는 직무나 공고를 알려주세요.';
   return '말씀하신 내용을 바탕으로 함께 살펴볼게요. 더 구체적인 상황이나 원하는 도움을 알려주세요.';
 }
 
@@ -469,7 +473,7 @@ function createMessagePair(conversationId, input) {
     citations: [], proposal_ids: [], actions: [], created_at: timestamp(), completed_at: timestamp(),
   };
   const proposal = makeProposal(conversationId, userMessage.id, content, intents, attachmentIds);
-  const response = assistantText(intents, proposal);
+  const response = assistantText(intents, proposal, input.mode_hint);
   const assistantMessage = {
     id: nextId('MSG'), conversation_id: conversationId, role: 'assistant', status: 'completed', content: response,
     sequence: conversation.message_count + 2,

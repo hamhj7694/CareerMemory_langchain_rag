@@ -260,6 +260,44 @@ class ConversationApiTests(unittest.TestCase):
             "테스트 사용자",
         )
 
+    def test_send_message_passes_selected_question_mode_to_chatbot(self) -> None:
+        conversation = self.create_conversation().json()
+
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "이력서 표현을 검토해 주세요.",
+                "intent": "auto",
+                "mode_hint": "document_feedback",
+                "attachment_ids": [],
+                "response_mode": "complete",
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            self.chatbot.requests[0].mode_hint,
+            "document_feedback",
+        )
+
+    def test_send_message_rejects_unknown_question_mode(self) -> None:
+        conversation = self.create_conversation().json()
+
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "질문입니다.",
+                "intent": "auto",
+                "mode_hint": "unknown-mode",
+                "attachment_ids": [],
+                "response_mode": "complete",
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+
     def test_uploaded_text_attachment_body_reaches_chatbot_context(self) -> None:
         upload = self.client.post(
             "/api/v2/attachments",

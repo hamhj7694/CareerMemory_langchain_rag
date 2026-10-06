@@ -381,6 +381,7 @@ class ChatbotAI:
             if message.role in {ChatRole.USER, ChatRole.ASSISTANT}
             and message.content.strip()
         ]
+        mode_messages = cls._mode_guidance_messages(request)
         phase_messages = cls._conversation_phase_messages(
             request,
             history_messages=history_messages,
@@ -388,11 +389,45 @@ class ChatbotAI:
         context_messages = cls._context_messages(request)
         return [
             *account_context,
+            *mode_messages,
             *phase_messages,
             *context_messages,
             *history_messages,
             cls._user_message(request),
         ]
+
+    @staticmethod
+    def _mode_guidance_messages(request: ChatRequest) -> list[dict[str, str]]:
+        guidance = {
+            "experience": (
+                "사용자가 '경험 정리' 질문 모드를 선택했습니다. 현재 대화에서 "
+                "상황·역할·행동·결과·역량을 자연스럽게 구체화하되, 한 번에 가장 "
+                "중요한 질문 하나만 하세요. 실제 저장이나 경험 초안 생성이 실행된 "
+                "것처럼 말하지 마세요."
+            ),
+            "job": (
+                "사용자가 '채용공고 분석' 질문 모드를 선택했습니다. 제공된 공고의 "
+                "업무·자격요건·우대사항을 사실에 근거해 설명하고 저장 경험과 비교해 "
+                "주세요. 공고 내용이 부족하면 붙여넣기나 파일 첨부를 요청하고, 실제 "
+                "공고 분석 기록이 저장되었다고 말하지 마세요."
+            ),
+            "document_feedback": (
+                "사용자가 '문서 피드백' 질문 모드를 선택했습니다. 이력서·자기소개서 "
+                "등 제공된 문서의 내용, 구조, 표현을 검토하고 근거가 분명한 수정안을 "
+                "제안하세요. 제공되지 않은 문서 내용은 추측하지 마세요."
+            ),
+            "interview": (
+                "사용자가 '면접 준비' 질문 모드를 선택했습니다. 지원 직무와 공고, "
+                "사용자의 실제 경험을 바탕으로 예상 질문과 답변을 준비하세요. 정보가 "
+                "부족하면 가장 필요한 내용 하나를 먼저 질문하고 경험을 꾸며내지 마세요."
+            ),
+        }.get(request.mode_hint)
+        if not guidance:
+            return []
+        return [{
+            "role": "system",
+            "content": f"[사용자 선택 질문 모드]\n{guidance}",
+        }]
 
     @staticmethod
     def _conversation_phase_messages(

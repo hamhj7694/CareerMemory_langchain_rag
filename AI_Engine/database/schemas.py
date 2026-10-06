@@ -115,6 +115,13 @@ class MessageContext(BaseModel):
 class MessageCreate(BaseModel):
     content: str = Field(default="", max_length=50_000)
     intent: InputIntent = "auto"
+    mode_hint: Literal[
+        "general",
+        "experience",
+        "job",
+        "document_feedback",
+        "interview",
+    ] = "general"
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     context: MessageContext = Field(default_factory=MessageContext)
     response_mode: Literal["complete", "stream"] = "complete"

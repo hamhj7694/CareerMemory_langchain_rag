@@ -30,6 +30,7 @@ export function ChatPage({ onSend }) {
   const [extractionStatus, setExtractionStatus] = useState(null);
   const [notice, setNotice] = useState('');
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [questionMode, setQuestionMode] = useState('general');
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [restoring, setRestoring] = useState(Boolean(routeConversationId));
   const messageCount = messages.length;
@@ -230,6 +231,7 @@ export function ChatPage({ onSend }) {
     const content = text.trim();
     if (busy || (!content && files.length === 0)) return;
     let submittedConversationId = conversationId.current;
+    const submittedModeHint = questionMode;
     const submittedFiles = [...files];
     const attachments = files.map((file) => file.name);
     const userMessage = { id: makeId(), role: 'user', content: content || '첨부한 자료를 확인해 주세요.', attachments, status: 'sending' };
@@ -239,7 +241,7 @@ export function ChatPage({ onSend }) {
       let response;
       let movedToConversation = false;
       if (onSend) {
-        response = await onSend({ mode: 'auto', content, files });
+        response = await onSend({ mode: 'auto', modeHint: submittedModeHint, content, files });
       } else {
         if (!conversationId.current) conversationId.current = (await v2ChatApi.createConversation({ title: (content || files[0]?.name || '새 대화').slice(0, 28) })).id;
         submittedConversationId = conversationId.current;
@@ -249,6 +251,7 @@ export function ChatPage({ onSend }) {
         for await (const event of v2ChatApi.streamMessage(conversationId.current, {
           content,
           intent: 'auto',
+          mode_hint: submittedModeHint,
           attachment_ids: uploaded.map(({ id }) => id),
         })) {
           if (event.type === 'message.accepted') {
@@ -335,7 +338,7 @@ export function ChatPage({ onSend }) {
     } finally { setBusy(false); }
   };
 
-  const start = ({ prompt }) => { setText(prompt); };
+  const start = ({ id }) => { setQuestionMode(id); };
   const extractRecentConversation = async () => {
     if (!conversationId.current || extractionRequestInFlight.current || extracting || busy || !extractionStatus?.unprocessed_message_count) return;
     extractionRequestInFlight.current = true;
@@ -591,6 +594,7 @@ export function ChatPage({ onSend }) {
     initialScrollPending.current = false;
     shouldFollowLatest.current = true;
     setShowJumpToLatest(false);
+    setQuestionMode('general');
     setRestoring(false);
     setMessages([]); setProposals({}); setNotice(''); setExtractionStatus(null);
     if (routeConversationId) {
@@ -671,7 +675,7 @@ export function ChatPage({ onSend }) {
         />
       </div>
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
-      <ChatComposer text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} showQuickActions={messages.length > 0} />
+      <ChatComposer text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} showQuickActions={messages.length > 0} selectedMode={questionMode} onModeChange={setQuestionMode} />
     </section>
     <ConversationSidebar conversations={conversations} activeId={routeConversationId} open={sessionsOpen} onClose={() => setSessionsOpen(false)} onSelect={(id) => { setSessionsOpen(false); navigate(`/chat/${id}`); }} onCreate={() => { setSessionsOpen(false); startNewConversation(); }} onRename={renameConversation} onDelete={deleteConversation} onSearch={searchConversations} />
   </div>;

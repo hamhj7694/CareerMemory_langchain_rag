@@ -134,6 +134,7 @@ export function sendMessage(conversationId, input = {}) {
     body: {
       content: input.content || '',
       intent: input.intent || 'auto',
+      mode_hint: input.mode_hint || 'general',
       attachment_ids: input.attachment_ids || [],
       context: input.context || {
         experience_ids: [],
@@ -162,6 +163,7 @@ export async function* streamMessage(conversationId, input = {}) {
       body: JSON.stringify(toWireModel({
         content: input.content || '',
         intent: input.intent || 'auto',
+        mode_hint: input.mode_hint || 'general',
         attachment_ids: input.attachment_ids || [],
         context: input.context || {
           experience_ids: [],

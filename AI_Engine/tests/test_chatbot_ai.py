@@ -281,6 +281,22 @@ class ChatbotAITests(unittest.TestCase):
 
         self.assertEqual(response.message.content, "함께 정리해 볼게요.")
 
+    def test_selected_question_mode_adds_system_guidance(self) -> None:
+        request = self.request.model_copy(
+            update={"mode_hint": "interview"}
+        )
+
+        self.chatbot.invoke(request)
+
+        mode_message = self.agent.invoke_input["messages"][0]
+        self.assertEqual(mode_message["role"], "system")
+        self.assertIn("[사용자 선택 질문 모드]", mode_message["content"])
+        self.assertIn("면접 준비", mode_message["content"])
+        self.assertEqual(
+            self.agent.invoke_input["messages"][-1]["content"],
+            request.content,
+        )
+
     def test_explicit_experience_mode_is_not_executed_by_chatbot(self) -> None:
         request = self.request.model_copy(
             update={"mode": "experience_extraction"}

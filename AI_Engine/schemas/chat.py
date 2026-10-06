@@ -142,6 +142,13 @@ class ChatRequest(SchemaModel):
     message_id: Identifier
     sequence: SequenceNumber
     mode: ChatMode = ChatMode.AUTO
+    mode_hint: Literal[
+        "general",
+        "experience",
+        "job",
+        "document_feedback",
+        "interview",
+    ] = "general"
     routed_intent: Literal[
         "chat",
         "experience_extraction",

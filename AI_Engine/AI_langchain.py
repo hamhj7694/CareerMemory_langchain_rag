@@ -65,6 +65,7 @@ class CareerMemoryAI:
         current_user: User,
         user_message: Message,
         stored_history: Sequence[Message],
+        mode_hint: str = "general",
     ) -> PreparedChatRequest:
         context_attachment_ids = _conversation_attachment_ids(
             current_attachment_ids=user_message.attachment_ids,
@@ -172,6 +173,7 @@ class CareerMemoryAI:
             # 전용 경험/공고 파이프라인은 API가 별도로 실행한다. 자동 분류
             # 결과는 routed_intent로 보존하고 일반 답변 생성기는 chat 범위만 맡는다.
             mode=ChatMode.CHAT,
+            mode_hint=mode_hint,
             routed_intent=route.route,
             content=user_message.content,
             attachment_ids=user_message.attachment_ids,

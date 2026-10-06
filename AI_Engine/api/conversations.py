@@ -528,6 +528,7 @@ def send_message(
         current_user=current_user,
         user_message=user_message,
         stored_history=stored_history,
+        mode_hint=request.mode_hint,
     )
     resolved_intent = str(prepared.route.route)
 
@@ -713,6 +714,7 @@ def stream_message(
         current_user=current_user,
         user_message=user_message,
         stored_history=stored_history,
+        mode_hint=request.mode_hint,
     )
     ai_request = prepared.request.model_copy(update={"mode": ai_mode})
     resolved_intent = str(prepared.route.route)

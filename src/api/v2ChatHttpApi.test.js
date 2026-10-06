@@ -66,6 +66,7 @@ describe('실제 대화 HTTP API', () => {
       body: {
         content: '안녕하세요',
         intent: 'auto',
+        mode_hint: 'general',
         attachment_ids: [],
         context: {
           experience_ids: [],
@@ -75,6 +76,20 @@ describe('실제 대화 HTTP API', () => {
         response_mode: 'complete',
         client_request_id: 'request-fixed',
       },
+    });
+  });
+
+  it('선택한 질문 모드를 메시지 요청과 분리해 전달한다', async () => {
+    await v2ChatHttpApi.sendMessage('CONV-001', {
+      content: '이 문장을 검토해 주세요.',
+      mode_hint: 'document_feedback',
+      client_request_id: 'request-mode',
+    });
+
+    expect(request.mock.calls[0][0].body).toMatchObject({
+      content: '이 문장을 검토해 주세요.',
+      intent: 'auto',
+      mode_hint: 'document_feedback',
     });
   });
 
@@ -165,6 +180,7 @@ describe('실제 대화 HTTP API', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(
       expect.objectContaining({
         content: '인사해줘',
+        mode_hint: 'general',
         response_mode: 'stream',
         client_request_id: 'request-fixed',
       }),

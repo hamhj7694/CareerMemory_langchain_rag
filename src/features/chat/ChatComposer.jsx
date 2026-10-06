@@ -1,12 +1,13 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { v2ChatApi } from '../../api/v2ChatApi.js';
 import { EVIDENCE_FILE_LIMITS, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../evidence/model/evidenceFileSelection.js';
-import { CHAT_QUICK_ACTIONS } from './chatQuickActions.js';
+import { CHAT_QUICK_ACTIONS, GENERAL_CHAT_MODE } from './chatQuickActions.js';
 
-export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmit, busy, showQuickActions = false }) {
+export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmit, busy, showQuickActions = false, selectedMode = 'general', onModeChange }) {
   const inputId = useId();
   const fileInput = useRef(null);
   const textInput = useRef(null);
+  const previousMode = useRef(selectedMode);
   const [fileError, setFileError] = useState('');
   const [fileNotice, setFileNotice] = useState('');
   const [checkingFiles, setCheckingFiles] = useState(false);
@@ -34,29 +35,41 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
     }
   };
 
-  const applyQuickAction = (action) => {
-    const currentText = text.trim();
-    onTextChange(currentText ? `${currentText}\n\n${action.prompt}` : action.prompt);
-    window.requestAnimationFrame(() => {
-      textInput.current?.focus();
-      textInput.current?.setSelectionRange(
-        textInput.current.value.length,
-        textInput.current.value.length,
-      );
-    });
-  };
+  const activeMode = CHAT_QUICK_ACTIONS.find((action) => action.id === selectedMode)
+    || GENERAL_CHAT_MODE;
+
+  useEffect(() => {
+    if (previousMode.current === selectedMode) return undefined;
+    previousMode.current = selectedMode;
+    const frame = window.requestAnimationFrame(() => textInput.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedMode]);
 
   return <div className="v2-composer-shell">
-    {showQuickActions && <nav className="v2-chat-quick-actions" aria-label="추천 대화 기능">
-      {CHAT_QUICK_ACTIONS.map((action) => <button
-        type="button"
-        key={action.id}
-        disabled={busy}
-        onClick={() => applyQuickAction(action)}
-      >
-        {action.title}
-      </button>)}
-    </nav>}
+    <div className="v2-chat-mode-toolbar">
+      <div className="v2-chat-mode-indicator" aria-label={`현재 질문 모드: ${activeMode.title}`}>
+        <span>질문 모드</span>
+        <strong>{activeMode.title}</strong>
+        {selectedMode !== GENERAL_CHAT_MODE.id && <button
+          type="button"
+          onClick={() => onModeChange?.(GENERAL_CHAT_MODE.id)}
+          aria-label="일반 대화 모드로 돌아가기"
+          title="모드 해제"
+        >×</button>}
+      </div>
+      {showQuickActions && <nav className="v2-chat-quick-actions" aria-label="질문 모드 선택">
+        {CHAT_QUICK_ACTIONS.map((action) => <button
+          type="button"
+          key={action.id}
+          className={selectedMode === action.id ? 'is-active' : ''}
+          aria-pressed={selectedMode === action.id}
+          disabled={busy}
+          onClick={() => onModeChange?.(action.id)}
+        >
+          {action.title}
+        </button>)}
+      </nav>}
+    </div>
     <div className="v2-composer">
     {files.length > 0 && <ul className="v2-attachments" aria-label="첨부 파일">
       {files.map((file) => <li key={evidenceFileKey(file)}>
@@ -75,7 +88,7 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
       value={text}
       onChange={(event) => onTextChange(event.target.value)}
       onKeyDown={handleKeyDown}
-      placeholder="경험을 이야기하거나 커리어에 관해 질문해 보세요."
+      placeholder={activeMode.placeholder}
     />
     <div className="v2-composer__tools">
       <div className="v2-composer__actions">
