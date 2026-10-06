@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChatComposer, ConversationSidebar, MessageThread } from '../features/chat/index.js';
+import { ChatComposer, ConversationGuide, ConversationSidebar, MessageThread } from '../features/chat/index.js';
 import { applyProposalPanelChanges, toProposalView } from '../features/chat/proposalMapper.js';
 import { toEmbeddedProposalView, toUiMessage } from '../features/chat/chatMessageMapper.js';
 import { chatExperienceApi, experienceTrashApi, jobApi, v2ChatApi } from '../api/index.js';
@@ -8,6 +8,7 @@ import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
 import '../styles/v2-chat.css';
 
 const makeId = () => globalThis.crypto?.randomUUID?.() ?? `message-${Date.now()}`;
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 72;
 
 export function ChatPage({ onSend }) {
   const { conversationId: routeConversationId } = useParams();
@@ -16,6 +17,7 @@ export function ChatPage({ onSend }) {
   // 사용자가 새 대화를 직접 선택한 경우에는 최신 대화 자동 열기를 한 번 건너뛴다.
   const keepNewConversationOpen = useRef(false);
   const scrollArea = useRef(null);
+  const shouldFollowLatest = useRef(true);
   const [text, setText] = useState('');
   const [files, setFiles] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -27,6 +29,7 @@ export function ChatPage({ onSend }) {
   const [notice, setNotice] = useState('');
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [restoring, setRestoring] = useState(Boolean(routeConversationId));
+  const messageCount = messages.length;
   const extractionRequestInFlight = useRef(false);
   const initialScrollPending = useRef(Boolean(routeConversationId));
 
@@ -79,6 +82,8 @@ export function ChatPage({ onSend }) {
 
   useEffect(() => {
     if (restoring) return undefined;
+    const forceInitialScroll = initialScrollPending.current;
+    if (!forceInitialScroll && !shouldFollowLatest.current) return undefined;
     const frame = window.requestAnimationFrame(() => {
       const area = scrollArea.current;
       if (!area) return;
@@ -86,10 +91,22 @@ export function ChatPage({ onSend }) {
         top: area.scrollHeight,
         behavior: initialScrollPending.current ? 'auto' : 'smooth',
       });
+      shouldFollowLatest.current = true;
       initialScrollPending.current = false;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages, busy, restoring]);
+  }, [messageCount, restoring]);
+
+  const handleConversationScroll = () => {
+    const area = scrollArea.current;
+    if (!area) return;
+    const distanceFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
+    shouldFollowLatest.current = distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+  };
+  const searchConversations = useCallback(async (query) => {
+    const result = await v2ChatApi.listConversations({ query, limit: 100 });
+    return result.items;
+  }, []);
 
   useEffect(() => {
     conversationId.current = routeConversationId ?? null;
@@ -539,6 +556,7 @@ export function ChatPage({ onSend }) {
   const startNewConversation = () => {
     conversationId.current = null;
     initialScrollPending.current = false;
+    shouldFollowLatest.current = true;
     setRestoring(false);
     setMessages([]); setProposals({}); setNotice(''); setExtractionStatus(null);
     if (routeConversationId) {
@@ -594,10 +612,13 @@ export function ChatPage({ onSend }) {
           <button type="button" className="v2-mobile-session-button" onClick={() => setSessionsOpen(true)}>대화 기록</button>
         </div>
       </header>
-      <div className="v2-conversation__scroll" ref={scrollArea}>
-        {restoring || changingConversation
-          ? <p className="v2-conversation__loading" role="status">최근 대화를 불러오는 중입니다.</p>
-          : <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />}
+      <div className="v2-conversation__body">
+        <div className="v2-conversation__scroll" ref={scrollArea} onScroll={handleConversationScroll}>
+          {restoring || changingConversation
+            ? <p className="v2-conversation__loading" role="status">최근 대화를 불러오는 중입니다.</p>
+            : <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />}
+        </div>
+        <ConversationGuide messages={messages} scrollRef={scrollArea} />
       </div>
       <div className="v2-analysis-progress">
         <AnalysisProgress
@@ -609,7 +630,7 @@ export function ChatPage({ onSend }) {
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
       <ChatComposer text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} />
     </section>
-    <ConversationSidebar conversations={conversations} activeId={routeConversationId} open={sessionsOpen} onClose={() => setSessionsOpen(false)} onSelect={(id) => { setSessionsOpen(false); navigate(`/chat/${id}`); }} onCreate={() => { setSessionsOpen(false); startNewConversation(); }} onRename={renameConversation} onDelete={deleteConversation} />
+    <ConversationSidebar conversations={conversations} activeId={routeConversationId} open={sessionsOpen} onClose={() => setSessionsOpen(false)} onSelect={(id) => { setSessionsOpen(false); navigate(`/chat/${id}`); }} onCreate={() => { setSessionsOpen(false); startNewConversation(); }} onRename={renameConversation} onDelete={deleteConversation} onSearch={searchConversations} />
   </div>;
 }
 

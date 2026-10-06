@@ -84,6 +84,7 @@ class ConversationResponse(DatabaseResponse):
     title: str
     status: Literal["active", "archived"]
     last_message_preview: str | None = None
+    search_preview: str | None = None
     message_count: int = Field(ge=0)
     pending_proposal_count: int = Field(ge=0)
     created_at: datetime

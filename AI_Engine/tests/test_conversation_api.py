@@ -165,6 +165,44 @@ class ConversationApiTests(unittest.TestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["title"], "조회할 대화")
 
+    def test_list_conversations_searches_message_content(self) -> None:
+        matching = self.create_conversation(title="제목에는 없는 대화").json()
+        self.create_conversation(title="관련 없는 대화")
+        self.client.post(
+            f"/api/v2/conversations/{matching['id']}/messages",
+            json={
+                "content": "고객 이탈률을 분석해 전환 흐름을 개선했습니다.",
+                "intent": "question",
+                "attachment_ids": [],
+                "response_mode": "complete",
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        response = self.client.get(
+            "/api/v2/conversations",
+            params={"query": "이탈률"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total_count"], 1)
+        self.assertEqual(response.json()["items"][0]["id"], matching["id"])
+        self.assertIn("이탈률", response.json()["items"][0]["search_preview"])
+
+    def test_list_conversations_still_searches_titles(self) -> None:
+        matching = self.create_conversation(title="데이터 분석 회고").json()
+        self.create_conversation(title="관련 없는 대화")
+
+        response = self.client.get(
+            "/api/v2/conversations",
+            params={"query": "분석 회고"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total_count"], 1)
+        self.assertEqual(response.json()["items"][0]["id"], matching["id"])
+        self.assertIsNone(response.json()["items"][0]["search_preview"])
+
     def test_new_conversation_has_empty_message_history(self) -> None:
         conversation = self.create_conversation().json()
 

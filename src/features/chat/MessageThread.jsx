@@ -47,7 +47,7 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
     : null;
 
   return <div className="v2-message-list" aria-live="polite">
-    {messages.map((message) => <article key={message.id} className={`v2-message v2-message--${message.role}`}>
+    {messages.map((message) => <article key={message.id} data-message-id={message.id} className={`v2-message v2-message--${message.role}`}>
       <div className="v2-message__meta">{message.role === 'assistant' ? 'Career Memory' : '나'}</div>
       {message.id === streamingMessageId && !message.content
         ? <p className="v2-message--thinking" role="status"><span /> {busyLabel}</p>

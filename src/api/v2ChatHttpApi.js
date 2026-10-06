@@ -48,10 +48,10 @@ export function createConversation(input = {}) {
 }
 
 // 4. 대화 목록과 상세
-export function listConversations({ status = 'active', cursor, limit = 20 } = {}) {
+export function listConversations({ status = 'active', cursor, limit = 20, query } = {}) {
   return http.request({
     path: '/api/v2/conversations',
-    query: { status, cursor, limit },
+    query: { status, cursor, limit, query },
   });
 }
 

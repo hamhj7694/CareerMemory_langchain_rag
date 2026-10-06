@@ -38,6 +38,20 @@ describe('실제 대화 HTTP API', () => {
     );
   });
 
+  it('대화 검색어를 목록 API에 전달한다', async () => {
+    await v2ChatHttpApi.listConversations({ query: '전환율 개선', limit: 100 });
+
+    expect(request).toHaveBeenCalledWith({
+      path: '/api/v2/conversations',
+      query: {
+        status: 'active',
+        cursor: undefined,
+        limit: 100,
+        query: '전환율 개선',
+      },
+    });
+  });
+
   it('메시지를 FastAPI의 비스트리밍 주소로 전송한다', async () => {
     await v2ChatHttpApi.sendMessage('CONV-001', {
       content: '안녕하세요',

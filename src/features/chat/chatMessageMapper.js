@@ -34,6 +34,7 @@ export function toUiMessage(message) {
     sequence: message.sequence,
     role: message.role,
     content: message.content,
+    resolvedIntents: message.resolved_intents || message.resolvedIntents || [],
     status: message.status,
     error: message.error,
     attachments: attachmentRefs.length

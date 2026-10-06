@@ -6,6 +6,22 @@ describe('career chat extraction flow', () => {
   beforeEach(() => v2ChatApi.reset());
   afterEach(() => v2ChatApi.reset());
 
+  it('finds a conversation by a message body and returns a matching preview', async () => {
+    const matching = await v2ChatApi.createConversation({ title: '분기 회고' });
+    await v2ChatApi.createConversation({ title: '다른 대화' });
+    await v2ChatApi.sendMessage(matching.id, {
+      content: '사용자 온보딩 완료율을 높인 실험을 정리해 주세요.',
+      intent: 'auto',
+      attachment_ids: [],
+    });
+
+    const result = await v2ChatApi.listConversations({ query: '온보딩 완료율' });
+
+    expect(result.total_count).toBe(1);
+    expect(result.items[0]).toMatchObject({ id: matching.id });
+    expect(result.items[0].search_preview).toContain('온보딩 완료율');
+  });
+
   it('structures only unprocessed conversation messages and records an extraction run', async () => {
     const conversation = await v2ChatApi.createConversation({ title: '증분 정리 테스트' });
     await v2ChatApi.sendMessage(conversation.id, {

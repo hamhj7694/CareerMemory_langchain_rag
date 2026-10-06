@@ -333,9 +333,39 @@ export async function createConversation({ title = '새 대화' } = {}) {
   return snapshot(conversation);
 }
 
-export async function listConversations({ status = 'active' } = {}) {
+function buildConversationSearchPreview(content, query, maxLength = 220) {
+  const compact = String(content || '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  const matchIndex = compact.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+  if (matchIndex < 0) return `${compact.slice(0, maxLength - 1)}…`;
+  let start = Math.max(0, matchIndex - 60);
+  const end = Math.min(compact.length, start + maxLength);
+  if (end === compact.length) start = Math.max(0, end - maxLength);
+  return `${start ? '…' : ''}${compact.slice(start, end)}${end < compact.length ? '…' : ''}`;
+}
+
+export async function listConversations({ status = 'active', query } = {}) {
   await wait();
-  const items = store.conversations.filter((item) => !status || item.status === status);
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  const items = store.conversations
+    .filter((item) => !status || item.status === status)
+    .map((item) => {
+      if (!normalizedQuery) return item;
+      const matchingMessage = [...store.messages].reverse().find((message) => (
+        message.conversation_id === item.id
+        && ['user', 'assistant'].includes(message.role)
+        && String(message.content || '').toLocaleLowerCase().includes(normalizedQuery)
+      ));
+      const titleMatches = String(item.title || '').toLocaleLowerCase().includes(normalizedQuery);
+      if (!titleMatches && !matchingMessage) return null;
+      return {
+        ...item,
+        search_preview: matchingMessage
+          ? buildConversationSearchPreview(matchingMessage.content, String(query).trim())
+          : null,
+      };
+    })
+    .filter(Boolean);
   return { items: snapshot(items), total_count: items.length };
 }
 

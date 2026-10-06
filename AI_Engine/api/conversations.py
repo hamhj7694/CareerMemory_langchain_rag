@@ -13,7 +13,7 @@ from uuid import uuid4
 # 2. FastAPI와 SQLAlchemy
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -128,6 +128,29 @@ def decode_cursor(cursor: str | None) -> int:
     return offset
 
 
+def build_message_search_preview(
+    content: str,
+    search_query: str,
+    max_length: int = 220,
+) -> str:
+    """검색어 주변의 메시지 본문을 대화목록 미리보기 길이로 줄인다."""
+
+    compact_content = " ".join((content or "").split())
+    if len(compact_content) <= max_length:
+        return compact_content
+
+    match_index = compact_content.casefold().find(search_query.casefold())
+    if match_index < 0:
+        return f"{compact_content[:max_length - 1]}…"
+
+    start = max(0, match_index - 60)
+    end = min(len(compact_content), start + max_length)
+    if end == len(compact_content):
+        start = max(0, end - max_length)
+    excerpt = compact_content[start:end]
+    return f"{'…' if start else ''}{excerpt}{'…' if end < len(compact_content) else ''}"
+
+
 # 9. 대화 존재 확인
 def get_conversation_or_404(
     conversation_id: str,
@@ -239,40 +262,84 @@ def list_conversations(
     ),
     cursor: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
+    search_query: str | None = Query(default=None, alias="query", max_length=200),
     current_user: User = Depends(get_current_user),
     database: Session = Depends(get_database_session),
 ) -> ConversationListResponse:
-    """상태와 페이지 위치를 기준으로 최근 대화 목록을 반환한다."""
+    """상태·페이지 위치·제목 및 메시지 검색어로 대화 목록을 반환한다."""
 
     offset = decode_cursor(cursor)
+    normalized_query = (search_query or "").strip()
     status_filter = (
         (Conversation.status == conversation_status)
         & (Conversation.user_id == current_user.id)
     )
-    total_count = database.scalar(
-        select(func.count(Conversation.id)).where(status_filter)
-    )
-    conversations = list(
-        database.scalars(
-            select(Conversation)
-            .where(status_filter)
-            .order_by(Conversation.updated_at.desc())
-            .offset(offset)
-            .limit(limit)
+    filters = [status_filter]
+    matching_message_preview = None
+    if normalized_query:
+        message_match_filters = (
+            Message.conversation_id == Conversation.id,
+            Message.role.in_(("user", "assistant")),
+            Message.content.icontains(normalized_query, autoescape=True),
         )
-    )
+        matching_message_exists = (
+            select(Message.id)
+            .where(*message_match_filters)
+            .exists()
+        )
+        filters.append(or_(
+            Conversation.title.icontains(normalized_query, autoescape=True),
+            matching_message_exists,
+        ))
+        matching_message_preview = (
+            select(Message.content)
+            .where(*message_match_filters)
+            .order_by(Message.sequence.desc())
+            .limit(1)
+            .correlate(Conversation)
+            .scalar_subquery()
+        )
 
-    next_offset = offset + len(conversations)
+    total_count = database.scalar(
+        select(func.count(Conversation.id)).where(*filters)
+    )
+    base_query = (
+        select(Conversation)
+        .where(*filters)
+        .order_by(Conversation.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    if matching_message_preview is None:
+        conversation_rows = [
+            (conversation, None)
+            for conversation in database.scalars(base_query)
+        ]
+    else:
+        conversation_rows = list(database.execute(
+            base_query.add_columns(matching_message_preview.label("search_preview"))
+        ))
+
+    response_items = []
+    for conversation, preview in conversation_rows:
+        response = ConversationResponse.model_validate(conversation)
+        if preview:
+            response = response.model_copy(update={
+                "search_preview": build_message_search_preview(
+                    preview,
+                    normalized_query,
+                ),
+            })
+        response_items.append(response)
+
+    next_offset = offset + len(conversation_rows)
     next_cursor = (
         str(next_offset)
         if next_offset < (total_count or 0)
         else None
     )
     return ConversationListResponse(
-        items=[
-            ConversationResponse.model_validate(conversation)
-            for conversation in conversations
-        ],
+        items=response_items,
         total_count=total_count or 0,
         next_cursor=next_cursor,
     )
