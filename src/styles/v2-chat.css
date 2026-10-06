@@ -33,6 +33,10 @@
 .v2-conversation-guide__item:last-child:focus-visible .v2-conversation-guide__preview { transform: translate(0, 0); }
 .v2-conversation-guide__preview strong { color: var(--color-primary); font-size: var(--text-caption); }
 .v2-conversation-guide__preview span { overflow: hidden; color: var(--color-text-muted); font-size: var(--text-caption); line-height: 1.45; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.v2-jump-to-latest { position:absolute;z-index:4;left:50%;bottom:16px;width:28px;height:28px;padding:0;border:1px solid var(--color-border-strong);border-radius:50%;display:grid;place-items:center;color:var(--color-primary);background:rgb(255 255 255 / 96%);box-shadow:var(--shadow-sm);font:inherit;font-size:15px;line-height:1;cursor:pointer;transform:translateX(-50%);transition:color .15s ease,background-color .15s ease,box-shadow .15s ease,transform .15s ease}
+.v2-jump-to-latest:hover { color:#fff;background:var(--color-primary);box-shadow:0 5px 15px rgb(29 78 216 / 24%);transform:translate(-50%,-1px) }
+.v2-jump-to-latest:focus-visible { outline:2px solid var(--color-primary-subtle);outline-offset:1px }
+.v2-jump-to-latest span { display:block;transform:translateY(-1px) }
 .v2-chat-empty { min-height: 100%; max-width: 760px; margin: auto; display: grid; align-content: center; justify-items: center; text-align: center; }
 .v2-chat-empty__mark { width: 54px; height: 54px; display: grid; place-items: center; border-radius: var(--radius-lg); color: var(--color-primary); background: var(--color-primary-subtle); font-weight: 800; }
 .v2-chat-empty h1 { margin: var(--space-5) 0 var(--space-2); font-size: var(--text-h1); word-break: keep-all; }
@@ -84,7 +88,12 @@
 @keyframes v2-pulse { to { opacity: .25; } }
 .v2-chat-notice { width:min(calc(100% - 48px),var(--chat-content-width));box-sizing:border-box;margin:0 auto var(--space-2);padding:var(--space-2) var(--space-3);border-radius:var(--radius-sm);color:var(--color-confirmed);background:var(--color-confirmed-subtle);font-size:var(--text-body-sm) }
 .v2-analysis-progress { width:min(calc(100% - 48px),var(--chat-content-width));box-sizing:border-box;margin:0 auto var(--space-3); }
-.v2-composer { width: min(calc(100% - 48px), var(--chat-content-width)); margin: 0 auto var(--space-5); padding: var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-popover); }
+.v2-composer-shell { width:min(calc(100% - 48px),var(--chat-content-width));min-width:0;margin:0 auto var(--space-5) }
+.v2-chat-quick-actions { margin:0 0 var(--space-2);padding:1px;display:flex;gap:var(--space-2);overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:thin }
+.v2-chat-quick-actions button { min-height:32px;padding:0 var(--space-3);flex:0 0 auto;border:1px solid var(--color-border);border-radius:999px;color:var(--color-text-muted);background:var(--color-surface);font:inherit;font-size:var(--text-caption);font-weight:700;white-space:nowrap;cursor:pointer }
+.v2-chat-quick-actions button:hover { color:var(--color-primary);border-color:var(--color-primary);background:var(--color-primary-subtle) }
+.v2-chat-quick-actions button:disabled { opacity:.5;cursor:not-allowed }
+.v2-composer { width:100%;margin:0;padding:var(--space-3);border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);background:var(--color-surface);box-shadow:var(--shadow-popover); }
 .v2-composer:focus-within { border-color: var(--color-focus); }
 .v2-composer textarea { width: 100%; max-height: 180px; padding: var(--space-2); border: 0; resize: vertical; color: var(--color-text); background: transparent; line-height: 1.6; }
 .v2-composer textarea:focus { outline: 0; box-shadow: none; }
@@ -255,7 +264,8 @@
   .v2-starters { grid-template-columns: 1fr; margin-top: var(--space-6); }
   .v2-starters button { min-height: 72px; }
   .v2-message { max-width: 92%; }
-  .v2-composer { position: relative; bottom: auto; width: calc(100% - 24px); margin-bottom: var(--space-3); padding: var(--space-2); }
+  .v2-composer-shell { width:calc(100% - 24px);margin-bottom:var(--space-3) }
+  .v2-composer { position:relative;bottom:auto;width:100%;padding:var(--space-2) }
   .v2-analysis-progress { width:calc(100% - 24px); }
   .v2-chat-notice{width:calc(100% - 24px)}
   .v2-composer__hint { display: none; }

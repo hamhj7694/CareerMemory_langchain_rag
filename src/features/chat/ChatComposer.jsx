@@ -1,10 +1,12 @@
 import { useId, useRef, useState } from 'react';
 import { v2ChatApi } from '../../api/v2ChatApi.js';
 import { EVIDENCE_FILE_LIMITS, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../evidence/model/evidenceFileSelection.js';
+import { CHAT_QUICK_ACTIONS } from './chatQuickActions.js';
 
-export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmit, busy }) {
+export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmit, busy, showQuickActions = false }) {
   const inputId = useId();
   const fileInput = useRef(null);
+  const textInput = useRef(null);
   const [fileError, setFileError] = useState('');
   const [fileNotice, setFileNotice] = useState('');
   const [checkingFiles, setCheckingFiles] = useState(false);
@@ -32,7 +34,30 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
     }
   };
 
-  return <div className="v2-composer">
+  const applyQuickAction = (action) => {
+    const currentText = text.trim();
+    onTextChange(currentText ? `${currentText}\n\n${action.prompt}` : action.prompt);
+    window.requestAnimationFrame(() => {
+      textInput.current?.focus();
+      textInput.current?.setSelectionRange(
+        textInput.current.value.length,
+        textInput.current.value.length,
+      );
+    });
+  };
+
+  return <div className="v2-composer-shell">
+    {showQuickActions && <nav className="v2-chat-quick-actions" aria-label="추천 대화 기능">
+      {CHAT_QUICK_ACTIONS.map((action) => <button
+        type="button"
+        key={action.id}
+        disabled={busy}
+        onClick={() => applyQuickAction(action)}
+      >
+        {action.title}
+      </button>)}
+    </nav>}
+    <div className="v2-composer">
     {files.length > 0 && <ul className="v2-attachments" aria-label="첨부 파일">
       {files.map((file) => <li key={evidenceFileKey(file)}>
         <span aria-hidden="true">▧</span>
@@ -44,6 +69,7 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
     {fileNotice && <p className="v2-composer__file-notice" role="status">{fileNotice}</p>}
     <label className="sr-only" htmlFor={inputId}>Career Memory와 대화하기</label>
     <textarea
+      ref={textInput}
       id={inputId}
       rows="2"
       value={text}
@@ -59,5 +85,6 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
       </div>
     </div>
     <small className="v2-composer__hint">Enter로 전송 · PDF/TXT/이미지 최대 5개 · 파일당 25MiB·전체 100MiB</small>
+    </div>
   </div>;
 }

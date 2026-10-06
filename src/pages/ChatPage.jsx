@@ -18,6 +18,8 @@ export function ChatPage({ onSend }) {
   const keepNewConversationOpen = useRef(false);
   const scrollArea = useRef(null);
   const shouldFollowLatest = useRef(true);
+  const jumpingToLatest = useRef(false);
+  const jumpToLatestTimer = useRef(null);
   const [text, setText] = useState('');
   const [files, setFiles] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -28,6 +30,7 @@ export function ChatPage({ onSend }) {
   const [extractionStatus, setExtractionStatus] = useState(null);
   const [notice, setNotice] = useState('');
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [restoring, setRestoring] = useState(Boolean(routeConversationId));
   const messageCount = messages.length;
   const extractionRequestInFlight = useRef(false);
@@ -92,6 +95,7 @@ export function ChatPage({ onSend }) {
         behavior: initialScrollPending.current ? 'auto' : 'smooth',
       });
       shouldFollowLatest.current = true;
+      setShowJumpToLatest(false);
       initialScrollPending.current = false;
     });
     return () => window.cancelAnimationFrame(frame);
@@ -101,8 +105,37 @@ export function ChatPage({ onSend }) {
     const area = scrollArea.current;
     if (!area) return;
     const distanceFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
-    shouldFollowLatest.current = distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+    const isNearBottom = distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+    if (jumpingToLatest.current) {
+      shouldFollowLatest.current = true;
+      setShowJumpToLatest(false);
+      if (isNearBottom) jumpingToLatest.current = false;
+      return;
+    }
+    shouldFollowLatest.current = isNearBottom;
+    setShowJumpToLatest(!isNearBottom);
   };
+  const jumpToLatest = () => {
+    const area = scrollArea.current;
+    if (!area) return;
+    jumpingToLatest.current = true;
+    shouldFollowLatest.current = true;
+    setShowJumpToLatest(false);
+    window.clearTimeout(jumpToLatestTimer.current);
+    area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
+    jumpToLatestTimer.current = window.setTimeout(() => {
+      jumpingToLatest.current = false;
+      const currentArea = scrollArea.current;
+      if (!currentArea) return;
+      const distanceFromBottom = currentArea.scrollHeight
+        - currentArea.scrollTop
+        - currentArea.clientHeight;
+      const isNearBottom = distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+      shouldFollowLatest.current = isNearBottom;
+      setShowJumpToLatest(!isNearBottom);
+    }, 700);
+  };
+  useEffect(() => () => window.clearTimeout(jumpToLatestTimer.current), []);
   const searchConversations = useCallback(async (query) => {
     const result = await v2ChatApi.listConversations({ query, limit: 100 });
     return result.items;
@@ -557,6 +590,7 @@ export function ChatPage({ onSend }) {
     conversationId.current = null;
     initialScrollPending.current = false;
     shouldFollowLatest.current = true;
+    setShowJumpToLatest(false);
     setRestoring(false);
     setMessages([]); setProposals({}); setNotice(''); setExtractionStatus(null);
     if (routeConversationId) {
@@ -619,6 +653,15 @@ export function ChatPage({ onSend }) {
             : <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />}
         </div>
         <ConversationGuide messages={messages} scrollRef={scrollArea} />
+        {showJumpToLatest && <button
+          type="button"
+          className="v2-jump-to-latest"
+          onClick={jumpToLatest}
+          aria-label="최신 대화로 이동"
+          title="최신 대화로 이동"
+        >
+          <span aria-hidden="true">↓</span>
+        </button>}
       </div>
       <div className="v2-analysis-progress">
         <AnalysisProgress
@@ -628,7 +671,7 @@ export function ChatPage({ onSend }) {
         />
       </div>
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
-      <ChatComposer text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} />
+      <ChatComposer text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} showQuickActions={messages.length > 0} />
     </section>
     <ConversationSidebar conversations={conversations} activeId={routeConversationId} open={sessionsOpen} onClose={() => setSessionsOpen(false)} onSelect={(id) => { setSessionsOpen(false); navigate(`/chat/${id}`); }} onCreate={() => { setSessionsOpen(false); startNewConversation(); }} onRename={renameConversation} onDelete={deleteConversation} onSearch={searchConversations} />
   </div>;
