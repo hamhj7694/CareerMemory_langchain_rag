@@ -2,7 +2,7 @@ import { InlineProposalCard } from './InlineProposalCard.jsx';
 import { MarkdownMessage } from './MarkdownMessage.jsx';
 import { CHAT_QUICK_ACTIONS } from './chatQuickActions.js';
 
-export function MessageThread({ messages, proposals, busy, busyLabel = '답변을 준비하고 있어요.', onStarter, onEvidence, onOpenJobAnalysis, onApproveProposal, onRejectProposal, onDiscardRemainingProposalExperiences, onChangeProposal, onRemoveProposalExperience }) {
+export function MessageThread({ messages, proposals, busy, busyLabel = '답변을 준비하고 있어요.', onStarter, onEvidence, onOpenJobAnalysis, onOpenJobAnalyses, onApproveProposal, onRejectProposal, onDiscardRemainingProposalExperiences, onChangeProposal, onRemoveProposalExperience }) {
   if (messages.length === 0) return <div className="v2-chat-empty">
     <span className="v2-chat-empty__mark" aria-hidden="true">CM</span>
     <h1>당신의 경험을 이야기해 주세요</h1>
@@ -37,7 +37,9 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
       {message.evidence?.length > 0 && !message.proposalIds?.length && <div className="v2-message__links">
         {message.evidence.map((item) => <button type="button" key={item.id} onClick={() => onEvidence(item)}>근거 {item.label}</button>)}
       </div>}
-      {message.jobAnalysisId && <div className="v2-message__links"><button type="button" onClick={() => onOpenJobAnalysis(message.jobAnalysisId)}>공고 분석 결과 보기</button></div>}
+      {message.jobAnalysisIds?.length > 0
+        ? <div className="v2-message__links"><button type="button" onClick={() => onOpenJobAnalyses(message.jobAnalysisIds)}>분석 공고 보러가기</button></div>
+        : message.jobAnalysisId && <div className="v2-message__links"><button type="button" onClick={() => onOpenJobAnalysis(message.jobAnalysisId)}>공고 분석 결과 보기</button></div>}
       {message.proposalIds?.map((proposalId) => {
         const proposal = proposals[proposalId];
         if (!proposal) return null;

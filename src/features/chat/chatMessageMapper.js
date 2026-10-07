@@ -27,6 +27,10 @@ export function toUiMessage(message) {
   const jobAnalysisId = actions
     .find((action) => action.type === 'open_job_analysis')?.job_id
     ?? actions.find((action) => action.type === 'open_job_analysis')?.jobId;
+  const jobAnalysisIds = actions
+    .find((action) => action.type === 'open_job_analyses')?.job_ids
+    ?? actions.find((action) => action.type === 'open_job_analyses')?.jobIds
+    ?? [];
   const attachmentRefs = message.attachment_refs || message.attachmentRefs || [];
   const attachmentIds = message.attachment_ids || message.attachmentIds || [];
   return {
@@ -52,5 +56,6 @@ export function toUiMessage(message) {
       : (message.proposal_ids ?? message.proposalIds ?? []),
     embeddedProposals,
     jobAnalysisId,
+    jobAnalysisIds,
   };
 }

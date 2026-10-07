@@ -1,0 +1,102 @@
+{
+  "schema_version": "conversation-analysis-gold-v1",
+  "fixture_id": "synthetic-korean-career-conversation-v1",
+  "description": "개인정보 없이 경험 보존, 대화 문맥, 공고 분리, 오염 방지를 함께 검증하는 합성 대화",
+  "conversation_id": "BENCH-CONVERSATION-GOLD-V1",
+  "messages": [
+    {
+      "id": "GOLD-MSG-001",
+      "sequence": 1,
+      "role": "user",
+      "content": "2024년 결제 이탈 구간을 분석하고 결제 단계를 개선했습니다."
+    },
+    {
+      "id": "GOLD-MSG-002",
+      "sequence": 2,
+      "role": "assistant",
+      "content": "결제 개선 프로젝트에서 가입 전환율은 얼마나 좋아졌나요?"
+    },
+    {
+      "id": "GOLD-MSG-003",
+      "sequence": 3,
+      "role": "user",
+      "content": "12% 높였습니다."
+    },
+    {
+      "id": "GOLD-MSG-004",
+      "sequence": 4,
+      "role": "user",
+      "content": "그 프로젝트에서 병목 쿼리를 찾아 인덱스를 추가해 API 응답 시간을 35% 단축했습니다."
+    },
+    {
+      "id": "GOLD-MSG-005",
+      "sequence": 5,
+      "role": "user",
+      "content": "[채용공고] 알파테크 AI 웹 서비스 개발자\n주요 업무: 생성형 AI 기반 커리어 웹 서비스를 개발하고 운영합니다. FastAPI 백엔드 API와 React 프론트엔드를 구현합니다.\n자격 요건: Python과 FastAPI를 활용한 API 개발 경험, React 기반 웹 서비스 개발 경험이 필요합니다.\n우대 사항: LLM 애플리케이션 또는 검색 시스템 개발 경험"
+    },
+    {
+      "id": "GOLD-MSG-006",
+      "sequence": 6,
+      "role": "assistant",
+      "content": "정리하면 이 프로젝트로 매출도 50% 증가했네요."
+    },
+    {
+      "id": "GOLD-MSG-007",
+      "sequence": 7,
+      "role": "user",
+      "content": "오늘 점심 메뉴를 추천해줘."
+    }
+  ],
+  "gold": {
+    "experience_facts": [
+      {
+        "id": "payment-flow-improvement",
+        "required_terms": ["결제 이탈", "결제 단계"],
+        "source_message_ids": ["GOLD-MSG-001"],
+        "context_required": false
+      },
+      {
+        "id": "signup-conversion-result",
+        "required_terms": ["가입 전환율", "12%"],
+        "source_message_ids": ["GOLD-MSG-003"],
+        "context_required": true
+      },
+      {
+        "id": "api-latency-result",
+        "required_terms": ["API 응답 시간", "35%"],
+        "source_message_ids": ["GOLD-MSG-004"],
+        "context_required": false
+      }
+    ],
+    "jobs": [
+      {
+        "id": "alpha-ai-web-developer",
+        "source_message_id": "GOLD-MSG-005",
+        "required_terms": ["Python", "FastAPI", "React"]
+      }
+    ],
+    "normalized_skills": [
+      {"scope": "job", "canonical_skill_id": "skill-python"},
+      {"scope": "job", "canonical_skill_id": "skill-fastapi"},
+      {"scope": "job", "canonical_skill_id": "skill-react"}
+    ],
+    "metrics": [
+      {
+        "scope": "experience",
+        "value": 12,
+        "unit": "percent",
+        "direction": "increase"
+      },
+      {
+        "scope": "experience",
+        "value": 35,
+        "unit": "percent",
+        "direction": "decrease"
+      }
+    ],
+    "forbidden_metric_values": [50],
+    "forbidden_assistant_terms": ["매출", "50%"],
+    "irrelevant_terms": ["점심 메뉴"],
+    "evidence_roles": ["user"]
+  }
+}

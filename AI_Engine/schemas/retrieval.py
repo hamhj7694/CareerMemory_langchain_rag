@@ -20,6 +20,7 @@ from .common import (
     normalize_newlines,
     unique_non_empty,
 )
+from .normalization import QuantifiedMetric, SkillMention
 
 
 class ExperienceSearchDocument(SchemaModel):
@@ -44,7 +45,9 @@ class ExperienceSearchDocument(SchemaModel):
     results: list[str] = Field(default_factory=list)
     role: str = ""
     skills: list[str] = Field(default_factory=list)
+    skill_mentions: list[SkillMention] = Field(default_factory=list)
     facts: list[str] = Field(default_factory=list)
+    metrics: list[QuantifiedMetric] = Field(default_factory=list)
     evidence_ids: list[Identifier] = Field(
         min_length=1,
         validation_alias=AliasChoices(
@@ -135,7 +138,9 @@ class ExperienceSearchDocument(SchemaModel):
                 self.results,
                 self.role,
                 self.skills,
+                self.skill_mentions,
                 self.facts,
+                self.metrics,
             )
         ):
             raise ValueError(
@@ -156,7 +161,21 @@ class ExperienceSearchDocument(SchemaModel):
             ("결과", "\n".join(self.results)),
             ("내 직군·직업 및 역할", self.role),
             ("역량", ", ".join(self.skills)),
+            (
+                "정규화된 기술",
+                ", ".join(
+                    item.normalized_name or item.raw_name
+                    for item in self.skill_mentions
+                ),
+            ),
             ("근거에서 확인된 내용", "\n".join(self.facts)),
+            (
+                "정량 지표",
+                "\n".join(
+                    f"{item.metric_name}: {item.raw_expression}".strip(": ")
+                    for item in self.metrics
+                ),
+            ),
         ]
         return "\n\n".join(
             f"[{label}]\n{text}"
@@ -182,6 +201,14 @@ class ExperienceSearchDocument(SchemaModel):
             "project_name": self.project_name,
             "evidence_ids_json": json.dumps(
                 self.evidence_ids,
+                ensure_ascii=False,
+            ),
+            "skill_mentions_json": json.dumps(
+                [item.model_dump(mode="json") for item in self.skill_mentions],
+                ensure_ascii=False,
+            ),
+            "metrics_json": json.dumps(
+                [item.model_dump(mode="json") for item in self.metrics],
                 ensure_ascii=False,
             ),
             "content_hash": self.content_hash(),

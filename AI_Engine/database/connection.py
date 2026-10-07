@@ -131,6 +131,21 @@ def initialize_database() -> None:
                 )
             )
 
+        experience_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("experiences")
+        }
+        missing_experience_columns = {
+            "skill_mentions": "JSON NOT NULL DEFAULT '[]'",
+            "metrics": "JSON NOT NULL DEFAULT '[]'",
+        }
+        with engine.begin() as connection:
+            for column_name, column_type in missing_experience_columns.items():
+                if column_name not in experience_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE experiences ADD COLUMN {column_name} {column_type}"
+                    ))
+
 
 # 7. 요청별 DB 세션
 # API 처리 후 성공·실패와 관계없이 연결을 닫아 연결 누수를 막는다.

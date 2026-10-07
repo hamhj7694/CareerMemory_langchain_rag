@@ -15,6 +15,12 @@ const FILE_STAGES = [
   '분석 결과를 정리하고 있어요',
 ];
 
+const COMBINED_STAGES = [
+  '대화에서 경험과 채용공고를 구분하고 있어요.',
+  '경험과 공고를 각각 분석하고 있어요.',
+  '분석 결과를 저장하고 있어요.',
+];
+
 export function AnalysisProgress({
   active,
   hasFiles = false,
@@ -24,8 +30,9 @@ export function AnalysisProgress({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const stages = useMemo(() => {
     if (phase === 'file') return ['파일을 확인하고 있어요', '파일에서 글자를 읽고 있어요', '입력란에 내용을 옮기고 있어요'];
+    if (kind === 'combined') return COMBINED_STAGES;
     return hasFiles ? FILE_STAGES : DEFAULT_STAGES;
-  }, [hasFiles, phase]);
+  }, [hasFiles, kind, phase]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -53,12 +60,14 @@ export function AnalysisProgress({
     : null;
   const title = kind === 'job' ? '채용공고를 분석하고 있어요' : '경험을 정리하고 있어요';
 
+  const displayTitle = kind === 'combined' ? '대화내용을 분석하고 있어요.' : title;
+
   return (
-    <section className="analysis-progress" role="status" aria-live="polite" aria-label={title}>
+    <section className="analysis-progress" role="status" aria-live="polite" aria-label={displayTitle}>
       <div className="analysis-progress__heading">
         <span className="analysis-progress__spinner" aria-hidden="true" />
         <div>
-          <strong>{title}</strong>
+          <strong>{displayTitle}</strong>
           <p>{stages[stageIndex]}</p>
         </div>
         <time>{elapsedSeconds}초</time>

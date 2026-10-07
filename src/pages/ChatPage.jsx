@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ChatComposer, ConversationGuide, ConversationSidebar, MessageThread } from '../features/chat/index.js';
 import { applyProposalPanelChanges, toProposalView } from '../features/chat/proposalMapper.js';
 import { toEmbeddedProposalView, toUiMessage } from '../features/chat/chatMessageMapper.js';
-import { chatExperienceApi, experienceTrashApi, jobApi, v2ChatApi } from '../api/index.js';
+import { chatAnalysisApi, chatExperienceApi, experienceTrashApi, jobApi, v2ChatApi } from '../api/index.js';
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
 import '../styles/v2-chat.css';
 
@@ -49,7 +49,7 @@ export function ChatPage({ onSend }) {
       return null;
     }
     try {
-      const status = await v2ChatApi.getConversationExtractionStatus(targetConversationId);
+      const status = await chatAnalysisApi.getStatus(targetConversationId);
       setExtractionStatus(status);
       return status;
     } catch {
@@ -345,7 +345,7 @@ export function ChatPage({ onSend }) {
     setExtracting(true);
     setNotice('');
     try {
-      const result = await v2ChatApi.extractConversationExperiences(conversationId.current, {
+      const result = await chatAnalysisApi.analyze(conversationId.current, {
         client_request_id: globalThis.crypto?.randomUUID?.() ?? `extract-${Date.now()}`,
       });
       const resultMessage = toUiMessage(result.message);
@@ -358,14 +358,18 @@ export function ChatPage({ onSend }) {
         } : null);
       setMessages((current) => [...current, resultMessage]);
       if (proposal) setProposals((current) => ({ ...current, [proposal.id]: proposal }));
-      const processedMessageCount = result.proposal?.analysis_scope?.message_count
-        ?? result.run?.message_ids?.length
-        ?? extractionStatus?.unprocessed_message_count
-        ?? 0;
-      setNotice(`최근 대화 ${processedMessageCount}개를 경험 초안으로 정리했습니다. 저장 전 내용을 확인해 주세요.`);
+      const resultParts = [];
+      if (result.run?.experience_count) resultParts.push(`경험 초안 ${result.run.experience_count}개`);
+      if (result.run?.job_count) resultParts.push(`채용공고 ${result.run.job_count}개`);
+      const hasFailures = result.run?.failures?.length > 0;
+      setNotice(resultParts.length
+        ? `${resultParts.join('와 ')}를 분석했어요.${hasFailures ? ' 일부 분석은 완료하지 못해 다시 시도할 수 있어요.' : ' 결과를 확인해 주세요.'}`
+        : hasFailures
+          ? '일부 분석을 완료하지 못했어요. 다시 시도해 주세요.'
+          : '새로 정리할 경험이나 채용공고를 찾지 못했어요.');
       await Promise.all([refreshConversations(), refreshExtractionStatus()]);
     } catch (error) {
-      setNotice(error?.message ?? '최근 대화를 경험으로 정리하지 못했습니다.');
+      setNotice(error?.message ?? '대화내용에서 경험과 채용공고를 분석하지 못했습니다.');
       await refreshExtractionStatus();
     } finally {
       extractionRequestInFlight.current = false;
@@ -641,10 +645,10 @@ export function ChatPage({ onSend }) {
             className="v2-extract-conversation-button"
             disabled={!extractionStatus?.unprocessed_message_count || busy || extracting}
             onClick={extractRecentConversation}
-            title={extractionStatus?.unprocessed_message_count ? '마지막 정리 이후의 대화와 파일만 경험 초안으로 만듭니다.' : '새로 정리할 대화가 없습니다.'}
+            title={extractionStatus?.unprocessed_message_count ? '새 대화에서 경험과 채용공고를 분리해 분석합니다.' : '새로 분석할 대화가 없습니다.'}
           >
-            <span className="v2-extract-label--full">{extracting ? '경험 정리 중…' : '대화내용으로 경험 정리하기'}</span>
-            <span className="v2-extract-label--short">{extracting ? '정리 중…' : '최근 대화 정리'}</span>
+            <span className="v2-extract-label--full">{extracting ? '통합 분석 중…' : '대화내용으로 경험/공고 분석하기'}</span>
+            <span className="v2-extract-label--short">{extracting ? '분석 중…' : '경험/공고 분석'}</span>
             {!extracting && extractionStatus?.unprocessed_message_count > 0 && <em>{extractionStatus.unprocessed_message_count}</em>}
           </button>
           <button type="button" className="v2-mobile-session-button" onClick={() => setSessionsOpen(true)}>대화 기록</button>
@@ -654,7 +658,7 @@ export function ChatPage({ onSend }) {
         <div className="v2-conversation__scroll" ref={scrollArea} onScroll={handleConversationScroll}>
           {restoring || changingConversation
             ? <p className="v2-conversation__loading" role="status">최근 대화를 불러오는 중입니다.</p>
-            : <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '최근 대화내용으로 경험을 정리하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />}
+            : <MessageThread messages={messages} proposals={proposals} busy={showThinking} busyLabel={extracting ? '대화에서 경험과 채용공고를 분석하고 있어요.' : '답변을 준비하고 있어요.'} onStarter={start} onEvidence={openEvidence} onOpenJobAnalysis={(jobId) => navigate(`/jobs/${jobId}`)} onOpenJobAnalyses={() => navigate('/jobs')} onApproveProposal={approve} onRejectProposal={reject} onDiscardRemainingProposalExperiences={discardRemainingProposalExperiences} onChangeProposal={updateProposal} onRemoveProposalExperience={removeProposalExperience} />}
         </div>
         <ConversationGuide messages={messages} scrollRef={scrollArea} />
         {showJumpToLatest && <button
@@ -671,7 +675,7 @@ export function ChatPage({ onSend }) {
         <AnalysisProgress
           active={extracting}
           hasFiles={false}
-          kind="experience"
+          kind="combined"
         />
       </div>
       {notice && <p className="v2-chat-notice" role="status">{notice}</p>}

@@ -15,8 +15,10 @@ from pydantic import BaseModel
 
 from AI_Engine.api import (
     attachments_router,
+    conversation_analysis_router,
     conversations_router,
     conversation_experiences_router,
+    conversation_jobs_router,
     experience_extractions_router,
     experiences_router,
     experience_sources_router,
@@ -80,7 +82,9 @@ register_error_handlers(app)
 # 대화 관련 주소를 별도 파일에 두어 서버 진입점이 지나치게 커지지 않게 한다.
 app.include_router(conversations_router)
 app.include_router(attachments_router)
+app.include_router(conversation_analysis_router)
 app.include_router(conversation_experiences_router)
+app.include_router(conversation_jobs_router)
 app.include_router(experience_extractions_router)
 app.include_router(experiences_router)
 app.include_router(experience_sources_router)

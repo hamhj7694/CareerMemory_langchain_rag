@@ -10,3 +10,4 @@ export { experienceExtractionApi } from './experienceExtractionApi.js';
 export { experienceTrashApi } from './experienceTrashApi.js';
 export { chatExperienceApi } from './chatExperienceApi.js';
 export { chatJobApi } from './chatJobApi.js';
+export { chatAnalysisApi } from './chatAnalysisApi.js';

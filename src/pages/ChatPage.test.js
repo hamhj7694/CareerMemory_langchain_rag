@@ -40,6 +40,22 @@ describe('ChatPage 메시지 제안 복원', () => {
     expect(message.proposalIds).toEqual([]);
     expect(message.embeddedProposals).toEqual([]);
   });
+
+  it('통합 분석 메시지에서 분석된 공고 목록 액션을 복원한다', () => {
+    const message = toUiMessage({
+      id: 'MSG-AI-JOBS',
+      conversation_id: 'CONV-1',
+      role: 'assistant',
+      status: 'completed',
+      content: '채용공고 2개를 분석했어요.',
+      actions: [{
+        type: 'open_job_analyses',
+        job_ids: ['JOB-1', 'JOB-2'],
+      }],
+    });
+
+    expect(message.jobAnalysisIds).toEqual(['JOB-1', 'JOB-2']);
+  });
 });
 
 describe('streamed proposal server identifiers', () => {

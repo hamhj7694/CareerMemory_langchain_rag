@@ -9,6 +9,8 @@ from AI_Engine.api.experiences import router as experiences_router
 from AI_Engine.api.experience_sources import router as experience_sources_router
 from AI_Engine.api.experience_draft_trash import router as experience_draft_trash_router
 from AI_Engine.api.conversation_experiences import router as conversation_experiences_router
+from AI_Engine.api.conversation_analysis import router as conversation_analysis_router
+from AI_Engine.api.conversation_jobs import router as conversation_jobs_router
 from AI_Engine.api.jobs import router as jobs_router
 
 __all__ = [
@@ -19,5 +21,7 @@ __all__ = [
     "experience_sources_router",
     "experience_draft_trash_router",
     "conversation_experiences_router",
+    "conversation_analysis_router",
+    "conversation_jobs_router",
     "jobs_router",
 ]

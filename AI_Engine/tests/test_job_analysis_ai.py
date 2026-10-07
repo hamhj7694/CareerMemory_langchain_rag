@@ -395,12 +395,40 @@ class JobAnalysisAITests(unittest.TestCase):
                             source_excerpt="공고에 존재하지 않는 문장"
                         )
                     ]
-                }
+                },
+                {
+                    "requirements": [
+                        raw_requirement(
+                            source_excerpt="여전히 존재하지 않는 문장"
+                        )
+                    ]
+                },
             ]
         )
 
         with self.assertRaises(JobAnalysisAIOutputError):
             ai.invoke(self.request)
+
+    def test_excerpt_format_error_is_retried_once(self) -> None:
+        ai, client = self.create_ai(
+            [
+                {
+                    "requirements": [
+                        raw_requirement(source_excerpt="원문을 바꾼 문장")
+                    ]
+                },
+                {"requirements": [raw_requirement()]},
+            ]
+        )
+
+        result = ai.invoke(self.request)
+
+        self.assertEqual(len(result.requirements), 1)
+        self.assertEqual(len(client.responses.calls), 2)
+        self.assertIn(
+            "형식 재검토 지시",
+            client.responses.calls[1]["input"],
+        )
 
     def test_match_outside_rag_candidates_is_rejected(self) -> None:
         document = SimpleNamespace(

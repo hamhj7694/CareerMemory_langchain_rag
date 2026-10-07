@@ -46,7 +46,9 @@ def _experience_mapping(item: Experience) -> dict[str, Any]:
         "results": item.results,
         "role": item.role,
         "skills": item.skills,
+        "skill_mentions": item.skill_mentions,
         "facts": item.facts,
+        "metrics": item.metrics,
         "source_ids": item.source_ids,
         "updated_at": item.updated_at,
     }

@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from AI_Engine.conversation_content_router import AssistantConversationContext
 from AI_Engine.experience_ai import (
     EXPERIENCE_DRAFT_TOOL,
     EXPERIENCE_DRAFT_TOOL_NAME,
@@ -113,6 +114,7 @@ def valid_raw_draft(
     *,
     title: str = "지원 전환율 개선",
     source_ref_id: str = "source-manual-1",
+    quote: str = "지원 완료율을 18% 높였습니다.",
 ):
     return {
         "domain_name": "직장 경험",
@@ -140,7 +142,7 @@ def valid_raw_draft(
             {
                 "text": "지원 완료율 18% 향상",
                 "source_ref_id": source_ref_id,
-                "quote": "지원 완료율을 18% 높였습니다.",
+                "quote": quote,
             }
         ],
         "missing_information": [],
@@ -349,11 +351,18 @@ class ExperienceAITests(unittest.TestCase):
         )
         payload = {
             "experience_drafts": [
-                valid_raw_draft(title="결제 절차 개선"),
-                valid_raw_draft(title="운영 대시보드 구축"),
+                valid_raw_draft(
+                    title="결제 절차 개선",
+                    quote="결제 절차와 운영 대시보드를 개선했습니다.",
+                ),
+                valid_raw_draft(
+                    title="운영 대시보드 구축",
+                    quote="결제 절차와 운영 대시보드를 개선했습니다.",
+                ),
                 valid_raw_draft(
                     title="Career Bridge RAG 서비스 기획",
                     source_ref_id="source-file-1",
+                    quote="Career Bridge RAG 서비스 기획안을 작성했습니다.",
                 ),
             ]
         }
@@ -392,6 +401,59 @@ class ExperienceAITests(unittest.TestCase):
             ["지원 완료율 18% 향상"],
         )
 
+    def test_non_exact_quote_is_requested_once_more(self) -> None:
+        malformed = valid_raw_draft(quote="지원 완료율 18% 증가")
+        responses = SequentialFakeResponses([
+            {"experience_drafts": [malformed]},
+            {"experience_drafts": [valid_raw_draft()]},
+        ])
+        ai = self.create_ai(responses)
+
+        result = ai.organize(self.request)
+
+        self.assertEqual(len(result.experience_drafts), 1)
+        self.assertEqual(len(responses.calls), 2)
+        self.assertIn("글자를 바꾸지 않고 복사", responses.calls[1]["input"])
+
+    def test_context_subject_is_preserved_with_user_reply_as_evidence(self) -> None:
+        request = ExperienceExtractionRequest(
+            client_request_id="request-context",
+            input_type="conversation",
+            conversation_id="conversation-1",
+            message_ids=["user-reply"],
+        )
+        source = EvidenceSource(
+            id="source-user-reply",
+            type="message_text",
+            title="대화 메시지",
+            message_id="user-reply",
+            text="12% 높였습니다.",
+        )
+        draft = valid_raw_draft(
+            source_ref_id="source-user-reply",
+            quote="12% 높였습니다.",
+        )
+        draft["facts"][0]["text"] = "전환율 12% 향상"
+        responses = FakeResponses({"experience_drafts": [draft]})
+        ai = self.create_ai(responses)
+
+        result = ai.organize(
+            request,
+            sources=[source],
+            assistant_contexts=[AssistantConversationContext(
+                source_id="message-assistant",
+                text="가입 전환율은 얼마나 좋아졌나요?",
+                for_user_source_ids=("message:user-reply",),
+                required_subject="가입 전환율",
+            )],
+        )
+
+        structured = result.experience_drafts[0]
+        self.assertIn("가입 전환율 12% 높였습니다.", structured.facts)
+        citation = structured.field_citations["facts.1"][0]
+        self.assertEqual(citation.source_ref_id, "source-user-reply")
+        self.assertEqual(citation.quote, "12% 높였습니다.")
+
     def test_extracted_file_text_can_be_used_as_evidence(self) -> None:
         request = ExperienceExtractionRequest(
             client_request_id="request-file",
@@ -408,7 +470,10 @@ class ExperienceAITests(unittest.TestCase):
         )
         payload = {
             "experience_drafts": [
-                valid_raw_draft(source_ref_id="source-file-1")
+                valid_raw_draft(
+                    source_ref_id="source-file-1",
+                    quote="고객 문의 처리 시간을 20% 단축했습니다.",
+                )
             ]
         }
         responses = FakeResponses(payload)
@@ -459,10 +524,12 @@ class ExperienceAITests(unittest.TestCase):
                 valid_raw_draft(
                     title="결제 절차 개선",
                     source_ref_id="source-file-1",
+                    quote="결제 완료율이 14% 증가했습니다.",
                 ),
                 valid_raw_draft(
                     title="운영 대시보드 구축",
                     source_ref_id="source-file-2",
+                    quote="주간 보고서 작성 시간이 4시간에서 1시간으로 줄었습니다.",
                 ),
             ]
         }

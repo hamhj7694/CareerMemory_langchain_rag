@@ -68,7 +68,9 @@ actions[]
 results[]
 role
 skills[]
+skill_mentions[]
 facts[]
+metrics[]
 missing_information[]
 source_ref_ids[]
 field_citations{}
@@ -104,6 +106,8 @@ source_excerpt
 source_locator
 importance
 keywords[]
+skill_mentions[]
+metrics[]
 order
 confidence
 ```
@@ -276,6 +280,9 @@ Experience 확정
 - 동일한 경험 분류와 프로젝트·활동은 이름 문자열만으로 합치지 않고 정규화된 ID 또는 명시적인 사용자 선택을 사용한다.
 - AI가 모르는 값은 생성하지 않는다.
 - 확정된 사실은 항상 원본 근거로 추적할 수 있어야 한다.
+- `skills`, `facts`, `keywords`와 원문은 정규화 성공 여부와 무관하게 보존한다.
+- 표준 기술 ID와 구조화 수치는 검증된 경우에만 선택적 projection으로 연결한다.
+- 규격 밖 기술은 삭제하지 않고 `unresolved` 상태로 유지한다.
 
 ---
 
@@ -308,6 +315,11 @@ Experience Search Document에서 후보 경험 검색
   ↓
 추천 이유와 인용 근거 생성
 ```
+
+임베딩 점수는 후보를 넓게 찾는 검색 신호다. 필수 기술 충족 여부는 정확한 원문
+근거와 canonical skill ID가 모두 일치할 때만 확정한다. alias는 동일 기술로 인정하지만
+`related` 관계는 후보 검색에만 사용한다. 수치는 임베딩으로 비교하지 않고 exact quote에서
+값·단위·방향·전후 값·근사 연산자를 다시 파싱해 검증한다.
 
 ---
 

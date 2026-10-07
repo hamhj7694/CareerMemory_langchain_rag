@@ -9,6 +9,7 @@ vi.mock('./adapters/httpAdapter.js', () => ({
 }));
 
 import { v2ChatHttpApi } from './v2ChatHttpApi.js';
+import { apiConfig } from './config.js';
 import { clearCsrfToken, setCsrfToken } from '../auth/authSession.js';
 
 describe('실제 대화 HTTP API', () => {
@@ -166,7 +167,7 @@ describe('실제 대화 HTTP API', () => {
     ]);
     expect(events[1].delta).toBe('안녕');
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/api/v2/conversations/CONV-001/messages/stream',
+      `${apiConfig.baseUrl}/api/v2/conversations/CONV-001/messages/stream`,
       expect.objectContaining({
         method: 'POST',
         headers: {

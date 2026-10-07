@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from AI_Engine.analysis_metrics import tracked_responses_create
 from AI_Engine.chat_context import split_text_chunks, truncate_to_token_budget
 from AI_Engine.llm_provider import (
     create_structured_client,
@@ -241,7 +242,9 @@ class ExperienceFileAnalysisAI:
                     "정해진 형식으로 다시 반환하세요."
                 )
             )
-            response = self.client.responses.create(
+            response = tracked_responses_create(
+                self.client,
+                stage="experience_file_analysis",
                 model=self.model_version,
                 input=f"{model_input}{retry_instruction}",
                 tools=[FILE_ANALYSIS_TOOL],

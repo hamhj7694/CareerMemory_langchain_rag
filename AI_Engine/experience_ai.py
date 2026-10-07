@@ -20,6 +20,8 @@ from pydantic import ValidationError
 # 3. .env에서 키 불러오기
 load_dotenv()
 
+from AI_Engine.analysis_metrics import tracked_responses_create
+from AI_Engine.conversation_content_router import AssistantConversationContext
 from AI_Engine.llm_provider import (
     create_structured_client,
     get_chat_model_name,
@@ -27,6 +29,11 @@ from AI_Engine.llm_provider import (
 from AI_Engine.experience_file_analysis_ai import (
     ExperienceFileAnalysisAI,
     ExperienceFileAnalysisError,
+)
+from AI_Engine.metric_normalization import merge_metrics
+from AI_Engine.skill_normalization import (
+    extract_registered_skill_mentions,
+    normalize_skill_list,
 )
 
 # 4. 프론트엔드·백엔드·AI가 함께 사용하는 데이터 계약
@@ -52,8 +59,8 @@ from AI_Engine.schemas import (
 # 5. 모델·프롬프트·스키마 버전
 # 저장된 초안이 어떤 구성으로 생성됐는지 추적할 수 있도록 실행 결과에 기록한다.
 DEFAULT_EXPERIENCE_MODEL = "gpt-4o-mini"
-EXPERIENCE_PROMPT_VERSION = "experience-prompt-v4"
-EXPERIENCE_SCHEMA_VERSION = "experience-schema-v2"
+EXPERIENCE_PROMPT_VERSION = "experience-prompt-v5"
+EXPERIENCE_SCHEMA_VERSION = "experience-schema-v3"
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +100,10 @@ EXPERIENCE_SYSTEM_PROMPT = """
 [문맥 context]
 실제 분석 대상은 사용자 입력에 [분석할 원본 근거]로 전달돼.
 각 근거에는 source_ref_id가 있으며, 이 ID로 사용한 원본을 추적해야 해.
+[대화 문맥 - 근거 아님]이 있으면 직전 AI 질문에 대한 짧은 사용자 답변의
+생략된 대상만 해석하는 데 사용할 수 있어. 이 문맥 자체는 사실 근거가 아니야.
+예를 들어 assistant가 "가입 전환율은 얼마나 좋아졌나요?"라고 묻고 사용자가
+"12% 높였습니다."라고 답했다면 대상 이름을 바꾸지 말고 "가입 전환율 12% 증가"로 정리해.
 
 [제약조건 constraint]
 - 원본 근거에 없는 사실은 추측하거나 만들어내지 마.
@@ -106,6 +117,8 @@ EXPERIENCE_SYSTEM_PROMPT = """
 - 요약, 상황, 행동, 결과는 원문의 의미를 바꾸지 말고 한국어로 정리해.
 - 상황, 행동, 결과는 Markdown 목록으로 사용할 수 있는 문장 단위로 정리해.
 - 역량은 짧고 재사용 가능한 능력 이름으로 분리해.
+- skill_mentions에는 원문에 실제로 등장한 기술 표현을 바꾸지 않고 넣고,
+  해당 source_ref_id와 정확한 원문 quote를 함께 반환해.
 - 근거에서 확인된 내용(facts)은 원문을 그대로 길게 반복하지 말고,
   수치·기간·대상·횟수·검증된 성과 중심의 짧은 핵심 사실로 작성해.
 - facts의 text는 "고객 문의 120건 분석", "결제 완료율 14% 증가"처럼
@@ -113,8 +126,15 @@ EXPERIENCE_SYSTEM_PROMPT = """
 - 확인 가능한 핵심 사실은 개수에 관계없이 빠짐없이 분리하되,
   하나의 fact에 여러 사실을 긴 문장으로 합치지 마.
 - 정확한 원문은 facts의 text가 아니라 quote에 짧게 넣고 source_ref_id와 연결해.
+- metrics에는 원문에 실제로 등장한 수치 표현만 넣어. 계산하거나 반올림하지 말고
+  raw_expression, metric_name, source_ref_id, 정확한 quote를 반환해.
 - source_ref_ids에는 해당 초안 작성에 실제 사용한 근거 ID만 넣어.
 - 입력에 제공되지 않은 source_ref_id를 절대 만들지 마.
+- assistant_context는 연결된 사용자 원문의 생략된 대상만 해석하는 데 사용해.
+- assistant_context로 생략된 대상을 복원할 때 그 대상 명사를 그대로 보존하고
+  유사한 다른 지표명이나 표현으로 치환하지 마.
+- assistant_context에만 있는 주장, 수치, 성과는 사실로 만들거나 인용하지 마.
+- 모든 source_ref_ids와 quote는 [분석할 원본 근거]의 사용자·파일 근거만 사용해.
 - period.start와 period.end는 반드시 YYYY 또는 YYYY-MM 형식으로 작성해.
   예를 들어 "2024년 8월부터 11월까지"는 start="2024-08", end="2024-11"로 작성해.
 - facts에서 인용한 모든 source_ref_id를 source_ref_ids에도 빠짐없이 포함해.
@@ -126,7 +146,7 @@ EXPERIENCE_SYSTEM_PROMPT = """
 - 반드시 create_experience_drafts 함수를 한 번 호출해.
 - 함수의 experience_drafts 배열에 0개 이상의 경험 초안을 넣어.
 - 경험 하나마다 경험 분류, 프로젝트·활동, 제목, 요약, 상황, 행동, 결과,
-  내 직군·직업 및 역할, 역량, 역량 그룹, 근거에서 확인된 내용,
+  내 직군·직업 및 역할, 역량, 기술 표현, 역량 그룹, 근거에서 확인된 내용, 정량 지표,
   추가 확인 필요 정보, 사용한 원본 근거 ID를 반환해.
 """.strip()
 
@@ -218,6 +238,20 @@ EXPERIENCE_DRAFT_TOOL: dict[str, Any] = {
                             "items": {"type": "string"},
                             "description": "경험에서 확인된 역량",
                         },
+                        "skill_mentions": {
+                            "type": "array",
+                            "description": "원문에 실제로 등장한 기술 표현과 정확한 출처",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "raw_name": {"type": "string"},
+                                    "source_ref_id": {"type": "string"},
+                                    "quote": {"type": "string"},
+                                },
+                                "required": ["raw_name", "source_ref_id", "quote"],
+                                "additionalProperties": False,
+                            },
+                        },
                         "skill_groups": {
                             "type": "array",
                             "description": "내 역량 페이지용 유사 역량 그룹 후보",
@@ -276,6 +310,26 @@ EXPERIENCE_DRAFT_TOOL: dict[str, Any] = {
                                 "additionalProperties": False,
                             },
                         },
+                        "metrics": {
+                            "type": "array",
+                            "description": "원문에서 확인된 정량 표현과 정확한 출처",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "metric_name": {"type": "string"},
+                                    "raw_expression": {"type": "string"},
+                                    "source_ref_id": {"type": "string"},
+                                    "quote": {"type": "string"},
+                                },
+                                "required": [
+                                    "metric_name",
+                                    "raw_expression",
+                                    "source_ref_id",
+                                    "quote",
+                                ],
+                                "additionalProperties": False,
+                            },
+                        },
                         "missing_information": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -305,8 +359,10 @@ EXPERIENCE_DRAFT_TOOL: dict[str, Any] = {
                         "results",
                         "role",
                         "skills",
+                        "skill_mentions",
                         "skill_groups",
                         "facts",
+                        "metrics",
                         "missing_information",
                         "source_ref_ids",
                         "confidence",
@@ -376,6 +432,7 @@ class ExperienceAI:
         request: ExperienceExtractionRequest,
         *,
         sources: Sequence[EvidenceSource] = (),
+        assistant_contexts: Sequence[AssistantConversationContext] = (),
     ) -> ExperienceExtractionResult:
         started_at = self.clock()
         run_id = self._new_id("extraction-run")
@@ -405,8 +462,11 @@ class ExperienceAI:
             request,
             analyzed_sources,
             file_analyses=file_analyses,
+            assistant_contexts=assistant_contexts,
         )
-        response = self.client.responses.create(
+        response = tracked_responses_create(
+            self.client,
+            stage="experience_analysis",
             model=self.model_version,
             input=model_input,
             tools=[EXPERIENCE_DRAFT_TOOL],
@@ -421,7 +481,9 @@ class ExperienceAI:
         if not raw_drafts and request.text:
             # 직접 입력은 사용자가 경험 정리를 명시적으로 요청한 경로다.
             # 첫 판정이 빈 배열이면 누락 방지를 위해 같은 근거를 한 번만 재검토한다.
-            retry_response = self.client.responses.create(
+            retry_response = tracked_responses_create(
+                self.client,
+                stage="experience_analysis_retry_empty",
                 model=self.model_version,
                 input=(
                     f"{model_input}\n\n"
@@ -440,10 +502,14 @@ class ExperienceAI:
             )
             raw_drafts = self._function_arguments(retry_response)
         known_source_ids = {source.id for source in registered_sources}
+        source_text_by_id = {
+            source.id: source.text or "" for source in analyzed_sources
+        }
         try:
             drafts = self._convert_drafts(
                 raw_drafts,
                 known_source_ids=known_source_ids,
+                source_text_by_id=source_text_by_id,
             )
         except ExperienceAIOutputError as first_error:
             # Gemini의 구조화 출력은 간헐적으로 facts의 quote 같은 필수 문자열을
@@ -454,7 +520,9 @@ class ExperienceAI:
                 first_error,
             )
             valid_source_ids = ", ".join(sorted(known_source_ids))
-            format_retry_response = self.client.responses.create(
+            format_retry_response = tracked_responses_create(
+                self.client,
+                stage="experience_analysis_retry_format",
                 model=self.model_version,
                 input=(
                     f"{model_input}\n\n"
@@ -462,7 +530,9 @@ class ExperienceAI:
                     "이전 결과가 경험 초안 스키마를 통과하지 못했습니다. "
                     "원문의 경험 구분과 내용은 유지하면서 전체 초안을 다시 반환하세요. "
                     "특히 facts의 각 항목은 text, source_ref_id, quote를 모두 "
-                    "빈값이 아닌 문자열로 작성하세요. period.start와 period.end는 "
+                    "빈값이 아닌 문자열로 작성하고, quote는 해당 source_ref_id의 "
+                    "original_text에서 글자를 바꾸지 않고 복사한 연속 문자열로 "
+                    "작성하세요. period.start와 period.end는 "
                     "YYYY 또는 YYYY-MM 형식만 사용하세요. facts에서 인용한 근거 ID는 "
                     "source_ref_ids에도 포함하고, 아래에 있는 ID만 정확히 사용하세요.\n"
                     f"사용 가능한 source_ref_id: {valid_source_ids}"
@@ -478,7 +548,17 @@ class ExperienceAI:
             drafts = self._convert_drafts(
                 retry_raw_drafts,
                 known_source_ids=known_source_ids,
+                source_text_by_id=source_text_by_id,
             )
+        drafts = self._preserve_contextual_answers(
+            drafts,
+            analyzed_sources,
+            assistant_contexts,
+        )
+        drafts = self._enrich_from_preserved_sources(
+            drafts,
+            analyzed_sources,
+        )
         completed_at = self.clock()
 
         try:
@@ -600,6 +680,7 @@ class ExperienceAI:
         sources: Sequence[EvidenceSource],
         *,
         file_analyses: Sequence[FileEvidenceAnalysis] = (),
+        assistant_contexts: Sequence[AssistantConversationContext] = (),
     ) -> str:
         request_scope = {
             "client_request_id": request.client_request_id,
@@ -655,12 +736,179 @@ class ExperienceAI:
                 )
             )
 
+        context_section = ""
+        if assistant_contexts:
+            context_section = (
+                "\n\n[대화 문맥 - 근거 아님]\n"
+                "아래 assistant_context는 연결된 사용자 답변의 생략된 대상만 "
+                "해석하는 데 사용하세요. source_ref_id 또는 quote로 인용하지 마세요.\n"
+                + "\n\n".join(
+                    "\n".join((
+                        "--- assistant_context 시작 ---",
+                        f"context_ref_id: {context.source_id}",
+                        "for_user_source_ids: "
+                        + json.dumps(
+                            list(context.for_user_source_ids),
+                            ensure_ascii=False,
+                        ),
+                        f"required_subject: {context.required_subject}",
+                        "assistant_text:",
+                        context.text,
+                        "--- assistant_context 끝 ---",
+                    ))
+                    for context in assistant_contexts
+                )
+            )
+
         return (
             "[요청 범위]\n"
             f"{json.dumps(request_scope, ensure_ascii=False)}\n\n"
             "[분석할 원본 근거]\n"
             + "\n\n".join(source_sections)
+            + context_section
         )
+
+    @staticmethod
+    def _preserve_contextual_answers(
+        drafts: Sequence[ExperienceDraft],
+        sources: Sequence[EvidenceSource],
+        assistant_contexts: Sequence[AssistantConversationContext],
+    ) -> list[ExperienceDraft]:
+        """Keep a confirmed short answer's explicit question subject verbatim."""
+
+        evidence_by_route_id = {
+            f"message:{source.message_id}": source
+            for source in sources
+            if source.message_id
+        }
+        result = list(drafts)
+        for context in assistant_contexts:
+            subject = context.required_subject.strip()
+            if not subject:
+                continue
+            for route_id in context.for_user_source_ids:
+                source = evidence_by_route_id.get(route_id)
+                if source is None or not (source.text or "").strip():
+                    continue
+                target_index = next(
+                    (
+                        index
+                        for index, draft in enumerate(result)
+                        if source.id in draft.source_ref_ids
+                    ),
+                    None,
+                )
+                if target_index is None:
+                    continue
+                draft = result[target_index]
+                searchable = json.dumps(
+                    draft.model_dump(mode="json"),
+                    ensure_ascii=False,
+                )
+                if subject in searchable:
+                    continue
+                reply = (source.text or "").strip()
+                payload = draft.model_dump(mode="json")
+                fact_index = len(payload["facts"])
+                payload["facts"] = [
+                    *payload["facts"],
+                    f"{subject} {reply}".strip(),
+                ]
+                payload["field_citations"] = {
+                    **payload["field_citations"],
+                    f"facts.{fact_index}": [{
+                        "source_ref_id": source.id,
+                        "quote": reply,
+                    }],
+                }
+                provisional = ExperienceDraft.model_validate(payload)
+                source_text_by_id = {
+                    item.id: item.text or "" for item in sources
+                }
+                payload["metrics"] = [
+                    item.model_dump(mode="json")
+                    for item in merge_metrics(
+                        provisional.facts,
+                        provisional.field_citations,
+                        source_text_by_id=source_text_by_id,
+                        proposed_metrics=[
+                            item.model_dump(mode="json")
+                            for item in provisional.metrics
+                        ],
+                    )
+                ]
+                result[target_index] = ExperienceDraft.model_validate(payload)
+        return result
+
+    @staticmethod
+    def _enrich_from_preserved_sources(
+        drafts: Sequence[ExperienceDraft],
+        sources: Sequence[EvidenceSource],
+    ) -> list[ExperienceDraft]:
+        """Deterministically recover sourced skills, metrics, and short evidence."""
+
+        source_by_id = {source.id: source for source in sources}
+        source_text_by_id = {
+            source.id: source.text or "" for source in sources
+        }
+        result: list[ExperienceDraft] = []
+        for draft in drafts:
+            payload = draft.model_dump(mode="json")
+            cited_source_ids = {
+                citation.source_ref_id
+                for citations in draft.field_citations.values()
+                for citation in citations
+            }
+            for source_id in draft.source_ref_ids:
+                source = source_by_id.get(source_id)
+                text = (source.text or "").strip() if source else ""
+                if (
+                    not text
+                    or source_id in cited_source_ids
+                    or len(text) > 500
+                    or str(source.type) == "file"
+                ):
+                    continue
+                fact_index = len(payload["facts"])
+                payload["facts"].append(text)
+                payload["field_citations"][f"facts.{fact_index}"] = [{
+                    "source_ref_id": source_id,
+                    "quote": text,
+                }]
+                cited_source_ids.add(source_id)
+
+            provisional = ExperienceDraft.model_validate(payload)
+            skill_mentions = list(provisional.skill_mentions)
+            known_skill_keys = {
+                (item.canonical_skill_id, item.raw_name.casefold())
+                for item in skill_mentions
+            }
+            for source_id in provisional.source_ref_ids:
+                for mention in extract_registered_skill_mentions(
+                    source_text_by_id.get(source_id, ""),
+                    source_ref_id=source_id,
+                ):
+                    key = (mention.canonical_skill_id, mention.raw_name.casefold())
+                    if key not in known_skill_keys:
+                        known_skill_keys.add(key)
+                        skill_mentions.append(mention)
+            metrics = merge_metrics(
+                provisional.facts,
+                provisional.field_citations,
+                source_text_by_id=source_text_by_id,
+                proposed_metrics=[
+                    item.model_dump(mode="json")
+                    for item in provisional.metrics
+                ],
+            )
+            payload["skill_mentions"] = [
+                item.model_dump(mode="json") for item in skill_mentions
+            ]
+            payload["metrics"] = [
+                item.model_dump(mode="json") for item in metrics
+            ]
+            result.append(ExperienceDraft.model_validate(payload))
+        return result
 
     # 10-4. 함수 호출 인자 읽기
     # 모델이 정해진 함수를 정확히 한 번 호출했는지 확인한 뒤 JSON을 해석한다.
@@ -720,11 +968,13 @@ class ExperienceAI:
         raw_drafts: Sequence[Mapping[str, Any]],
         *,
         known_source_ids: set[str],
+        source_text_by_id: Mapping[str, str] | None = None,
     ) -> list[ExperienceDraft]:
         return [
             self._to_experience_draft(
                 raw_draft,
                 known_source_ids=known_source_ids,
+                source_text_by_id=source_text_by_id,
             )
             for raw_draft in raw_drafts
         ]
@@ -735,6 +985,7 @@ class ExperienceAI:
         raw_draft: Mapping[str, Any],
         *,
         known_source_ids: set[str] | None = None,
+        source_text_by_id: Mapping[str, str] | None = None,
     ) -> ExperienceDraft:
         raw_facts = raw_draft.get("facts", [])
         if not isinstance(raw_facts, list):
@@ -757,6 +1008,12 @@ class ExperienceAI:
                 raise ExperienceAIOutputError(
                     "근거에서 확인된 내용에는 text, source_ref_id, quote가 필요합니다."
                 )
+            if source_text_by_id is not None:
+                source_text = source_text_by_id.get(source_ref_id)
+                if source_text is None or quote not in source_text:
+                    raise ExperienceAIOutputError(
+                        "facts의 quote가 해당 원본 근거의 정확한 인용이 아닙니다."
+                    )
             fact_texts.append(fact_text)
             field_citations[f"facts.{index}"] = [
                 EvidenceCitation(
@@ -794,6 +1051,40 @@ class ExperienceAI:
                         "초안이 입력에 없는 source_ref_id를 참조합니다: "
                         f"{unknown}"
                     )
+            raw_skills = raw_draft.get("skills", [])
+            if not isinstance(raw_skills, list):
+                raise ValueError("skills must be an array.")
+            proposed_skill_mentions = raw_draft.get("skill_mentions", [])
+            if not isinstance(proposed_skill_mentions, list):
+                proposed_skill_mentions = []
+            skill_mentions = normalize_skill_list(
+                [str(item) for item in raw_skills],
+                source_text_by_id=source_text_by_id or {},
+                proposed_mentions=[
+                    item for item in proposed_skill_mentions
+                    if isinstance(item, Mapping)
+                ],
+            )
+            proposed_metrics = raw_draft.get("metrics", [])
+            if not isinstance(proposed_metrics, list):
+                proposed_metrics = []
+            metrics = merge_metrics(
+                fact_texts,
+                field_citations,
+                source_text_by_id=source_text_by_id or {},
+                proposed_metrics=[
+                    item for item in proposed_metrics
+                    if isinstance(item, Mapping)
+                ],
+            )
+            source_ref_ids = _unique_texts([
+                *source_ref_ids,
+                *[
+                    item.source_ref_id
+                    for item in (*skill_mentions, *metrics)
+                    if item.source_ref_id
+                ],
+            ])
             return ExperienceDraft(
                 draft_id=self._new_id("experience-draft"),
                 domain=ExperienceClassificationDraft(
@@ -810,12 +1101,14 @@ class ExperienceAI:
                 actions=raw_draft.get("actions", []),
                 results=raw_draft.get("results", []),
                 role=raw_draft.get("role", ""),
-                skills=raw_draft.get("skills", []),
+                skills=raw_skills,
+                skill_mentions=skill_mentions,
                 skill_groups=[
                     SkillGroupCandidate.model_validate(group)
                     for group in raw_draft.get("skill_groups", [])
                 ],
                 facts=fact_texts,
+                metrics=metrics,
                 missing_information=raw_draft.get(
                     "missing_information", []
                 ),

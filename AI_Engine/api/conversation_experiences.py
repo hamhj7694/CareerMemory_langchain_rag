@@ -23,6 +23,7 @@ from AI_Engine.database.models import (
     User,
     utc_now,
 )
+from AI_Engine.normalization_backfill import structured_fields_for_experience
 from AI_Engine.experience_ai import ExperienceAI, ExperienceAIInputError, ExperienceAIOutputError
 from AI_Engine.experience_file_text import extract_experience_file_texts
 from AI_Engine.job_file_text import JobFile, JobFileExtractionError, JobFileInputError, MAX_JOB_FILE_BYTES
@@ -514,7 +515,9 @@ def approve_chat_experience_proposal(
         results=list(draft.get("results") or []),
         role=str(draft.get("role") or ""),
         skills=list(draft.get("skills") or []),
+        skill_mentions=list(draft.get("skill_mentions") or []),
         facts=list(draft.get("facts") or []),
+        metrics=list(draft.get("metrics") or []),
         period=draft.get("period"),
         missing_information=list(draft.get("missing_information") or []),
         source_ids=list(draft.get("source_ref_ids") or draft.get("source_ids") or []),
@@ -522,6 +525,13 @@ def approve_chat_experience_proposal(
     )
     project = resolve_project(create_request, current_user, database)
     period = create_request.period if isinstance(create_request.period, dict) else {}
+    skill_mentions, metrics = structured_fields_for_experience(
+        create_request.skills,
+        create_request.facts,
+        skill_mentions=create_request.skill_mentions,
+        metrics=create_request.metrics,
+        source_refs=create_request.source_refs,
+    )
     experience = Experience(
         id=create_resource_id("EXP"),
         user_id=current_user.id,
@@ -533,7 +543,9 @@ def approve_chat_experience_proposal(
         results=create_request.results,
         role=create_request.role,
         skills=create_request.skills,
+        skill_mentions=skill_mentions,
         facts=create_request.facts,
+        metrics=metrics,
         period=period,
         missing_information=create_request.missing_information,
         source_ids=create_request.source_ids,

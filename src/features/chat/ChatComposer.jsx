@@ -46,17 +46,17 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
   }, [selectedMode]);
 
   return <div className="v2-composer-shell">
-    <div className="v2-chat-mode-toolbar">
-      <div className="v2-chat-mode-indicator" aria-label={`현재 질문 모드: ${activeMode.title}`}>
+    {(selectedMode !== GENERAL_CHAT_MODE.id || showQuickActions) && <div className="v2-chat-mode-toolbar">
+      {selectedMode !== GENERAL_CHAT_MODE.id && <div className="v2-chat-mode-indicator" aria-label={`현재 질문 모드: ${activeMode.title}`}>
         <span>질문 모드</span>
         <strong>{activeMode.title}</strong>
-        {selectedMode !== GENERAL_CHAT_MODE.id && <button
+        <button
           type="button"
           onClick={() => onModeChange?.(GENERAL_CHAT_MODE.id)}
           aria-label="일반 대화 모드로 돌아가기"
           title="모드 해제"
-        >×</button>}
-      </div>
+        >×</button>
+      </div>}
       {showQuickActions && <nav className="v2-chat-quick-actions" aria-label="질문 모드 선택">
         {CHAT_QUICK_ACTIONS.map((action) => <button
           type="button"
@@ -69,7 +69,7 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
           {action.title}
         </button>)}
       </nav>}
-    </div>
+    </div>}
     <div className="v2-composer">
     {files.length > 0 && <ul className="v2-attachments" aria-label="첨부 파일">
       {files.map((file) => <li key={evidenceFileKey(file)}>

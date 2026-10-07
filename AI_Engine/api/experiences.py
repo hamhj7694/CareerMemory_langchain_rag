@@ -21,6 +21,7 @@ from AI_Engine.database.models import (
     User,
     utc_now,
 )
+from AI_Engine.normalization_backfill import structured_fields_for_experience
 
 router = APIRouter(prefix="/api/v2", tags=["experiences"])
 
@@ -56,7 +57,9 @@ class ExperienceCreate(BaseModel):
     results: list[str] = Field(default_factory=list)
     role: str = ""
     skills: list[str] = Field(default_factory=list)
+    skill_mentions: list[dict[str, Any]] = Field(default_factory=list)
     facts: list[str] = Field(default_factory=list)
+    metrics: list[dict[str, Any]] = Field(default_factory=list)
     period: dict[str, Any] | str | None = None
     missing_information: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
@@ -100,7 +103,8 @@ def experience_dict(item: Experience) -> dict[str, Any]:
         "id": item.id, "title": item.title, "summary": item.summary,
         "situation": item.situation, "actions": item.actions,
         "results": item.results, "role": item.role, "skills": item.skills,
-        "facts": item.facts, "period": item.period,
+        "skill_mentions": item.skill_mentions,
+        "facts": item.facts, "metrics": item.metrics, "period": item.period,
         "missing_information": item.missing_information,
         "source_ids": item.source_ids, "source_refs": item.source_refs,
         "status": item.status,
@@ -138,7 +142,9 @@ def experience_trash_draft(item: Experience) -> dict[str, Any]:
         "results": list(item.results or []),
         "role": item.role,
         "skills": list(item.skills or []),
+        "skill_mentions": list(item.skill_mentions or []),
         "facts": list(item.facts or []),
+        "metrics": list(item.metrics or []),
         "period": dict(item.period) if isinstance(item.period, dict) else item.period,
         "missing_information": list(item.missing_information or []),
         "source_ref_ids": list(item.source_ids or []),
@@ -464,11 +470,20 @@ def create_experience(
 ):
     project = resolve_project(request, current_user, database)
     period = request.period if isinstance(request.period, dict) else {}
+    skill_mentions, metrics = structured_fields_for_experience(
+        request.skills,
+        request.facts,
+        skill_mentions=request.skill_mentions,
+        metrics=request.metrics,
+        source_refs=request.source_refs,
+    )
     item = Experience(
         id=resource_id("EXP"), user_id=current_user.id, project_id=project.id,
         title=request.title.strip(), summary=request.summary,
         situation=request.situation, actions=request.actions, results=request.results,
-        role=request.role, skills=request.skills, facts=request.facts,
+        role=request.role, skills=request.skills,
+        skill_mentions=skill_mentions, facts=request.facts,
+        metrics=metrics,
         period=period, missing_information=request.missing_information,
         source_ids=request.source_ids, source_refs=request.source_refs,
         status="confirmed",
@@ -501,11 +516,23 @@ def update_experience(
         raise HTTPException(status_code=409, detail="경험이 다른 곳에서 수정되었습니다.")
     allowed = {
         "title", "summary", "situation", "actions", "results", "role", "skills",
-        "facts", "period", "missing_information", "source_ids", "source_refs", "status",
+        "skill_mentions", "facts", "metrics", "period", "missing_information",
+        "source_ids", "source_refs", "status",
     }
     for key, value in request.changes.items():
         if key in allowed:
             setattr(item, key, value)
+    if any(
+        key in request.changes
+        for key in ("skills", "facts", "skill_mentions", "metrics")
+    ):
+        item.skill_mentions, item.metrics = structured_fields_for_experience(
+            item.skills or [],
+            item.facts or [],
+            skill_mentions=item.skill_mentions or [],
+            metrics=item.metrics or [],
+            source_refs=item.source_refs or [],
+        )
     item.version += 1
     item.updated_at = utc_now()
     database.commit()

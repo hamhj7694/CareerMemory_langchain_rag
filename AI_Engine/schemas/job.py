@@ -16,6 +16,7 @@ from .common import (
     normalize_newlines,
     unique_non_empty,
 )
+from .normalization import QuantifiedMetric, SkillMatchEvidence, SkillMention
 
 
 class JobRequirementType(str, Enum):
@@ -138,6 +139,14 @@ class JobRequirement(SchemaModel):
         default_factory=list,
         description="확정 경험 RAG 검색에 사용할 핵심어",
     )
+    skill_mentions: list[SkillMention] = Field(
+        default_factory=list,
+        description="Raw requirement skills with optional canonical projections",
+    )
+    metrics: list[QuantifiedMetric] = Field(
+        default_factory=list,
+        description="Quantitative constraints validated against source_excerpt",
+    )
     order: Annotated[int, Field(ge=1)]
     confidence: Confidence | None = Field(
         default=None,
@@ -165,6 +174,24 @@ class JobRequirement(SchemaModel):
     def normalize_requirement_keywords(cls, values: list[str]) -> list[str]:
         return unique_non_empty(values)
 
+    @model_validator(mode="after")
+    def validate_structured_source_evidence(self) -> "JobRequirement":
+        expected_source = (
+            self.source_locator.source
+            if self.source_locator is not None
+            else "posting_content"
+        )
+        for item in (*self.skill_mentions, *self.metrics):
+            if item.source_ref_id and item.source_ref_id != expected_source:
+                raise ValueError(
+                    "Structured requirement data must reference its requirement source."
+                )
+            if item.quote and item.quote not in self.source_excerpt:
+                raise ValueError(
+                    "Structured requirement quotes must occur in source_excerpt."
+                )
+        return self
+
 
 class RequirementExperienceLink(SchemaModel):
     """Relationship between a requirement and a confirmed experience."""
@@ -185,6 +212,10 @@ class RequirementExperienceLink(SchemaModel):
     evidence_ids: list[Identifier] = Field(
         default_factory=list,
         description="Evidence IDs supporting the recommendation",
+    )
+    skill_matches: list[SkillMatchEvidence] = Field(
+        default_factory=list,
+        description="Deterministic exact or related skill relationships",
     )
     model_version: Identifier | None = None
     index_version: Identifier | None = None

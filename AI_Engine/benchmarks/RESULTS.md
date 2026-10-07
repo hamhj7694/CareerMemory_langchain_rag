@@ -1,0 +1,135 @@
+# Conversation Analysis Benchmark Results
+
+Measured on 2026-10-07 (Asia/Seoul) with `gpt-4o-mini`.
+Every case used one cold run and three repeated runs. Benchmark execution did
+not call the persistence API and detected no database writes.
+
+## Long conversation performance
+
+Input: 38 user messages and 405 unique source tokens. Values are four-run
+medians.
+
+| KPI | `combined-analysis-v1` | `routed-analysis-v2` | Change |
+|---|---:|---:|---:|
+| Input tokens/run | 8,533.5 | 7,329.5 | -14.11% |
+| Output tokens/run | 255.0 | 121.5 | -52.35% |
+| LLM calls/run | 7.0 | 2.0 | -71.43% |
+| Token amplification | 21.0705x | 18.0975x | -14.11% |
+| Unique-source ratio | 4.746% | 5.526% | +0.780%p |
+| Cached tokens/run | 0 | 0 | unchanged |
+| Estimated cost/run | $0.00143265 | $0.00119168 | -16.82% |
+| Total duration | 13.151s | 4.665s | -64.53% |
+| Cold duration | 15.046s | 7.149s | -52.49% |
+| Repeated-run duration | 12.921s | 4.446s | -65.59% |
+| Database writes detected | 0/4 | 0/4 | passed |
+
+The baseline made five job-discovery calls, one job-analysis call, and one
+experience-analysis call. The final route made one content-routing call and one
+experience-analysis call. The complete-job guard correctly rejected the isolated
+requirement bullet that the baseline had treated as a full posting, so no job
+analysis call was needed for this conversation.
+
+## Gold-set preservation quality
+
+The same synthetic Korean conversation and gold labels were used before and
+after the change. Values are four-run means.
+
+| KPI | Before | After | Change |
+|---|---:|---:|---:|
+| Experience fact recall | 66.667% | 100.000% | +33.333%p |
+| Context-dependent fact recall | 0.000% | 100.000% | +100.000%p |
+| Expected source usage | 100.000% | 100.000% | unchanged |
+| Expected source fact-citation coverage | 66.667% | 91.667% | +25.000%p |
+| Exact citation validity | 100.000% | 100.000% | unchanged |
+| Job detection recall | 100.000% | 100.000% | unchanged |
+| Job detection precision | 100.000% | 100.000% | unchanged |
+| Job requirement term recall | 50.000% | 100.000% | +50.000%p |
+| Assistant-only claim contamination | 0.000% | 0.000% | unchanged |
+| Irrelevant-chat leakage | 0.000% | 0.000% | unchanged |
+
+On the small gold set, richer context and evidence validation increased input
+tokens by 14.56%, output tokens by 43.06%, estimated cost by 28.90%, and duration
+by 57.66%. This is the quality cost for recovering context-dependent facts and
+validating exact source evidence. On the longer conversation, removing repeated
+discovery calls and rejecting an incomplete job fragment outweighed that overhead
+and reduced input, cost, and latency. The 91.667% fact-citation coverage means one
+expected source was represented in structured output but was not redundantly
+cited as a separate `facts` entry in one of four runs; source usage and exact
+citation validity both remained 100%.
+
+## Structured skill and metric normalization follow-up
+
+The v3 follow-up keeps the raw `skills`, `facts`, `keywords`, source text, and
+exact quotes, then adds optional `skill_mentions` and `metrics` projections.
+Unknown technologies remain `unresolved`; they are not discarded. Embeddings
+still retrieve candidates, but a required technology is satisfied only by a
+sourced canonical skill ID match. Related technologies such as FastAPI/REST API
+and JavaScript/TypeScript remain searchable without being treated as identical.
+
+Numbers are reparsed from exact source quotes. Model-proposed numeric values are
+not trusted directly, and calendar years are excluded from performance metrics.
+
+### V3 gold-set quality
+
+Cold one run plus three repeated runs, using the same
+`synthetic-korean-career-conversation-v1` fixture:
+
+| KPI | Structured v3 |
+|---|---:|
+| Experience fact recall | 100.000% |
+| Context-dependent fact recall | 100.000% |
+| Expected source usage | 100.000% |
+| Expected source fact-citation coverage | 100.000% |
+| Exact citation validity | 100.000% |
+| Job detection recall / precision | 100.000% / 100.000% |
+| Job requirement term recall | 100.000% |
+| Canonical skill normalization recall | 100.000% |
+| Structured metric value recall | 100.000% |
+| Assistant-only claim contamination | 0.000% |
+| Irrelevant-chat leakage | 0.000% |
+| Numeric hallucination | 0.000% |
+| Database writes detected | 0/4 |
+
+### V3 long-conversation performance
+
+Against the original `combined-analysis-v1` baseline on the same 38-message
+conversation:
+
+| KPI | Baseline | Structured v3 | Change |
+|---|---:|---:|---:|
+| Input tokens/run | 8,533.5 | 7,494.0 | -12.18% |
+| Output tokens/run | 255.0 | 147.0 | -42.35% |
+| LLM calls/run | 7.0 | 2.0 | -71.43% |
+| Estimated cost/run | $0.00143265 | $0.00123195 | -14.01% |
+| Total duration | 13.151s | 4.564s | -65.30% |
+| Database writes detected | 0/4 | 0/4 | passed |
+
+Compared with routed v2, the larger structured schema increased input tokens by
+2.24%, output tokens by 20.99%, and cost by 3.38%, while median duration improved
+by 2.16%. This is the measured cost of lossless skill/metric projections and
+their source validation; the main routing savings over the original baseline
+remain intact.
+
+### Validation
+
+- Backend: 192 tests passed.
+- Frontend: 99 tests passed.
+- Frontend production build passed.
+- ESLint passed.
+- `git diff --check` passed.
+- Normalization backfill dry-run scanned 0 existing experiences and wrote no data.
+- Both four-run benchmark suites detected 0 database writes.
+
+## Raw reports
+
+Runtime reports are intentionally written under the ignored
+`data/benchmarks/conversation-analysis/` directory:
+
+- `baseline-v1-20261007-020121.json`
+- `routed-v2-complete-job-guard-20261007-025529.json`
+- `gold-baseline-v1-valid-20261007-020806.json`
+- `gold-routed-v2-complete-job-guard-20261007-025437.json`
+- matching `-evaluation.json` files for the gold runs
+- `routed-v3-structured-normalization-20261007.json`
+- `gold-routed-v3-structured-normalization-20261007.json`
+- `gold-routed-v3-structured-normalization-20261007-evaluation.json`

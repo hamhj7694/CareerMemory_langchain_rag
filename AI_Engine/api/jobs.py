@@ -85,7 +85,9 @@ def _experience_dict(item: Experience) -> dict[str, Any]:
         "results": item.results,
         "role": item.role,
         "skills": item.skills,
+        "skill_mentions": item.skill_mentions,
         "facts": item.facts,
+        "metrics": item.metrics,
         "source_ids": item.source_ids,
         "updated_at": item.updated_at,
     }
@@ -101,7 +103,9 @@ def _frontend_experience(item: Experience) -> dict[str, Any]:
         "results": item.results,
         "role": item.role,
         "skills": item.skills,
+        "skillMentions": item.skill_mentions,
         "facts": item.facts,
+        "metrics": item.metrics,
         "domainId": item.project.domain.id,
         "domainName": item.project.domain.name,
         "projectId": item.project.id,
@@ -122,6 +126,7 @@ def _linked_experience_to_frontend(
         "linkStatus": link.get("status", "suggested"),
         "score": link.get("similarity_score"),
         "matchReason": link.get("reason", ""),
+        "skillMatches": link.get("skill_matches", []),
         "evidence": [
             {"sourceId": source_id}
             for source_id in link.get("evidence_ids", [])
@@ -156,6 +161,8 @@ def _requirement_to_frontend(requirement: dict[str, Any]) -> dict[str, Any]:
         "sourceLocator": locator,
         "importance": requirement.get("importance", "unknown"),
         "keywords": requirement.get("keywords", []),
+        "skillMentions": requirement.get("skill_mentions", []),
+        "metrics": requirement.get("metrics", []),
         "confidence": requirement.get("confidence"),
         "needsReview": (
             requirement.get("confidence") is not None

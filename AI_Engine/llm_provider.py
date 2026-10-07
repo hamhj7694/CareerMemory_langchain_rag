@@ -214,8 +214,8 @@ def get_experience_index_version(
 ) -> str:
     active_provider = get_ai_provider(provider)
     if active_provider == "gemini":
-        return "experience-index-gemini-v1"
-    return "experience-index-openai-v2"
+        return "experience-index-gemini-v2"
+    return "experience-index-openai-v3"
 
 
 # 12. API 키 검증

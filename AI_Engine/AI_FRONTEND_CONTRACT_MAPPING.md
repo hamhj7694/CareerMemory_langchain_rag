@@ -45,7 +45,7 @@ AI Pydantic DTO (snake_case)
 
 ```text
 embedding_model: text-embedding-3-small
-index_version: experience-index-v2
+index_version: experience-index-v3
 ```
 
 임베딩 모델이나 검색 문서 구성이 바뀌면 `index_version`을 올리고 기존 문서를 새 인덱스로 전체 재임베딩한다. 서로 다른 임베딩 모델로 생성한 벡터를 같은 컬렉션에 혼합하지 않는다.
@@ -135,8 +135,10 @@ actions[]
 results[]
 role
 skills[]
+skill_mentions[]
 skill_groups[]
 facts[]
+metrics[]
 missing_information[]
 source_ref_ids[]
 field_citations{}
@@ -243,7 +245,8 @@ AI 내부의 `JobAnalysisAI`는 다음 파이프라인을 공유한다.
 | `warnings[]` | `warnings[]` |
 | `analyzed_at` | `analyzed_at` |
 
-요구사항의 `title`, `summary`, `source_excerpt`, `source_locator`, `confidence`는 V1 화면이 당장 표시하지 않더라도 버리지 않고 V2 저장 데이터에 보존한다.
+요구사항의 `title`, `summary`, `source_excerpt`, `source_locator`, `confidence`,
+`skill_mentions`, `metrics`는 V1 화면이 당장 표시하지 않더라도 버리지 않고 V2 저장 데이터에 보존한다.
 
 #### 요구사항 enum 변환
 
@@ -281,6 +284,7 @@ V1의 `skill`, `domain_experience`는 공고 원문에 해당 의미가 명확�
 | `similarity_score` | `experiences[].score` |
 | `reason` | Match의 `reason` 또는 경험별 추천 사유 |
 | `evidence_ids[]` | `experiences[].evidence[]` 조회 키 |
+| `skill_matches[]` | `experiences[].skillMatches[]` |
 | `source` | AI 추천/사용자 연결 provenance |
 | `status` | 선택·거절 상태 |
 

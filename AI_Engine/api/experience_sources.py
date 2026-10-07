@@ -478,7 +478,15 @@ def reorganize_from_sources(
         results=list(draft.results),
         role=draft.role,
         skills=list(draft.skills),
+        skill_mentions=[
+            item.model_dump(mode="json")
+            for item in getattr(draft, "skill_mentions", [])
+        ],
         facts=list(draft.facts),
+        metrics=[
+            item.model_dump(mode="json")
+            for item in getattr(draft, "metrics", [])
+        ],
         period=project_period or {},
         missing_information=list(draft.missing_information),
         source_ids=[_source_id(source) for source in refs],

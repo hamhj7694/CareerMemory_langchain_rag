@@ -495,7 +495,13 @@ class Experience(Base):
     results: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     role: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     skills: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    skill_mentions: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     facts: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    metrics: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     period: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     missing_information: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     source_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)

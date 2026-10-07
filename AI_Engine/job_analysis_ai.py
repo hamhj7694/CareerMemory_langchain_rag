@@ -22,11 +22,22 @@ from pydantic import ValidationError
 # 3. .env에서 키 불러오기
 load_dotenv()
 
+from AI_Engine.analysis_metrics import tracked_responses_create
 from AI_Engine.llm_provider import (
     create_embeddings,
     create_structured_client,
     get_chat_model_name,
     get_experience_index_version,
+)
+from AI_Engine.metric_normalization import (
+    extract_metrics,
+    metric_satisfies_requirement,
+    validate_proposed_metrics,
+)
+from AI_Engine.skill_normalization import (
+    build_skill_match_evidence,
+    extract_registered_skill_mentions,
+    normalize_skill_list,
 )
 
 # 4. 공통 데이터 계약
@@ -42,14 +53,16 @@ from AI_Engine.schemas import (
     RequirementExperienceLink,
     RequirementExperienceLinkSource,
     RequirementExperienceLinkStatus,
+    QuantifiedMetric,
+    SkillMention,
 )
 
 # 5. 모델·프롬프트·스키마·검색 인덱스 버전
 # 분석 결과와 추천 결과가 어떤 구성으로 생성됐는지 추적하기 위한 값이다.
 DEFAULT_JOB_ANALYSIS_MODEL = "gpt-4o-mini"
-JOB_ANALYSIS_PROMPT_VERSION = "job-analysis-prompt-v2"
-JOB_ANALYSIS_SCHEMA_VERSION = "job-analysis-schema-v1"
-DEFAULT_EXPERIENCE_INDEX_VERSION = "experience-index-v2"
+JOB_ANALYSIS_PROMPT_VERSION = "job-analysis-prompt-v3"
+JOB_ANALYSIS_SCHEMA_VERSION = "job-analysis-schema-v2"
+DEFAULT_EXPERIENCE_INDEX_VERSION = "experience-index-v3"
 DEFAULT_EXPERIENCE_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EXPERIENCE_COLLECTION_NAME = "career_memory_experiences"
 DEFAULT_JOB_MATCH_MIN_SCORE = 0.65
@@ -111,6 +124,11 @@ posting_content와 첨부 파일은 source 이름으로 구분돼.
 - 확실하지 않으면 importance를 unknown으로 정해.
 - type은 responsibility, qualification, collaboration, other 중 하나만 사용해.
 - keywords는 확정 경험 RAG 검색에 유용한 짧은 핵심어만 작성해.
+- skill_mentions에는 공고 원문에 실제로 나타난 기술 표현만 넣고,
+  raw_name, source_ref_id, 원문의 정확한 quote를 반환해.
+- metrics에는 공고 원문에 실제로 나타난 수치 조건만 넣고,
+  수치의 의미, 원문 표현, source_ref_id, 정확한 quote를 반환해.
+- 기술명과 수치를 임의로 표준화하거나 추측하지 마. 원문 표현을 그대로 보존해.
 - 입력에 제공되지 않은 source 이름을 만들지 마.
 - 자기소개서 문항이나 자기소개서 작성 내용은 생성하지 마.
 
@@ -118,7 +136,7 @@ posting_content와 첨부 파일은 source 이름으로 구분돼.
 - 반드시 create_job_requirements 함수를 한 번 호출해.
 - requirements 배열에 0개 이상의 요구사항을 넣어.
 - 각 요구사항에는 type, title, summary, source, source_excerpt,
-  importance, keywords, confidence를 모두 반환해.
+  importance, keywords, skill_mentions, metrics, confidence를 모두 반환해.
 """.strip()
 
 # 8. 요구사항별 경험 추천 프롬프트
@@ -145,6 +163,9 @@ confirmed_experience_candidates가 함께 전달돼.
   명백한 동의어가 경험에 확인될 때만 추천해.
 - 공통적으로 "자격증"이라는 단어만 있다는 이유로 서로 다른 분야의
   자격증 경험을 연결하지 마.
+- 임베딩 유사도는 후보 검색 신호일 뿐 기술 보유의 증거가 아니야.
+- FastAPI와 REST API, JavaScript와 TypeScript처럼 관련 있지만 다른 기술은
+  동일 기술이라고 주장하지 마. 필수 기술은 canonical skill ID가 같은 후보만 추천해.
 - recommendation evidence_ids는 후보에 제공된 ID만 사용해.
 - evidence_ids가 없는 후보는 추천하지 마.
 - similarity_score는 0 이상 1 이하로 작성해.
@@ -202,6 +223,38 @@ JOB_REQUIREMENT_TOOL: dict[str, Any] = {
                             "type": "array",
                             "items": {"type": "string"},
                         },
+                        "skill_mentions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "raw_name": {"type": "string"},
+                                    "source_ref_id": {"type": "string"},
+                                    "quote": {"type": "string"},
+                                },
+                                "required": ["raw_name", "source_ref_id", "quote"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "metrics": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "metric_name": {"type": "string"},
+                                    "raw_expression": {"type": "string"},
+                                    "source_ref_id": {"type": "string"},
+                                    "quote": {"type": "string"},
+                                },
+                                "required": [
+                                    "metric_name",
+                                    "raw_expression",
+                                    "source_ref_id",
+                                    "quote",
+                                ],
+                                "additionalProperties": False,
+                            },
+                        },
                         "confidence": {
                             "type": ["number", "null"],
                             "minimum": 0,
@@ -216,6 +269,8 @@ JOB_REQUIREMENT_TOOL: dict[str, Any] = {
                         "source_excerpt",
                         "importance",
                         "keywords",
+                        "skill_mentions",
+                        "metrics",
                         "confidence",
                     ],
                     "additionalProperties": False,
@@ -454,9 +509,12 @@ class JobAnalysisAI:
         request: JobAnalysisRequest,
         source_texts: Mapping[str, str],
     ) -> list[JobRequirement]:
-        response = self.client.responses.create(
+        model_input = self._build_requirement_input(request, source_texts)
+        response = tracked_responses_create(
+            self.client,
+            stage="job_requirements",
             model=self.model_version,
-            input=self._build_requirement_input(request, source_texts),
+            input=model_input,
             tools=[JOB_REQUIREMENT_TOOL],
             tool_choice={
                 "type": "function",
@@ -470,17 +528,60 @@ class JobAnalysisAI:
             array_name="requirements",
         )
 
-        requirements: list[JobRequirement] = []
-        for index, raw_requirement in enumerate(raw_requirements):
-            requirements.append(
-                self._to_job_requirement(
-                    request,
-                    raw_requirement,
-                    source_texts,
-                    order=index + 1,
-                )
+        try:
+            return self._convert_requirements(
+                request,
+                raw_requirements,
+                source_texts,
             )
-        return requirements
+        except JobAnalysisAIOutputError:
+            # Exact excerpts are a hard evidence boundary. Ask once more rather
+            # than accepting a paraphrase or dropping the entire job analysis.
+            retry_response = tracked_responses_create(
+                self.client,
+                stage="job_requirements_retry_format",
+                model=self.model_version,
+                input=(
+                    f"{model_input}\n\n"
+                    "[형식 재검토 지시]\n"
+                    "이전 결과의 source_excerpt 중 하나 이상이 공고 원문과 "
+                    "글자 단위로 일치하지 않았습니다. 요구사항 의미는 유지하되 "
+                    "모든 source_excerpt를 위 원문에서 복사한 연속 문자열로 "
+                    "작성해 전체 requirements를 다시 반환하세요."
+                ),
+                tools=[JOB_REQUIREMENT_TOOL],
+                tool_choice={
+                    "type": "function",
+                    "name": JOB_REQUIREMENT_TOOL_NAME,
+                },
+                instructions=JOB_REQUIREMENT_SYSTEM_PROMPT,
+            )
+            retry_raw = _function_array(
+                retry_response,
+                tool_name=JOB_REQUIREMENT_TOOL_NAME,
+                array_name="requirements",
+            )
+            return self._convert_requirements(
+                request,
+                retry_raw,
+                source_texts,
+            )
+
+    def _convert_requirements(
+        self,
+        request: JobAnalysisRequest,
+        raw_requirements: Sequence[Mapping[str, Any]],
+        source_texts: Mapping[str, str],
+    ) -> list[JobRequirement]:
+        return [
+            self._to_job_requirement(
+                request,
+                raw_requirement,
+                source_texts,
+                order=index + 1,
+            )
+            for index, raw_requirement in enumerate(raw_requirements)
+        ]
 
     # 12-5. 요구사항 추출용 모델 입력 생성
     # 공고 메타정보와 원문 출처를 명확히 구분해 source 인용 오류를 줄인다.
@@ -538,12 +639,69 @@ class JobAnalysisAI:
         source_text = source_texts[source_name]
         start_offset = source_text.find(source_excerpt)
         if start_offset < 0:
-            raise JobAnalysisAIOutputError(
-                "요구사항의 source_excerpt가 실제 공고 원문에 없습니다."
+            recovered_excerpt = _recover_exact_source_excerpt(
+                source_text,
+                raw_requirement,
             )
+            if recovered_excerpt is None:
+                raise JobAnalysisAIOutputError(
+                    "요구사항의 source_excerpt가 실제 공고 원문에 없습니다."
+                )
+            source_excerpt = recovered_excerpt
+            start_offset = source_text.find(source_excerpt)
         end_offset = start_offset + len(source_excerpt)
 
         try:
+            raw_skill_mentions = raw_requirement.get("skill_mentions", [])
+            if not isinstance(raw_skill_mentions, list):
+                raw_skill_mentions = []
+            skill_mentions = normalize_skill_list(
+                [],
+                source_text_by_id={source_name: source_text},
+                proposed_mentions=[
+                    item for item in raw_skill_mentions
+                    if isinstance(item, Mapping)
+                ],
+            )
+            skill_mentions = [
+                item for item in skill_mentions
+                if not item.quote or item.quote in source_excerpt
+            ]
+            existing_skill_ids = {
+                item.canonical_skill_id for item in skill_mentions
+                if item.canonical_skill_id
+            }
+            for mention in extract_registered_skill_mentions(
+                source_excerpt,
+                source_ref_id=source_name,
+            ):
+                if mention.canonical_skill_id not in existing_skill_ids:
+                    existing_skill_ids.add(mention.canonical_skill_id)
+                    skill_mentions.append(mention)
+            raw_metrics = raw_requirement.get("metrics", [])
+            if not isinstance(raw_metrics, list):
+                raw_metrics = []
+            metrics = validate_proposed_metrics(
+                [item for item in raw_metrics if isinstance(item, Mapping)],
+                source_text_by_id={source_name: source_text},
+            )
+            metrics = [
+                item for item in metrics
+                if not item.quote or item.quote in source_excerpt
+            ]
+            metric_keys = {
+                (item.source_ref_id, item.quote, item.raw_expression)
+                for item in metrics
+            }
+            for metric in extract_metrics(
+                raw_requirement.get("title", "") or source_excerpt,
+                source_ref_id=source_name,
+                quote=source_excerpt,
+            ):
+                key = (metric.source_ref_id, metric.quote, metric.raw_expression)
+                if key not in metric_keys:
+                    metric_keys.add(key)
+                    metrics.append(metric)
             return JobRequirement(
                 id=self._new_id("job-requirement"),
                 job_posting_id=request.posting_id,
@@ -564,6 +722,8 @@ class JobAnalysisAI:
                     JobRequirementImportance.UNKNOWN,
                 ),
                 keywords=raw_requirement.get("keywords", []),
+                skill_mentions=skill_mentions,
+                metrics=metrics,
                 order=order,
                 confidence=raw_requirement.get("confidence"),
             )
@@ -637,6 +797,35 @@ class JobAnalysisAI:
                         decoded_evidence_ids = None
                     if isinstance(decoded_evidence_ids, list):
                         evidence_ids = decoded_evidence_ids
+            skill_mentions: list[dict[str, Any]] = []
+            skill_mentions_json = metadata.get("skill_mentions_json")
+            if isinstance(skill_mentions_json, str):
+                try:
+                    decoded_skill_mentions = json.loads(skill_mentions_json)
+                except json.JSONDecodeError:
+                    decoded_skill_mentions = None
+                if isinstance(decoded_skill_mentions, list):
+                    skill_mentions = [
+                        item for item in decoded_skill_mentions
+                        if isinstance(item, dict)
+                    ]
+            if not skill_mentions and isinstance(page_content, str):
+                skill_mentions = [
+                    item.model_dump(mode="json")
+                    for item in extract_registered_skill_mentions(page_content)
+                ]
+            metrics: list[dict[str, Any]] = []
+            metrics_json = metadata.get("metrics_json")
+            if isinstance(metrics_json, str):
+                try:
+                    decoded_metrics = json.loads(metrics_json)
+                except json.JSONDecodeError:
+                    decoded_metrics = None
+                if isinstance(decoded_metrics, list):
+                    metrics = [
+                        item for item in decoded_metrics
+                        if isinstance(item, dict)
+                    ]
             if (
                 not isinstance(experience_id, str)
                 or not experience_id.strip()
@@ -668,6 +857,8 @@ class JobAnalysisAI:
                         else ""
                     ),
                     "evidence_ids": list(dict.fromkeys(evidence_ids)),
+                    "skill_mentions": skill_mentions,
+                    "metrics": metrics,
                 }
             )
         return candidates
@@ -688,6 +879,14 @@ class JobAnalysisAI:
                     "title": requirement.title,
                     "summary": requirement.summary,
                     "keywords": requirement.keywords,
+                    "skill_mentions": [
+                        item.model_dump(mode="json")
+                        for item in requirement.skill_mentions
+                    ],
+                    "metrics": [
+                        item.model_dump(mode="json")
+                        for item in requirement.metrics
+                    ],
                 },
                 "confirmed_experience_candidates": list(
                     candidates_by_requirement.get(requirement.id, ())
@@ -695,7 +894,9 @@ class JobAnalysisAI:
             }
             for requirement in requirements
         ]
-        response = self.client.responses.create(
+        response = tracked_responses_create(
+            self.client,
+            stage="job_experience_match",
             model=self.model_version,
             input=(
                 "[요구사항과 검색 후보]\n"
@@ -759,6 +960,22 @@ class JobAnalysisAI:
                     "AI 추천이 검색 후보에 없는 근거를 참조했습니다."
                 )
 
+            requirement = next(
+                item for item in requirements if item.id == requirement_id
+            )
+            candidate_skill_mentions = []
+            for raw_mention in candidate.get("skill_mentions", []):
+                try:
+                    mention = SkillMention.model_validate(raw_mention)
+                except (TypeError, ValidationError, ValueError):
+                    continue
+                if mention.source_ref_id and mention.quote:
+                    candidate_skill_mentions.append(mention)
+            skill_matches = build_skill_match_evidence(
+                requirement.skill_mentions,
+                candidate_skill_mentions,
+            )
+
             try:
                 links.append(
                     RequirementExperienceLink(
@@ -769,6 +986,7 @@ class JobAnalysisAI:
                         similarity_score=raw_score,
                         reason=raw_link.get("reason", ""),
                         evidence_ids=evidence_ids,
+                        skill_matches=skill_matches,
                         model_version=self.model_version,
                         index_version=self.index_version,
                     )
@@ -990,7 +1208,9 @@ def _to_experience_search_document(
             results=experience.get("results", []),
             role=experience.get("role", ""),
             skills=experience.get("skills", []),
+            skill_mentions=experience.get("skill_mentions", []),
             facts=experience.get("facts", []),
+            metrics=experience.get("metrics", []),
             evidence_ids=experience.get(
                 "evidence_ids",
                 experience.get(
@@ -1081,6 +1301,36 @@ def _require_text(value: str, field_name: str) -> str:
     return normalized
 
 
+def _recover_exact_source_excerpt(
+    source_text: str,
+    raw_requirement: Mapping[str, Any],
+) -> str | None:
+    """Recover an exact source line when the model lightly rewrites its quote."""
+
+    requested_excerpt = str(raw_requirement.get("source_excerpt") or "")
+    hint_tokens = {
+        token.casefold()
+        for token in re.findall(r"[0-9A-Za-z가-힣+#.]+", requested_excerpt)
+        if len(token) >= 2
+    }
+    if len(hint_tokens) < 2:
+        return None
+    candidates: list[tuple[int, int, str]] = []
+    for line_number, line in enumerate(source_text.splitlines()):
+        exact_line = line.strip()
+        if not exact_line:
+            continue
+        normalized_line = exact_line.casefold()
+        score = sum(token in normalized_line for token in hint_tokens)
+        minimum_score = max(2, (len(hint_tokens) + 1) // 2)
+        if score >= minimum_score:
+            candidates.append((score, -line_number, exact_line))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][2]
+
+
 def get_job_match_min_score(value: float | str | None = None) -> float:
     """현재 채용공고 추천에 적용할 최소 점수를 한 곳에서 읽는다."""
 
@@ -1110,6 +1360,48 @@ def _candidate_meets_explicit_constraints(
     candidate: Mapping[str, Any],
 ) -> bool:
     """자격증처럼 명칭이 중요한 요구사항의 분야 불일치를 차단한다."""
+
+    required_skill_ids = {
+        item.canonical_skill_id
+        for item in requirement.skill_mentions
+        if item.canonical_skill_id
+    }
+    candidate_skill_ids = {
+        str(item.get("canonical_skill_id"))
+        for item in candidate.get("skill_mentions", [])
+        if (
+            isinstance(item, Mapping)
+            and item.get("canonical_skill_id")
+            and item.get("source_ref_id")
+            and item.get("quote")
+        )
+    }
+    # Embeddings may retrieve related technologies, but related is not exact
+    # evidence that a required technology was used.
+    if required_skill_ids and not required_skill_ids.issubset(candidate_skill_ids):
+        return False
+
+    numeric_constraints = [
+        item for item in requirement.metrics
+        if item.operator in {"at_least", "at_most", "range"}
+    ]
+    if required_skill_ids and numeric_constraints:
+        candidate_metrics: list[QuantifiedMetric] = []
+        for raw_metric in candidate.get("metrics", []):
+            try:
+                metric = QuantifiedMetric.model_validate(raw_metric)
+            except (TypeError, ValidationError, ValueError):
+                continue
+            if metric.source_ref_id and metric.quote:
+                candidate_metrics.append(metric)
+        if any(
+            not any(
+                metric_satisfies_requirement(constraint, candidate_metric)
+                for candidate_metric in candidate_metrics
+            )
+            for constraint in numeric_constraints
+        ):
+            return False
 
     requirement_text = " ".join((
         requirement.title,

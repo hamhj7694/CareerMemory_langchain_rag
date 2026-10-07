@@ -80,7 +80,7 @@ class ExperienceSearchDocumentTests(unittest.TestCase):
         )
         self.assertEqual(
             DEFAULT_EXPERIENCE_INDEX_VERSION,
-            "experience-index-v2",
+            "experience-index-v3",
         )
 
     def test_frontend_experience_becomes_search_document(self) -> None:

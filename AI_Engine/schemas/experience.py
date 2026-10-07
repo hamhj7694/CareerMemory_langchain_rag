@@ -17,6 +17,7 @@ from .common import (
     unique_non_empty,
 )
 from .evidence import EvidenceCitation, EvidenceSource, FileEvidenceAnalysis
+from .normalization import QuantifiedMetric, SkillMention
 
 
 class ExperienceExtractionInputType(str, Enum):
@@ -171,6 +172,10 @@ class ExperienceDraft(SchemaModel):
         default_factory=list,
         description="Raw skill names before normalization",
     )
+    skill_mentions: list[SkillMention] = Field(
+        default_factory=list,
+        description="Lossless skill mentions with optional canonical projections",
+    )
     skill_groups: list[SkillGroupCandidate] = Field(
         default_factory=list,
         description="Skill group candidates for 내 역량",
@@ -178,6 +183,11 @@ class ExperienceDraft(SchemaModel):
     facts: list[str] = Field(
         default_factory=list,
         description="근거에서 확인된 내용",
+    )
+
+    metrics: list[QuantifiedMetric] = Field(
+        default_factory=list,
+        description="Validated quantitative expressions derived from exact evidence",
     )
 
     missing_information: list[str] = Field(
@@ -242,7 +252,9 @@ class ExperienceDraft(SchemaModel):
                 self.results,
                 self.role.strip(),
                 self.skills,
+                self.skill_mentions,
                 self.facts,
+                self.metrics,
             )
         )
         if has_experience_content and not self.source_ref_ids:
@@ -260,6 +272,18 @@ class ExperienceDraft(SchemaModel):
             raise ValueError(
                 "근거에서 확인된 내용에는 원문 인용이 필요합니다: "
                 f"{missing}"
+            )
+        structured_source_ids = {
+            item.source_ref_id
+            for item in (*self.skill_mentions, *self.metrics)
+            if item.source_ref_id
+        }
+        unknown_structured_sources = structured_source_ids - known_source_ids
+        if unknown_structured_sources:
+            unknown = ", ".join(sorted(unknown_structured_sources))
+            raise ValueError(
+                "Structured skill or metric data references an unknown source: "
+                f"{unknown}"
             )
         return self
 
