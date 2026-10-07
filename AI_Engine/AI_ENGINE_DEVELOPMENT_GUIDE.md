@@ -157,7 +157,9 @@ quote
 - 모든 fact citation은 알려진 source ID를 참조해야 한다.
 - quote는 해당 source 원문에 실제로 존재해야 한다.
 - structured skill과 metric도 가능하면 source ID와 exact quote를 가진다.
-- 파일은 바이너리, 추출 텍스트, 해시, 파서 버전을 분리한다.
+- 파일 원본은 LocalBlobStore, 해시·상태·작업은 DB, 추출 텍스트·파서 버전은 파생 데이터로 분리한다.
+- 모든 파일 진입점은 AttachmentService를 거치며 실패해도 원본과 오류를 보존한다.
+- 음성·영상 전사는 원문 텍스트와 start/end ms 구간을 함께 저장한다.
 - 목표 구조에서는 EvidenceDocument, EvidenceChunk, EmbeddingRecord를 영속화한다.
 - 원본이 수정되면 관련 파생 데이터와 인덱스를 stale로 판단할 수 있어야 한다.
 
@@ -199,7 +201,10 @@ content hash와 index version으로 갱신하고 DB에서 전체 재구축할 �
 | `conversation_content_router.py` | 사용자 원문 유형 분류와 공고 탐지 |
 | `conversation_analysis_workflow.py` | 통합 LangGraph 실행 순서 |
 | `experience_ai.py` | 경험 초안 구조화와 근거 검증 |
-| `experience_file_text.py` | 파일 텍스트·OCR 추출 |
+| `file_extraction/` | 형식 판별, 파일별 파서, OCR, 추출 품질·위치 정보 |
+| `attachment_service.py`, `blob_store.py` | 원본 저장, 중복 판정, 영속 작업 큐, 재처리 |
+| `file_processing_worker.py` | 만료 lease 복구와 대기 작업 실행 |
+| `experience_file_text.py`, `job_file_text.py` | 기존 호출부를 통합 파서로 연결하는 호환 adapter |
 | `job_analysis_ai.py` | 공고 요구사항과 경험 매칭 |
 | `skill_normalization.py` | 기술 개념 정규화와 관계 판정 |
 | `metric_normalization.py` | 수치 추출과 결정론적 비교 |

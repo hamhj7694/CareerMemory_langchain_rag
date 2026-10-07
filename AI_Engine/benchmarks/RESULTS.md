@@ -110,14 +110,69 @@ by 2.16%. This is the measured cost of lossless skill/metric projections and
 their source validation; the main routing savings over the original baseline
 remain intact.
 
+## File extraction quality
+
+The deterministic `file-extraction-gold-v1` fixture covers Markdown with a
+percentage, native PDF, DOCX tables, PPTX slide relationship order, and HWPX
+section paragraphs. Each format is generated in memory and passed through the
+same parser registry used by the APIs.
+
+| KPI | Result |
+|---|---:|
+| Deterministic parser success | 5/5 (100%) |
+| Required-fragment recall | 100% |
+| Numeric-token recall | 100% |
+| Character error rate | 0% |
+| Unintended database writes | 0 |
+| Real Korean OCR smoke test | passed: Tesseract 5.4.0, kor+eng+osd |
+| OCR required-fragment recall | 100% |
+| OCR numeric-token recall | 100% |
+| OCR character error rate | 8.333% |
+| OCR quality score | 0.8073 |
+| OCR duration | 754.432ms |
+
+`run_ocr` now evaluates all three PSM profiles before selecting the best result.
+The previous early exit selected a lower-quality PSM 3 result even when PSM 6/11
+recognized the complete Korean phrase. The real smoke test reproduced that issue
+and passed after the selection policy changed.
+
+### Attachment storage and durable queue
+
+`attachment-pipeline-v1` creates ten files in an isolated temporary LocalBlobStore
+and in-memory DB, processes the persisted jobs, verifies every SHA-256 hash, and
+simulates one expired worker lease.
+
+| KPI | Result |
+|---|---:|
+| Files ingested | 10 |
+| LocalBlobStore originals | 10/10 |
+| New DB BLOB bytes | 0 |
+| SHA-256 verification | 10/10 |
+| Completed processing jobs | 10/10 |
+| Expired leases recovered | 1/1, returned to `queued` |
+| Ingest duration | 288.572ms |
+| Parse duration | 218.149ms |
+| Total duration | 542.943ms |
+| Persistent database writes | 0 |
+
+Capability check on the development PC:
+
+- Tesseract 5.4.0: available with `kor`, `eng`, `osd`.
+- FFmpeg/FFprobe 9.0: available; OpenAI STT key configured.
+- LibreOffice: unavailable, so actual DOC/PPT conversion remains environment-blocked.
+- Hancom HWP→HWPX converter: unavailable, so actual HWP conversion remains environment-blocked.
+- STT timestamp mapping and persistence passed mocked integration tests; a paid live-audio
+  request was intentionally not included in this benchmark.
+
 ### Validation
 
-- Backend: 192 tests passed.
-- Frontend: 99 tests passed.
+- Backend: 212 tests passed, including the real Korean OCR smoke test.
+- Frontend: 107 tests passed.
 - Frontend production build passed.
 - ESLint passed.
 - `git diff --check` passed.
 - Normalization backfill dry-run scanned 0 existing experiences and wrote no data.
+- Attachment BLOB migration dry-run examined 0 existing attachments and wrote no data.
 - Both four-run benchmark suites detected 0 database writes.
 
 ## Raw reports

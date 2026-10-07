@@ -28,6 +28,7 @@
 | `Data_Flow_Summary.md` | 사용자 입력부터 저장·검색까지의 전체 흐름 | 주요 데이터 흐름 변경 |
 | `AI_MEMORY_CONTEXT_POLICY.md` | 세션 기억·장기 기억·사용자 격리 | 기억 범위 변경 |
 | `docs/AI_DATA_ARCHITECTURE.md` | Bronze/Silver/Gold, 온톨로지, Evidence, 인덱스 | DB·데이터 구조 변경 |
+| `docs/FILE_EXTRACTION_GUIDE.md` | 첨부 형식, OCR 실행 환경, 파서·처리 상태 | 파일 지원·OCR 정책 변경 |
 | `AI_Engine/AI_ENGINE_DEVELOPMENT_GUIDE.md` | AI 역할, 검증, RAG, 구현 규칙 | AI 동작 원칙 변경 |
 | `AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md` | AI 내부 DTO와 API·화면 DTO 매핑 | 필드·enum·오류 계약 변경 |
 | `AI_Engine/AI_ENGINE_WORK_MAP.md` | AI 작업 ID, 상태, 완료 조건 | AI 작업 시작·완료 |
@@ -39,6 +40,7 @@
 - `docs/API_CONTRACT_WORKSPACE.md`: API 협의 중인 결정과 열린 질문
 - `docs/v2/V2_API_CONTRACT.md`: V2 공개 API 계약
 - `docs/api/`: 화면별 API 모델 상세
+- `docs/FILE_EXTRACTION_GUIDE.md`: 파일 형식·OCR·파서 지원 및 운영 절차
 - `docs/design/`: 디자인 기준과 레퍼런스
 - `AI_Engine/benchmarks/RESULTS.md`: AI 품질·비용·시간 측정 결과
 - `docs/reports/`: 완료된 작업의 보고와 회의 기록

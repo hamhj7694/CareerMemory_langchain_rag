@@ -1,0 +1,59 @@
+{
+  "version": "file-extraction-gold-v1",
+  "description": "결정론적 문서 파서와 실제 OCR 환경을 함께 검증하는 소형 정답 세트",
+  "cases": [
+    {
+      "id": "markdown_numeric",
+      "kind": "text",
+      "filename": "성과.md",
+      "mime_type": "text/markdown",
+      "content": "# 결제 개선\n완료율을 49%에서 50%로 높였습니다.",
+      "expected_text": "# 결제 개선\n완료율을 49%에서 50%로 높였습니다.",
+      "required_fragments": ["결제 개선", "49%", "50%"]
+    },
+    {
+      "id": "native_pdf",
+      "kind": "pdf",
+      "filename": "report.pdf",
+      "expected_text": "[1페이지]\nProject dashboard achieved 50% completion.",
+      "required_fragments": ["Project dashboard", "50%"]
+    },
+    {
+      "id": "docx_table",
+      "kind": "docx",
+      "filename": "resume.docx",
+      "expected_text": "프로젝트 성과\n\n전환율 | 50%",
+      "required_fragments": ["프로젝트 성과", "전환율", "50%"]
+    },
+    {
+      "id": "pptx_slide_order",
+      "kind": "pptx",
+      "filename": "portfolio.pptx",
+      "expected_text": "[1슬라이드]\n첫 번째 슬라이드\n\n[2슬라이드]\n두 번째 슬라이드",
+      "required_fragments": ["첫 번째 슬라이드", "두 번째 슬라이드"]
+    },
+    {
+      "id": "hwpx_paragraph",
+      "kind": "hwpx",
+      "filename": "career.hwpx",
+      "expected_text": "고객 문의 30% 감소",
+      "required_fragments": ["고객 문의", "30% 감소"]
+    },
+    {
+      "id": "real_korean_ocr",
+      "kind": "ocr",
+      "filename": "korean-result.png",
+      "content": "경력 3년 성과 50%",
+      "expected_text": "경력 3년 성과 50%",
+      "required_fragments": ["경력", "성과", "50"]
+    }
+  ],
+  "kpis": [
+    "parser_success_rate",
+    "required_fragment_recall",
+    "numeric_token_recall",
+    "character_error_rate",
+    "duration_ms",
+    "ocr_runtime_available"
+  ]
+}

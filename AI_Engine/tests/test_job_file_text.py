@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from io import BytesIO
 from unittest.mock import patch
 
-from AI_Engine.experience_file_text import ExtractedExperienceFile
+from PIL import Image
+
+from AI_Engine.file_extraction.ocr import OCRResult
 from AI_Engine.job_file_text import (
     JobFile,
     JobFileInputError,
@@ -30,26 +33,22 @@ class JobFileTextTests(unittest.TestCase):
                 JobFile("공고.zip", "application/zip", b"not-a-job"),
             ])
 
-    def test_more_than_five_files_are_rejected(self) -> None:
+    def test_more_than_ten_files_are_rejected(self) -> None:
         with self.assertRaises(JobFileInputError):
             extract_job_file_text([
                 JobFile(f"{index}.txt", "text/plain", b"job")
-                for index in range(6)
+                for index in range(11)
             ])
 
     def test_image_uses_shared_local_extractor(self) -> None:
+        image_buffer = BytesIO()
+        Image.new("RGB", (100, 100), "white").save(image_buffer, format="PNG")
         with patch(
-            "AI_Engine.experience_file_text.extract_experience_file_texts",
-            return_value=[
-                ExtractedExperienceFile(
-                    filename="capture.png",
-                    mime_type="image/png",
-                    text="주요 업무\n서비스 개선",
-                )
-            ],
+            "AI_Engine.file_extraction.parsers.run_ocr",
+            return_value=OCRResult("주요 업무\n서비스 개선", 0.9, "--psm 6", ()),
         ) as extractor:
             text = extract_job_file_text([
-                JobFile("capture.png", "image/png", b"fake-image-bytes"),
+                JobFile("capture.png", "image/png", image_buffer.getvalue()),
             ])
 
         self.assertIn("서비스 개선", text)

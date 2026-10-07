@@ -221,12 +221,43 @@ export function preflightAttachments(descriptors = []) {
   });
 }
 
-export async function uploadAttachments(selections = []) {
-  return Promise.all(Array.from(selections).map(async (selection) => {
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function run() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
+}
+
+export function getAttachment(attachmentId) {
+  return http.request({
+    path: `/api/v2/attachments/${encodeURIComponent(attachmentId)}`,
+  });
+}
+
+export function processAttachment(attachmentId) {
+  return http.request({
+    path: `/api/v2/attachments/${encodeURIComponent(attachmentId)}/process`,
+    method: 'POST',
+  });
+}
+
+export async function uploadAttachments(selections = [], { throwOnFailure = true } = {}) {
+  const input = Array.from(selections);
+  if (input.length > 10) throw new Error('파일은 최대 10개까지 올릴 수 있습니다.');
+  const totalBytes = input.reduce((sum, selection) => (
+    sum + (selection.size || selection.file?.size || 0)
+  ), 0);
+  if (totalBytes > 100 * 1024 * 1024) throw new Error('전체 파일 크기는 100MiB 이하여야 합니다.');
+  const uploaded = await mapWithConcurrency(input, 2, async (selection) => {
     if (selection.existingAttachmentId) {
-      const existing = await http.request({
-        path: `/api/v2/attachments/${encodeURIComponent(selection.existingAttachmentId)}`,
-      });
+      const existing = await getAttachment(selection.existingAttachmentId);
       return { ...existing, reused: true };
     }
     const file = selection.file || selection;
@@ -239,7 +270,14 @@ export async function uploadAttachments(selections = []) {
       method: 'POST',
       body,
     });
-  }));
+  });
+  const failed = uploaded.filter((attachment) => ['failed', 'unsupported'].includes(attachment.status));
+  if (throwOnFailure && failed.length) {
+    const names = failed.map((attachment) => attachment.filename).join(', ');
+    const reason = failed[0].parse_error || '파일에서 분석 가능한 텍스트를 추출하지 못했습니다.';
+    throw new Error(`${names}: ${reason}`);
+  }
+  return uploaded;
 }
 
 export function deleteAttachment(attachmentId) {
@@ -277,6 +315,8 @@ export const v2ChatHttpApi = {
   sendMessage,
   streamMessage,
   preflightAttachments,
+  getAttachment,
+  processAttachment,
   uploadAttachments,
   deleteAttachment,
   getConversationExtractionStatus,

@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 import hashlib
-import unicodedata
 from datetime import datetime
 from typing import Literal
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from AI_Engine.attachment_service import attachment_service, normalized_filename
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
+from AI_Engine.blob_store import BlobStoreError
 from AI_Engine.database.connection import get_database_session
-from AI_Engine.database.models import Attachment, User
-from AI_Engine.experience_file_text import extract_experience_file_texts
+from AI_Engine.database.models import Attachment, FileProcessingJob, TranscriptionSegment, User
+from AI_Engine.file_extraction import FileInputError, run_file_extraction
 from AI_Engine.job_file_text import (
-    JobFile,
-    JobFileExtractionError,
-    JobFileInputError,
     MAX_JOB_FILE_BYTES,
 )
 
@@ -38,7 +35,7 @@ class AttachmentDescriptor(BaseModel):
 
 
 class AttachmentPreflightRequest(BaseModel):
-    items: list[AttachmentDescriptor] = Field(max_length=5)
+    items: list[AttachmentDescriptor] = Field(max_length=10)
 
 
 class AttachmentResponse(BaseModel):
@@ -49,6 +46,15 @@ class AttachmentResponse(BaseModel):
     content_hash: str
     status: str
     extracted_text_available: bool
+    parse_error: str | None = None
+    parser_version: str
+    quality_score: float | None = None
+    warnings: list[str] = Field(default_factory=list)
+    media_kind: str = "document"
+    duration_ms: int | None = None
+    storage_backend: str = "database"
+    processing_job_id: str | None = None
+    processing_job_status: str | None = None
     original_attachment_id: str | None = None
     created_at: datetime
     reused: bool = False
@@ -64,15 +70,14 @@ class AttachmentPreflightItem(BaseModel):
     existing_attachment: AttachmentResponse | None = None
 
 
-def _normalized_filename(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
-
-
 def _attachment_response(
     attachment: Attachment,
+    database: Session,
     *,
     reused: bool = False,
 ) -> AttachmentResponse:
+    job = attachment_service.latest_job(database, attachment.id)
+    metadata = attachment.extraction_metadata or {}
     return AttachmentResponse(
         id=attachment.id,
         filename=attachment.filename,
@@ -81,6 +86,15 @@ def _attachment_response(
         content_hash=attachment.content_hash,
         status=attachment.parse_status,
         extracted_text_available=bool(attachment.extracted_text.strip()),
+        parse_error=attachment.parse_error,
+        parser_version=attachment.parser_version,
+        quality_score=metadata.get("quality_score"),
+        warnings=list(metadata.get("warnings", [])),
+        media_kind=attachment.media_kind,
+        duration_ms=attachment.duration_ms,
+        storage_backend=attachment.storage_backend,
+        processing_job_id=job.id if job is not None else None,
+        processing_job_status=job.status if job is not None else None,
         original_attachment_id=attachment.original_attachment_id,
         created_at=attachment.created_at,
         reused=reused,
@@ -123,7 +137,7 @@ def preflight_attachments(
             results.append(AttachmentPreflightItem(
                 client_id=descriptor.client_id,
                 status="exact_duplicate",
-                existing_attachment=_attachment_response(exact, reused=True),
+                existing_attachment=_attachment_response(exact, database, reused=True),
             ))
             continue
 
@@ -132,7 +146,7 @@ def preflight_attachments(
             .where(
                 Attachment.user_id == current_user.id,
                 Attachment.normalized_filename
-                == _normalized_filename(descriptor.filename),
+                == normalized_filename(descriptor.filename),
             )
             .order_by(Attachment.created_at.desc())
         )
@@ -144,7 +158,7 @@ def preflight_attachments(
                 else "new_file"
             ),
             existing_attachment=(
-                _attachment_response(same_name)
+                _attachment_response(same_name, database)
                 if same_name is not None
                 else None
             ),
@@ -166,7 +180,7 @@ async def upload_attachment(
     await file.close()
     if len(content) > MAX_JOB_FILE_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"{file.filename or '첨부 파일'}은 파일당 허용 크기를 초과합니다.",
         )
 
@@ -184,7 +198,7 @@ async def upload_attachment(
         )
     )
     if exact is not None:
-        return _attachment_response(exact, reused=True)
+        return _attachment_response(exact, database, reused=True)
 
     filename = (file.filename or "이름 없는 파일").strip()
     mime_type = (file.content_type or "application/octet-stream").lower()
@@ -196,35 +210,23 @@ async def upload_attachment(
             select(Attachment)
             .where(
                 Attachment.user_id == current_user.id,
-                Attachment.normalized_filename == _normalized_filename(filename),
+                Attachment.normalized_filename == normalized_filename(filename),
             )
             .order_by(Attachment.created_at.desc())
         )
         previous_id = same_name.id if same_name is not None else None
 
     try:
-        extracted = extract_experience_file_texts([
-            JobFile(filename=filename, mime_type=mime_type, content=content)
-        ])[0]
-    except (JobFileInputError, JobFileExtractionError, ValueError) as error:
+        ingested = attachment_service.ingest(
+            database,
+            user_id=current_user.id,
+            filename=filename,
+            mime_type=mime_type,
+            content=content,
+            original_attachment_id=previous_id,
+        )
+    except (FileInputError, BlobStoreError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-
-    attachment = Attachment(
-        id=f"ATT-{uuid4()}",
-        user_id=current_user.id,
-        filename=filename,
-        normalized_filename=_normalized_filename(filename),
-        mime_type=mime_type,
-        size_bytes=len(content),
-        content_hash=server_hash,
-        content=content,
-        extracted_text=extracted.text,
-        parse_status="ready",
-        original_attachment_id=previous_id,
-    )
-    database.add(attachment)
-    try:
-        database.commit()
     except IntegrityError:
         database.rollback()
         exact = database.scalar(
@@ -234,10 +236,40 @@ async def upload_attachment(
             )
         )
         if exact is not None:
-            return _attachment_response(exact, reused=True)
+            return _attachment_response(exact, database, reused=True)
         raise
+    if ingested.job is not None and ingested.job.status == "queued":
+        await run_file_extraction(
+            attachment_service.process_job,
+            database,
+            ingested.job.id,
+        )
+    database.refresh(ingested.attachment)
+    return _attachment_response(
+        ingested.attachment,
+        database,
+        reused=ingested.reused,
+    )
+
+
+@router.post("/{attachment_id}/process", response_model=AttachmentResponse)
+async def process_attachment(
+    attachment_id: str,
+    current_user: User = Depends(require_csrf_user),
+    database: Session = Depends(get_database_session),
+) -> AttachmentResponse:
+    """실패·중단된 첨부 원본을 현재 파서 버전으로 다시 처리한다."""
+
+    attachment = _owned_attachment(attachment_id, current_user.id, database)
+    job = attachment_service.retry(database, attachment)
+    if job.status == "queued":
+        await run_file_extraction(
+            attachment_service.process_job,
+            database,
+            job.id,
+        )
     database.refresh(attachment)
-    return _attachment_response(attachment)
+    return _attachment_response(attachment, database, reused=True)
 
 
 @router.get("/{attachment_id}", response_model=AttachmentResponse)
@@ -247,7 +279,8 @@ def get_attachment(
     database: Session = Depends(get_database_session),
 ) -> AttachmentResponse:
     return _attachment_response(
-        _owned_attachment(attachment_id, current_user.id, database)
+        _owned_attachment(attachment_id, current_user.id, database),
+        database,
     )
 
 
@@ -258,8 +291,22 @@ def delete_attachment(
     database: Session = Depends(get_database_session),
 ) -> dict[str, str]:
     attachment = _owned_attachment(attachment_id, current_user.id, database)
+    storage_backend = attachment.storage_backend
+    storage_key = attachment.storage_key
+    database.execute(delete(TranscriptionSegment).where(
+        TranscriptionSegment.attachment_id == attachment.id,
+    ))
+    database.execute(delete(FileProcessingJob).where(
+        FileProcessingJob.attachment_id == attachment.id,
+    ))
     database.delete(attachment)
     database.commit()
+    if storage_backend == "local" and storage_key:
+        try:
+            attachment_service.delete_blob(attachment)
+        except BlobStoreError:
+            # DB 삭제는 완료되었으므로 고아 blob 정리는 유지보수 작업에서 재시도한다.
+            pass
     return {"deleted_id": attachment_id}
 
 

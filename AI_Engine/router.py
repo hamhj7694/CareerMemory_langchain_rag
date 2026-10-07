@@ -28,6 +28,12 @@ from AI_Engine.api import (
 from AI_Engine.auth import router as auth_router
 from AI_Engine.api.errors import register_error_handlers
 from AI_Engine.database import initialize_database
+from AI_Engine.file_extraction.ocr import get_ocr_capability
+from AI_Engine.file_extraction.external_tools import (
+    get_hwpx_converter_capability,
+    get_libreoffice_capability,
+)
+from AI_Engine.file_extraction.media import get_media_capability
 
 
 # 3. 로컬 개발 주소
@@ -44,6 +50,15 @@ LOCAL_FRONTEND_ORIGINS = [
 class HealthResponse(BaseModel):
     status: str
     service: str
+
+
+class CapabilitiesResponse(BaseModel):
+    file_parsing: bool
+    supported_file_types: list[str]
+    ocr: dict
+    document_conversion: dict
+    media_processing: dict
+    storage: dict
 
 
 # 5. 서버 시작과 종료 처리
@@ -109,10 +124,38 @@ def get_health() -> HealthResponse:
     )
 
 
+@app.get(
+    "/capabilities",
+    response_model=CapabilitiesResponse,
+    tags=["server"],
+)
+def get_capabilities() -> CapabilitiesResponse:
+    """외부 실행 파일을 포함한 파일 추출 기능의 준비 상태를 알린다."""
+
+    return CapabilitiesResponse(
+        file_parsing=True,
+        supported_file_types=[
+            "txt", "md", "pdf", "png", "jpg", "jpeg", "webp",
+            "gif", "bmp", "tif", "tiff", "docx", "pptx", "hwpx",
+            "doc", "ppt", "hwp", "wav", "mp3", "m4a", "ogg", "flac",
+            "mp4", "mov", "webm", "mkv", "mpeg", "mpg",
+        ],
+        ocr=get_ocr_capability().payload(),
+        document_conversion={
+            "libreoffice": get_libreoffice_capability().payload(),
+            "hwp_to_hwpx": get_hwpx_converter_capability().payload(),
+        },
+        media_processing=get_media_capability().payload(),
+        storage={"backend": "local", "source_of_truth": True},
+    )
+
+
 __all__ = [
     "HealthResponse",
+    "CapabilitiesResponse",
     "LOCAL_FRONTEND_ORIGINS",
     "app",
     "get_health",
+    "get_capabilities",
     "lifespan",
 ]

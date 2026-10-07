@@ -230,6 +230,11 @@ export function ChatPage({ onSend }) {
   const submit = async () => {
     const content = text.trim();
     if (busy || (!content && files.length === 0)) return;
+    const unavailable = files.find((file) => !['ready', 'partial'].includes(file.processingStatus));
+    if (unavailable) {
+      setNotice(`${unavailable.name}: 첨부 처리가 완료되거나 재시도에 성공한 뒤 전송할 수 있습니다.`);
+      return;
+    }
     let submittedConversationId = conversationId.current;
     const submittedModeHint = questionMode;
     const submittedFiles = [...files];

@@ -149,7 +149,7 @@ Response `200 ParsedInputWire`:
 
 ### API-02 `POST /api/inputs/file`
 
-`multipart/form-data`: 단일 입력은 `file`, 다중 입력은 반복 `files`, 그리고 `client_request_id`가 필수다. PDF/TXT 최대 5개, 파일당 25MiB, 요청 전체 100MiB를 프론트 기본값으로 사용한다. 서버는 여러 원본을 하나의 구조화 초안으로 통합하되 각 사실의 source 연결을 유지한다.
+`multipart/form-data`: 단일 입력은 `file`, 다중 입력은 반복 `files`, 그리고 `client_request_id`가 필수다. 문서·이미지·음성·영상을 최대 10개, 파일당 25MiB, 요청 전체 100MiB까지 허용한다. 서버는 모든 원본을 AttachmentService로 먼저 보존하고 여러 원본을 하나의 구조화 초안으로 통합하되 각 사실의 source 연결을 유지한다.
 
 Response `200`: API-01 필드에 아래를 추가한다.
 

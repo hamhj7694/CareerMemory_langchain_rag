@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { v2ChatApi } from '../../../api/v2ChatApi.js';
 import { AnalysisProgress } from '../../../components/common/AnalysisProgress.jsx';
-import { EVIDENCE_FILE_LIMITS, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../../evidence/model/evidenceFileSelection.js';
+import { EVIDENCE_FILE_ACCEPT, EVIDENCE_FILE_LIMITS, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../../evidence/model/evidenceFileSelection.js';
 
 export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }) {
   const [content, setContent] = useState('');
@@ -66,8 +66,8 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
             </label>
             <label className="mv2-file-picker">
               <span>파일 근거 추가</span>
-              <input type="file" multiple accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,image/png,image/jpeg,image/webp" onChange={addFiles} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} />
-              <small>{checkingFiles ? '기존 근거와 중복 여부를 확인하고 있습니다…' : 'PDF·TXT·이미지를 최대 5개, 파일당 25MiB·전체 100MiB까지 선택할 수 있습니다. PDF는 최대 100페이지까지 읽습니다.'}</small>
+              <input type="file" multiple accept={EVIDENCE_FILE_ACCEPT} onChange={addFiles} disabled={busy || checkingFiles || files.length >= EVIDENCE_FILE_LIMITS.maxCount} />
+              <small>{checkingFiles ? '기존 근거와 중복 여부를 확인하고 있습니다…' : '문서·이미지·음성·영상을 최대 10개, 파일당 25MiB·전체 100MiB까지 선택할 수 있습니다.'}</small>
             </label>
             {files.length > 0 && <ul className="mv2-experience-intake__files">{files.map((file) => <li key={evidenceFileKey(file)}><span><strong>{file.name}</strong><small>{evidenceFileStatusLabel(file)}</small></span><button type="button" onClick={() => setFiles((current) => current.filter((item) => item !== file))} aria-label={`${file.name} 제거`}>×</button></li>)}</ul>}
             {fileError && <p className="mv2-experience-intake__file-error" role="alert">{fileError}</p>}

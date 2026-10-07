@@ -6,10 +6,11 @@ import unittest
 from io import BytesIO
 from unittest.mock import patch
 
-import fitz
+import pymupdf
 from PIL import Image
 
 from AI_Engine.experience_file_text import extract_experience_file_texts
+from AI_Engine.file_extraction.ocr import OCRResult
 from AI_Engine.job_file_text import JobFile
 
 
@@ -30,8 +31,11 @@ class ExperienceFileTextTests(unittest.TestCase):
         image_buffer = BytesIO()
         Image.new("RGB", (100, 100), "white").save(image_buffer, format="PNG")
         with patch(
-            "AI_Engine.experience_file_text._ocr_image",
-            side_effect=["서비스 운영 자동화", "처리 시간 30% 단축"],
+            "AI_Engine.file_extraction.parsers.run_ocr",
+            side_effect=[
+                OCRResult("서비스 운영 자동화", 0.93, "--psm 6", ()),
+                OCRResult("처리 시간 30% 단축", 0.91, "--psm 6", ()),
+            ],
         ) as ocr:
             sources = extract_experience_file_texts([
                 JobFile("page-1.png", "image/png", image_buffer.getvalue()),
@@ -44,13 +48,13 @@ class ExperienceFileTextTests(unittest.TestCase):
         self.assertEqual(ocr.call_count, 2)
 
     def test_text_pdf_is_extracted_without_ocr(self) -> None:
-        document = fitz.open()
+        document = pymupdf.open()
         page = document.new_page()
         page.insert_text((72, 72), "Project dashboard reduced reporting time.")
         pdf_bytes = document.tobytes()
         document.close()
 
-        with patch("AI_Engine.experience_file_text._ocr_image") as ocr:
+        with patch("AI_Engine.file_extraction.parsers.run_ocr") as ocr:
             sources = extract_experience_file_texts([
                 JobFile("report.pdf", "application/pdf", pdf_bytes),
             ])

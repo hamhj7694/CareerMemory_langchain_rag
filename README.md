@@ -14,7 +14,9 @@ Career Memory RAG는 사용자와의 대화, 직접 입력한 글, 첨부 파일
 ### 커리어 챗
 
 - 대화 세션 생성·검색·수정·삭제
-- 대화와 PDF/TXT/이미지 첨부 파일 누적
+- 대화와 문서·이미지·음성·영상 첨부 원본 누적
+- `+` 선택, 클립보드 붙여넣기, 드래그앤드롭으로 한 메시지에 최대 10개 첨부
+- LocalBlobStore에 원본을 먼저 보존하고 DB 작업 큐로 파싱·OCR·변환·STT 상태와 재시도를 관리
 - 저장된 경험과 원본 근거를 RAG로 검색하여 답변
 - 오래된 대화 요약 메모리와 토큰 예산 관리
 - 사용자의 실행 의도를 일반 대화, 경험 정리, 공고 분석으로 자동 분류
@@ -150,6 +152,7 @@ Pydantic Schema 검증
 - 제품 요구사항: [PRD.md](PRD.md)
 - AI 데이터 흐름: [Data_Flow_Summary.md](Data_Flow_Summary.md)
 - AI 데이터 아키텍처: [AI_DATA_ARCHITECTURE.md](docs/AI_DATA_ARCHITECTURE.md)
+- 파일 첨부·OCR·파서 운영: [FILE_EXTRACTION_GUIDE.md](docs/FILE_EXTRACTION_GUIDE.md)
 - AI 개발 가이드: [AI_ENGINE_DEVELOPMENT_GUIDE.md](AI_Engine/AI_ENGINE_DEVELOPMENT_GUIDE.md)
 - AI 작업 매핑: [AI_ENGINE_WORK_MAP.md](AI_Engine/AI_ENGINE_WORK_MAP.md)
 - AI·프론트엔드 계약: [AI_FRONTEND_CONTRACT_MAPPING.md](AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md)

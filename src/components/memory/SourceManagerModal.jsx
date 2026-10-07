@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { EvidenceReadonlyContent, EvidenceWorkspace } from '../../features/evidence/components/EvidenceWorkspace.jsx';
 import { EVIDENCE_TYPES, toEvidenceViews } from '../../features/evidence/model/evidenceMapper.js';
+import { EVIDENCE_FILE_ACCEPT } from '../../features/evidence/model/evidenceFileSelection.js';
 import './source-manager.css';
 
 export function SourceManagerModal({
@@ -177,7 +178,7 @@ export function SourceManagerModal({
             <div>
               <button type="button" disabled={busy || Boolean(localAction)} onClick={() => setAddMode(addMode === 'text' ? '' : 'text')}>+ 텍스트 작성</button>
               <button type="button" disabled={busy || Boolean(localAction)} onClick={() => fileInputRef.current?.click()}>+ 파일 업로드</button>
-              <input ref={fileInputRef} className="sr-only" type="file" accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,text/plain,application/pdf,image/png,image/jpeg,image/webp" multiple onChange={(event) => addFileSources([...event.target.files])} />
+              <input ref={fileInputRef} className="sr-only" type="file" accept={EVIDENCE_FILE_ACCEPT} multiple onChange={(event) => addFileSources([...event.target.files])} />
             </div>
             {addMode === 'text' && <div className="source-add-text">
               <label>근거 이름 <input value={newTextTitle} placeholder="선택 입력" onChange={(event) => setNewTextTitle(event.target.value)} /></label>

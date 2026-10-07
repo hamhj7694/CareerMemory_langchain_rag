@@ -417,9 +417,23 @@ export async function preflightAttachments(descriptors) {
   return { items };
 }
 
-export async function uploadAttachments(files) {
+export async function getAttachment(attachmentId) {
+  await wait(30);
+  return snapshot(find(store.attachments, attachmentId, '첨부 파일'));
+}
+
+export async function processAttachment(attachmentId) {
+  const attachment = find(store.attachments, attachmentId, '첨부 파일');
+  attachment.status = 'ready';
+  attachment.parse_error = null;
+  attachment.processing_job_status = 'completed';
+  await wait(80);
+  return snapshot(attachment);
+}
+
+export async function uploadAttachments(files, { throwOnFailure = true } = {}) {
   const input = Array.from(files || []);
-  if (input.length > 5) fail('VALIDATION_ERROR', '파일은 최대 5개까지 올릴 수 있습니다.', 422);
+  if (input.length > 10) fail('VALIDATION_ERROR', '파일은 최대 10개까지 올릴 수 있습니다.', 422);
   const total = input.reduce((sum, file) => sum + (file.size || 0), 0);
   if (total > 100 * 1024 * 1024) fail('FILE_TOO_LARGE', '전체 파일 크기는 100MiB 이하여야 합니다.', 413);
   const attachments = await Promise.all(input.map(async (selection) => {
@@ -428,7 +442,8 @@ export async function uploadAttachments(files) {
     }
     const file = selection.file || selection;
     if ((selection.size || file.size || 0) > 25 * 1024 * 1024) fail('FILE_TOO_LARGE', `${selection.name || file.name}은 25MiB를 초과합니다.`, 413);
-    const isText = file.type === 'text/plain' || file.name?.toLowerCase().endsWith('.txt');
+    const isText = ['text/plain', 'text/markdown'].includes(file.type)
+      || /\.(txt|md|markdown)$/i.test(file.name || '');
     const rawText = isText && typeof file.text === 'function' ? await file.text() : '';
     const rawBytes = typeof file.arrayBuffer === 'function' ? await file.arrayBuffer() : null;
     const contentHash = selection.contentHash || (rawBytes ? await sha256ArrayBuffer(rawBytes) : await fingerprintFile(file));
@@ -445,6 +460,10 @@ export async function uploadAttachments(files) {
     return attachment;
   }));
   await wait(120);
+  const failed = attachments.filter((attachment) => ['failed', 'unsupported'].includes(attachment.status));
+  if (throwOnFailure && failed.length) {
+    fail('ATTACHMENT_PROCESSING_FAILED', failed[0].parse_error || '첨부 파일 처리에 실패했습니다.', 422);
+  }
   return snapshot(attachments);
 }
 
@@ -1014,6 +1033,8 @@ const activeConversationApi = apiConfig.useMock
   : {
       ...v2ChatHttpApi,
       preflightAttachments: v2ChatHttpApi.preflightAttachments,
+      getAttachment: v2ChatHttpApi.getAttachment,
+      processAttachment: v2ChatHttpApi.processAttachment,
       uploadAttachments: v2ChatHttpApi.uploadAttachments,
       deleteAttachment: v2ChatHttpApi.deleteAttachment,
     };
@@ -1031,7 +1052,7 @@ const activeExperienceApi = apiConfig.useMock
 export const v2ChatApi = {
   createConversation, listConversations, getConversation, updateConversation, deleteConversation,
   listMessages, sendMessage, streamMessage, getConversationExtractionStatus, extractConversationExperiences,
-  preflightAttachments, uploadAttachments, deleteAttachment,
+  preflightAttachments, getAttachment, processAttachment, uploadAttachments, deleteAttachment,
   getProposal, updateProposal, approveProposal, discardUnapprovedProposalExperiences, rejectProposal,
   listExperiences, getExperience, createExperience, updateExperience,
   getExperienceDeletionImpact, deleteExperience,

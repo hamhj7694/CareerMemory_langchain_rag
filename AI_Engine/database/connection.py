@@ -146,6 +146,25 @@ def initialize_database() -> None:
                         f"ALTER TABLE experiences ADD COLUMN {column_name} {column_type}"
                     ))
 
+        attachment_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("attachments")
+        }
+        missing_attachment_columns = {
+            "extraction_metadata": "JSON NOT NULL DEFAULT '{}'",
+            "storage_backend": "VARCHAR(30) NOT NULL DEFAULT 'database'",
+            "storage_key": "TEXT",
+            "media_kind": "VARCHAR(30) NOT NULL DEFAULT 'document'",
+            "duration_ms": "INTEGER",
+        }
+        with engine.begin() as connection:
+            for column_name, column_type in missing_attachment_columns.items():
+                if column_name not in attachment_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE attachments ADD COLUMN "
+                        f"{column_name} {column_type}"
+                    ))
+
 
 # 7. 요청별 DB 세션
 # API 처리 후 성공·실패와 관계없이 연결을 닫아 연결 누수를 막는다.

@@ -33,7 +33,7 @@ AI 내부 Pydantic DTO와 프론트 공개 API DTO 사이의 상세 변환 규�
 
 ## FE-001 프론트엔드 기준안
 
-파일 입력은 동일 endpoint에서 단일 `file`과 다중 `files`를 모두 허용한다. 다중 입력은 `files` 필드를 반복 전송하며 기본 제한은 PDF/TXT 최대 5개, 파일당 25MiB, 요청 전체 100MiB다. 응답은 여러 원본을 통합한 하나의 구조화 초안과 각 파일 메타데이터 배열을 반환한다.
+경험 직접 입력은 동일 endpoint에서 단일 `file`과 다중 `files`를 모두 허용한다. 다중 입력은 `files` 필드를 반복 전송하며 문서·이미지·음성·영상을 최대 10개, 파일당 25MiB, 요청 전체 100MiB까지 허용한다. 모든 진입점은 AttachmentService와 LocalBlobStore를 사용한다. 응답은 여러 원본을 통합한 하나의 구조화 초안과 각 파일 메타데이터 배열을 반환한다.
 
 상세 DTO와 화면 모델은 `docs/api/FE-001_API_SCREEN_MODEL_SPEC.md`를 기준으로 한다. AI 엔진 담당자 확인 전에는 아래를 프론트 기본값으로 사용한다.
 

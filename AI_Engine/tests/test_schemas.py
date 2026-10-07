@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
+from AI_Engine.database.schemas import MessageCreate
 from AI_Engine.schemas import (
     AIRouteDecision,
     ChatRequest,
@@ -28,6 +29,21 @@ from AI_Engine.schemas.job import JobRequirement as FocusedJobRequirement
 
 
 class ExperienceSchemaTests(unittest.TestCase):
+    def test_message_create_accepts_ten_attachments(self) -> None:
+        request = MessageCreate(
+            attachment_ids=[f"attachment-{index}" for index in range(10)],
+            client_request_id="11111111-1111-4111-8111-111111111111",
+        )
+
+        self.assertEqual(len(request.attachment_ids), 10)
+
+    def test_message_create_rejects_eleven_attachments(self) -> None:
+        with self.assertRaises(ValidationError):
+            MessageCreate(
+                attachment_ids=[f"attachment-{index}" for index in range(11)],
+                client_request_id="11111111-1111-4111-8111-111111111111",
+            )
+
     def test_public_and_legacy_imports_resolve_to_focused_models(self) -> None:
         self.assertIs(ExperienceDraft, FocusedExperienceDraft)
         self.assertIs(ExperienceDraft, LegacyExperienceDraft)

@@ -12,7 +12,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from AI_Engine.attachment_service import attachment_service
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
+from AI_Engine.blob_store import BlobStoreError
 from AI_Engine.database.connection import PROJECT_ROOT, get_database_session
 from AI_Engine.database.models import (
     Experience,
@@ -21,6 +23,7 @@ from AI_Engine.database.models import (
     User,
     utc_now,
 )
+from AI_Engine.file_extraction import FileInputError, run_file_extraction
 from AI_Engine.job_analysis_ai import (
     JobAnalysisAIInputError,
     JobAnalysisAIOutputError,
@@ -30,11 +33,9 @@ from AI_Engine.job_analysis_ai import (
     get_job_match_min_score,
 )
 from AI_Engine.job_file_text import (
-    JobFile,
-    JobFileExtractionError,
-    JobFileInputError,
     MAX_JOB_FILE_BYTES,
-    extract_job_file_text,
+    MAX_JOB_FILE_COUNT,
+    MAX_JOB_FILES_TOTAL_BYTES,
 )
 from AI_Engine.schemas import JobAnalysisRequest, JobRequirement
 
@@ -229,44 +230,88 @@ def list_jobs(
 @router.post("/extract-text")
 async def extract_job_text(
     files: list[UploadFile] = File(...),
-    _current_user: User = Depends(require_csrf_user),
+    current_user: User = Depends(require_csrf_user),
+    database: Session = Depends(get_database_session),
 ) -> dict[str, Any]:
-    """공고 파일을 읽어 사용자가 검토할 수 있는 원문 텍스트로 반환한다."""
+    """공고 원본을 보존한 뒤 공통 첨부 파이프라인으로 추출한다."""
 
-    job_files: list[JobFile] = []
-    for uploaded in files:
-        # 제한보다 1바이트만 더 읽어 대용량 파일을 메모리에 전부 올리지 않는다.
-        content = await uploaded.read(MAX_JOB_FILE_BYTES + 1)
-        job_files.append(JobFile(
-            filename=uploaded.filename or "이름 없는 파일",
-            mime_type=(uploaded.content_type or "").lower(),
-            content=content,
-        ))
-        await uploaded.close()
-    try:
-        text = extract_job_file_text(job_files)
-    except JobFileInputError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    except JobFileExtractionError as error:
-        message = str(error).lower()
-        if "quota" in message or "resource_exhausted" in message or "429" in message:
-            raise HTTPException(
-                status_code=429,
-                detail="Gemini 무료 할당량을 모두 사용해 파일을 읽지 못했습니다.",
-            ) from error
+    if len(files) > MAX_JOB_FILE_COUNT:
         raise HTTPException(
-            status_code=502,
-            detail="파일에서 채용공고 글자를 읽지 못했습니다. 선명한 파일로 다시 시도해 주세요.",
-        ) from error
+            status_code=422,
+            detail=f"파일은 최대 {MAX_JOB_FILE_COUNT}개까지 선택할 수 있습니다.",
+        )
+
+    uploaded_files: list[tuple[str, str, bytes]] = []
+    total_bytes = 0
+    for uploaded in files:
+        content = await uploaded.read(MAX_JOB_FILE_BYTES + 1)
+        await uploaded.close()
+        if len(content) > MAX_JOB_FILE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"{uploaded.filename or '첨부 파일'}은 파일별 허용 크기를 초과합니다.",
+            )
+        total_bytes += len(content)
+        uploaded_files.append((
+            uploaded.filename or "이름 없는 파일",
+            (uploaded.content_type or "application/octet-stream").lower(),
+            content,
+        ))
+    if total_bytes > MAX_JOB_FILES_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="선택한 파일의 전체 허용 크기를 초과합니다.",
+        )
+
+    attachments = []
+    try:
+        for filename, mime_type, content in uploaded_files:
+            ingested = attachment_service.ingest(
+                database,
+                user_id=current_user.id,
+                filename=filename,
+                mime_type=mime_type,
+                content=content,
+            )
+            if ingested.job is not None and ingested.job.status == "queued":
+                await run_file_extraction(
+                    attachment_service.process_job,
+                    database,
+                    ingested.job.id,
+                )
+            database.refresh(ingested.attachment)
+            attachments.append(ingested.attachment)
+    except (FileInputError, BlobStoreError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    failed = [
+        attachment for attachment in attachments
+        if attachment.parse_status not in {"ready", "partial"}
+    ]
+    if failed:
+        details = ", ".join(
+            f"{item.filename}: {item.parse_error or item.parse_status}"
+            for item in failed
+        )
+        raise HTTPException(status_code=502, detail=details)
+
+    text = "\n\n".join(
+        f"[파일: {attachment.filename}]\n{attachment.extracted_text.strip()}"
+        for attachment in attachments
+        if attachment.extracted_text.strip()
+    )
     return {
         "text": text,
         "files": [
             {
-                "filename": file.filename,
-                "mime_type": file.mime_type,
-                "size_bytes": len(file.content),
+                "attachment_id": attachment.id,
+                "filename": attachment.filename,
+                "mime_type": attachment.mime_type,
+                "size_bytes": attachment.size_bytes,
+                "status": attachment.parse_status,
+                "parser_version": attachment.parser_version,
             }
-            for file in job_files
+            for attachment in attachments
         ],
     }
 

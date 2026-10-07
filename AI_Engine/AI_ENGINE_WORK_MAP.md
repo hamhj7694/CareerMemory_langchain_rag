@@ -58,8 +58,23 @@ content routing
 | AI-420 | `[x]` | 기술·수치 기반 최종 매칭 | `job_analysis_ai.py` | 임베딩 후보 후 canonical ID와 수치 조건 검증 |
 | AI-500 | `[x]` | 토큰·비용·시간 계측 | `analysis_metrics.py`, `benchmarks/` | 실제 usage와 단계별 시간을 결과에 기록 |
 | AI-510 | `[x]` | 합성 정답 세트 평가 | `benchmarks/fixtures/`, `evaluate_conversation_analysis.py` | 사실·문맥·공고·인용·오염·정규화 KPI 계산 |
+| AI-520 | `[x]` | 통합 파일 형식 판별·파서 | `file_extraction/` | 시그니처 검증과 TXT/MD/PDF/image/DOCX/PPTX/HWPX 추출 |
+| AI-530 | `[x]` | 모든 파일 진입점 통합 | `attachment_service.py`, `api/` | 채팅·경험·공고가 같은 원본 저장·검증·파싱 경로 사용 |
+| AI-540 | `[x]` | OCR capability·품질 처리 | `file_extraction/ocr.py`, `router.py` | Tesseract 5.4.0 kor+eng+osd, 전처리·전체 PSM 비교·실환경 smoke 통과 |
+| AI-550 | `[x]` | 채팅 다중 첨부 UX | `ChatComposer.jsx`, `attachmentIngress.js` | 선택·붙여넣기·드롭, 상태·오류·재시도 카드, 최대 10개 |
+| AI-560 | `[x]` | 파일 추출 정답 세트 | `evaluate_file_extraction.py`, `file_extraction_gold_v1.json` | 형식별 본문·수치·순서·CER 평가와 실제 OCR smoke test |
+| AI-570 | `[x]` | LocalBlobStore·additive migration | `blob_store.py`, `migrate_attachment_blobs.py` | 신규 DB BLOB 0, SHA-256 검증, 기본 dry-run 이관 |
+| AI-580 | `[x]` | 재시작 가능한 DB 파일 큐 | `file_processing_worker.py`, `FileProcessingJob` | lease 만료 복구, 최대 시도 제한, 수동 재처리 |
+| AI-590 | `[!]` | DOC/PPT/HWP 격리 변환 | `file_extraction/external_tools.py` | 코드는 완료, 개발 PC의 LibreOffice·한컴 변환기 설치 필요 |
+| AI-600 | `[?]` | 음성·영상 FFmpeg·STT | `file_extraction/media.py`, `TranscriptionSegment` | FFmpeg 9.0 탐지·mock STT·timestamp 저장 통과, 실제 음성 API smoke 미실행 |
+| AI-610 | `[x]` | 첨부 파이프라인 benchmark | `evaluate_attachment_pipeline.py` | 10개 원본 해시·DB BLOB 0·작업 완료·stale 복구 측정 |
 
 현재 측정값과 테스트 결과는 `benchmarks/RESULTS.md`를 기준으로 한다.
+
+개발 PC에는 Tesseract 5.4.0과 `kor+eng+osd`, FFmpeg/FFprobe 9.0이 준비돼 있다.
+LibreOffice와 한컴 HWP→HWPX 변환기는 설치되지 않아 해당 형식은 원본을 보존하고
+capability 오류를 반환한다. STT는 타임스탬프 계약과 mock 통합 테스트까지 검증했으며
+실제 사용자 음성에 대한 유료 API smoke test는 아직 실행하지 않았다.
 
 ## 4. 현재 우선 작업 — 온톨로지와 계층형 데이터
 
@@ -123,6 +138,9 @@ content routing
 | FUT-130 | `[ ]` | 객체 저장소 전환 | 운영 배포 필요가 생길 때 검토 |
 | FUT-140 | `[ ]` | 그래프 DB 또는 RDF 검토 | 실제 복잡한 그래프 질의가 생길 때만 검토 |
 | FUT-150 | `[ ]` | 비동기 AI 작업 큐 | 장시간 분석과 운영 규모 증가 시 도입 |
+| FUT-160 | `[!]` | 레거시 DOC/PPT/HWP 실환경 변환 검증 | LibreOffice·한컴 변환기 설치 후 실제 fixture 통과 필요 |
+| FUT-170 | `[?]` | 실제 음성·영상 STT 품질 평가 | 익명화 음성 corpus, WER·숫자 재현율·비용 측정 |
+| FUT-180 | `[ ]` | 다중 worker 원자적 claim | 현재 단일 worker lease 큐를 운영 규모에서 확장할 때 구현 |
 
 ## 6. 구현 순서
 

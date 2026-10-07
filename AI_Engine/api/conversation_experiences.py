@@ -11,8 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from AI_Engine.api.conversations import create_resource_id, get_conversation_or_404
-from AI_Engine.api.experience_extractions import get_experience_ai
+from AI_Engine.api.experience_extractions import _attachment_sources, get_experience_ai
 from AI_Engine.api.experiences import ExperienceCreate, resolve_project
+from AI_Engine.attachment_service import attachment_service
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.database.connection import get_database_session
 from AI_Engine.database.models import (
@@ -25,8 +26,12 @@ from AI_Engine.database.models import (
 )
 from AI_Engine.normalization_backfill import structured_fields_for_experience
 from AI_Engine.experience_ai import ExperienceAI, ExperienceAIInputError, ExperienceAIOutputError
-from AI_Engine.experience_file_text import extract_experience_file_texts
-from AI_Engine.job_file_text import JobFile, JobFileExtractionError, JobFileInputError, MAX_JOB_FILE_BYTES
+from AI_Engine.file_extraction import FileInputError, run_file_extraction
+from AI_Engine.job_file_text import (
+    MAX_JOB_FILE_BYTES,
+    MAX_JOB_FILE_COUNT,
+    MAX_JOB_FILES_TOTAL_BYTES,
+)
 from AI_Engine.schemas import (
     EvidenceSource,
     EvidenceSourceType,
@@ -313,32 +318,50 @@ async def analyze_chat_experience(
             "proposal": action["proposal"],
             "run": {"id": "replayed"},
         }
-    uploaded_files: list[JobFile] = []
+    if len(files) > MAX_JOB_FILE_COUNT:
+        raise HTTPException(status_code=422, detail=f"파일은 최대 {MAX_JOB_FILE_COUNT}개까지 선택할 수 있습니다.")
+    uploaded_files: list[tuple[str, str, bytes]] = []
+    total_bytes = 0
     for uploaded in files:
         content = await uploaded.read(MAX_JOB_FILE_BYTES + 1)
-        uploaded_files.append(JobFile(
-            filename=uploaded.filename or "이름 없는 파일",
-            mime_type=(uploaded.content_type or "").lower(),
-            content=content,
-        ))
         await uploaded.close()
+        total_bytes += len(content)
+        uploaded_files.append((
+            uploaded.filename or "이름 없는 파일",
+            (uploaded.content_type or "").lower(),
+            content,
+        ))
+    if total_bytes > MAX_JOB_FILES_TOTAL_BYTES:
+        raise HTTPException(status_code=413, detail="첨부 파일 전체 크기가 허용 범위를 초과합니다.")
 
     try:
-        extracted_files = extract_experience_file_texts(uploaded_files)
-        sources: list[EvidenceSource] = []
         attachment_ids: list[str] = []
-        for extracted in extracted_files:
-            attachment_id = f"chat-attachment-{uuid4()}"
-            attachment_ids.append(attachment_id)
-            sources.append(EvidenceSource(
-                id=f"source-{attachment_id}",
-                type=EvidenceSourceType.FILE,
-                title=extracted.filename,
-                attachment_id=attachment_id,
-                filename=extracted.filename,
-                mime_type=extracted.mime_type,
-                text=extracted.text,
-            ))
+        for filename, mime_type, content in uploaded_files:
+            ingested = attachment_service.ingest(
+                database,
+                user_id=current_user.id,
+                filename=filename,
+                mime_type=mime_type,
+                content=content,
+            )
+            if ingested.job is not None and ingested.job.status == "queued":
+                await run_file_extraction(
+                    attachment_service.process_job,
+                    database,
+                    ingested.job.id,
+                )
+            database.refresh(ingested.attachment)
+            if ingested.attachment.parse_status not in {"ready", "partial"}:
+                raise FileInputError(
+                    ingested.attachment.parse_error
+                    or f"{filename}: 파일 처리에 실패했습니다."
+                )
+            attachment_ids.append(ingested.attachment.id)
+        sources = _attachment_sources(
+            database,
+            user_id=current_user.id,
+            attachment_ids=attachment_ids,
+        )
         result = experience_ai.organize(
             ExperienceExtractionRequest(
                 client_request_id=client_request_id,
@@ -348,9 +371,9 @@ async def analyze_chat_experience(
             ),
             sources=sources,
         )
-    except (JobFileInputError, ValueError, ExperienceAIInputError) as error:
+    except (FileInputError, ValueError, ExperienceAIInputError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    except (JobFileExtractionError, ExperienceAIOutputError) as error:
+    except ExperienceAIOutputError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     proposal = _proposal_from_result(result)

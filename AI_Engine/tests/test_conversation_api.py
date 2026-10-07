@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from io import BytesIO
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from AI_Engine.database.connection import Base, get_database_session
+from AI_Engine.blob_store import clear_blob_store_cache, read_attachment_bytes
 from AI_Engine.database import models  # noqa: F401
+from AI_Engine.database.models import Attachment
+from AI_Engine.job_file_text import JobFileExtractionError
 from AI_Engine.api.conversations import get_chatbot_ai
 from AI_Engine.api.experience_extractions import get_experience_ai
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
@@ -52,6 +59,13 @@ class FakeChatbot:
 class ConversationApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls.attachment_storage = TemporaryDirectory()
+        cls.storage_environment = patch.dict(
+            "os.environ",
+            {"ATTACHMENT_STORAGE_ROOT": cls.attachment_storage.name},
+        )
+        cls.storage_environment.start()
+        clear_blob_store_cache()
         # 테스트가 끝나면 사라지는 메모리 SQLite를 사용해 실제 사용자 DB를 보호한다.
         cls.engine = create_engine(
             "sqlite://",
@@ -92,6 +106,9 @@ class ConversationApiTests(unittest.TestCase):
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=cls.engine)
         cls.engine.dispose()
+        clear_blob_store_cache()
+        cls.storage_environment.stop()
+        cls.attachment_storage.cleanup()
 
     def setUp(self) -> None:
         # 테스트끼리 저장 데이터가 영향을 주지 않도록 매번 테이블 내용을 비운다.
@@ -347,6 +364,94 @@ class ConversationApiTests(unittest.TestCase):
         self.assertEqual(context.attachments[0].source_id, attachment["id"])
         self.assertIn("18%", context.attachments[0].content)
         self.assertGreater(context.token_usage.estimated_input_tokens, 0)
+
+    def test_failed_parser_keeps_original_attachment_and_error_status(self) -> None:
+        image = BytesIO()
+        Image.new("RGB", (40, 40), "white").save(image, format="PNG")
+        with patch(
+            "AI_Engine.attachment_service.extract_file",
+            side_effect=JobFileExtractionError("OCR runtime unavailable"),
+        ):
+            response = self.client.post(
+                "/api/v2/attachments",
+                files={"file": ("capture.png", image.getvalue(), "image/png")},
+            )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("OCR runtime", payload["parse_error"])
+        with self.session_factory() as database:
+            attachment = database.get(Attachment, payload["id"])
+            self.assertEqual(attachment.content, b"")
+            self.assertEqual(read_attachment_bytes(attachment), image.getvalue())
+            self.assertEqual(attachment.parse_status, "failed")
+
+        conversation = self.create_conversation().json()
+        send = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "실패한 파일을 사용하지 마세요.",
+                "intent": "auto",
+                "attachment_ids": [payload["id"]],
+                "client_request_id": str(uuid4()),
+            },
+        )
+        self.assertEqual(send.status_code, 409)
+        self.assertIn("완료되지 않은 첨부", send.json()["error"]["message"])
+
+    def test_preflight_accepts_ten_chat_files(self) -> None:
+        response = self.client.post(
+            "/api/v2/attachments/preflight",
+            json={"items": [
+                {
+                    "client_id": f"client-{index}",
+                    "filename": f"file-{index}.txt",
+                    "mime_type": "text/plain",
+                    "size_bytes": 10,
+                    "content_hash": f"{index:064x}",
+                }
+                for index in range(10)
+            ]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["items"]), 10)
+
+    def test_message_rejects_attachments_over_total_size_limit(self) -> None:
+        attachment_ids = []
+        with self.session_factory() as database:
+            for index in range(5):
+                attachment_id = f"ATT-large-{index}"
+                attachment_ids.append(attachment_id)
+                database.add(Attachment(
+                    id=attachment_id,
+                    user_id=self.current_user.id,
+                    filename=f"large-{index}.txt",
+                    normalized_filename=f"large-{index}.txt",
+                    mime_type="text/plain",
+                    size_bytes=25 * 1024 * 1024,
+                    content_hash=f"{index + 100:064x}",
+                    content=b"x",
+                    extracted_text="x",
+                    parse_status="ready",
+                    parser_version="career-file-parser-v2",
+                    extraction_metadata={},
+                ))
+            database.commit()
+
+        conversation = self.create_conversation().json()
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "용량 제한을 확인해 주세요.",
+                "attachment_ids": attachment_ids,
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("100MiB", response.json()["error"]["message"])
 
     def test_previous_message_attachment_reaches_followup_question_context(self) -> None:
         attachment = self.client.post(

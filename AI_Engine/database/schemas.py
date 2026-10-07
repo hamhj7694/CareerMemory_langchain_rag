@@ -122,7 +122,7 @@ class MessageCreate(BaseModel):
         "document_feedback",
         "interview",
     ] = "general"
-    attachment_ids: list[str] = Field(default_factory=list, max_length=5)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=10)
     context: MessageContext = Field(default_factory=MessageContext)
     response_mode: Literal["complete", "stream"] = "complete"
     client_request_id: UUID

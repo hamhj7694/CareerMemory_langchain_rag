@@ -17,6 +17,12 @@
 - [x] exact quote 기반 수치 추출과 검증
 - [x] 합성 정답 세트와 성능 benchmark
 - [x] AI·데이터 문서 체계 통합
+- [x] 통합 파일 파서와 첨부 원본 우선 저장·재처리 상태
+- [x] 채팅 첨부 선택·붙여넣기·드래그앤드롭과 최대 10개 카드 UI
+- [x] 모든 파일 진입점의 AttachmentService 통합과 LocalBlobStore
+- [x] lease 기반 재시작 가능 파일 작업 큐와 카드 상태·재시도
+- [x] Tesseract 5.4.0 `kor+eng+osd` 실환경 OCR 검증
+- [x] FFmpeg/FFprobe 탐지, STT 타임스탬프 저장 구조
 
 현재 테스트와 benchmark 결과는 `../AI_Engine/benchmarks/RESULTS.md`를 기준으로 한다.
 
@@ -36,6 +42,10 @@
 
 ### P1 — 현재 제품 품질
 
+- [x] 개발 PC Tesseract `kor+eng+osd` 설치와 실제 한글 OCR smoke test
+- [ ] 실제 스캔 PDF·저화질 이미지 corpus로 OCR CER·수치 재현율 기준 확정
+- [!] LibreOffice와 한컴 HWP→HWPX 변환기 설치 후 레거시 fixture 실검증
+- [?] 익명화 음성·영상으로 실제 STT WER·숫자 재현율·비용 smoke test
 - [ ] AI DTO와 공개 API DTO의 자동 계약 테스트 확대
 - [ ] 정상·빈 결과·부분 성공·오류 fixture 정리
 - [ ] 핵심 사용자 흐름 브라우저 E2E 자동화
@@ -59,7 +69,9 @@
 - [ ] rate limit과 비용 한도
 - [ ] 장시간 AI 작업의 비동기 queue와 상태 조회
 - [ ] 계정 삭제 시 DB·Evidence·vector 연쇄 삭제 검증
-- [ ] 첨부파일 객체 저장소 전환 검토
+- [x] DB BLOB 밖 LocalBlobStore와 dry-run/additive migration
+- [x] 첨부 파싱 durable queue와 서버 재시작 lease 복구
+- [ ] 다중 worker 운영 시 원자적 claim과 관측성 보강
 - [ ] 부하·장애·보안 테스트
 
 ## 4. 장기 검토 항목
@@ -68,6 +80,8 @@
 - [ ] 실제 그래프 질의 필요성 검증 후 Neo4j 또는 RDF 검토
 - [ ] 다국어 정규화와 NLU 평가
 - [ ] 사용자가 unresolved concept을 검토·승인하는 관리 흐름
+- [!] 레거시 DOC/PPT/HWP 격리 변환 코드는 완료, 로컬 실행기 설치·실검증 필요
+- [?] 음성·영상 저장·FFmpeg 정규화·STT 구간 저장은 완료, 실제 corpus 평가 필요
 
 장기 제품 기능의 상세 내용은 `roadmap/FUTURE_UPDATES.md`에 기록한다.
 

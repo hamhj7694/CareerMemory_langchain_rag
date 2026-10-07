@@ -129,10 +129,15 @@ CREATE TABLE IF NOT EXISTS attachments (
     size_bytes INTEGER NOT NULL,
     content_hash VARCHAR(64) NOT NULL,
     content BLOB NOT NULL,
+    storage_backend VARCHAR(30) NOT NULL DEFAULT 'database',
+    storage_key TEXT,
+    media_kind VARCHAR(30) NOT NULL DEFAULT 'document',
+    duration_ms INTEGER,
     extracted_text TEXT NOT NULL DEFAULT '',
-    parse_status VARCHAR(20) NOT NULL DEFAULT 'ready',
+    parse_status VARCHAR(20) NOT NULL DEFAULT 'queued',
     parse_error TEXT,
     parser_version VARCHAR(100) NOT NULL DEFAULT 'experience-file-parser-v1',
+    extraction_metadata JSON NOT NULL DEFAULT '{}',
     original_attachment_id VARCHAR(50),
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
@@ -148,3 +153,48 @@ CREATE INDEX IF NOT EXISTS ix_attachments_user_id
     ON attachments (user_id);
 CREATE INDEX IF NOT EXISTS ix_attachments_user_filename
     ON attachments (user_id, normalized_filename);
+
+CREATE TABLE IF NOT EXISTS file_processing_jobs (
+    id VARCHAR(50) PRIMARY KEY,
+    attachment_id VARCHAR(50) NOT NULL,
+    job_type VARCHAR(30) NOT NULL DEFAULT 'parse',
+    status VARCHAR(20) NOT NULL DEFAULT 'queued',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    available_at DATETIME NOT NULL,
+    lease_until DATETIME,
+    worker_id VARCHAR(100),
+    processor_version VARCHAR(100) NOT NULL,
+    payload JSON NOT NULL DEFAULT '{}',
+    error_code VARCHAR(100),
+    error_message TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    completed_at DATETIME,
+    FOREIGN KEY (attachment_id) REFERENCES attachments (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_file_processing_jobs_attachment_id
+    ON file_processing_jobs (attachment_id);
+CREATE INDEX IF NOT EXISTS ix_file_processing_jobs_status_available
+    ON file_processing_jobs (status, available_at);
+
+CREATE TABLE IF NOT EXISTS transcription_segments (
+    id VARCHAR(50) PRIMARY KEY,
+    attachment_id VARCHAR(50) NOT NULL,
+    sequence INTEGER NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    speaker VARCHAR(100),
+    text TEXT NOT NULL,
+    confidence FLOAT,
+    provider VARCHAR(50) NOT NULL,
+    model VARCHAR(100) NOT NULL,
+    created_at DATETIME NOT NULL,
+    CONSTRAINT uq_transcription_segments_attachment_sequence
+        UNIQUE (attachment_id, sequence),
+    FOREIGN KEY (attachment_id) REFERENCES attachments (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_transcription_segments_attachment_id
+    ON transcription_segments (attachment_id);

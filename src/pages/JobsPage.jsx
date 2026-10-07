@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { jobApi } from '../api/index.js';
 import { ErrorState } from '../components/common/index.js';
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
+import { EVIDENCE_FILE_ACCEPT } from '../features/evidence/model/evidenceFileSelection.js';
 import { resolveJobAnalysisAttempt } from '../features/jobs/jobAnalysisAttempt.js';
 import './jobs.css';
 
@@ -28,8 +29,8 @@ export function JobsPage() {
   const update = (event) => setForm((value) => ({ ...value, [event.target.name]: event.target.value }));
   const selectPostingFiles = (event) => {
     const files = [...event.target.files];
-    if (files.length > 5) {
-      setError('채용공고 파일은 최대 5개까지 선택할 수 있습니다.');
+    if (files.length > 10) {
+      setError('채용공고 파일은 최대 10개까지 선택할 수 있습니다.');
       event.target.value = '';
       return;
     }
@@ -119,13 +120,13 @@ export function JobsPage() {
         <div className="is-wide job-file-input">
           <div className="job-file-input__heading">
             <span>공고 파일 또는 화면 캡처 <small>선택</small></span>
-            <small>PDF·TXT·PNG·JPG·WEBP / 최대 5개 / 파일당 25MiB·전체 100MiB</small>
+            <small>문서·이미지·음성·영상 / 최대 10개 / 파일당 25MiB·전체 100MiB</small>
           </div>
           <label className="job-file-input__picker">
             <input
               type="file"
               key={fileInputKey}
-              accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,image/png,image/jpeg,image/webp"
+              accept={EVIDENCE_FILE_ACCEPT}
               multiple
               onChange={selectPostingFiles}
             />

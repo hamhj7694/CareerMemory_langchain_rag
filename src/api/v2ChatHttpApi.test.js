@@ -225,4 +225,60 @@ describe('실제 대화 HTTP API', () => {
       },
     }));
   });
+
+  it('실패한 첨부는 사용자가 재시도할 때 저장된 원본을 다시 처리한다', async () => {
+    request.mockResolvedValueOnce({
+      id: 'ATT/1',
+      filename: 'scan.png',
+      status: 'ready',
+    });
+
+    const result = await v2ChatHttpApi.processAttachment('ATT/1');
+
+    expect(request).toHaveBeenCalledWith({
+      path: '/api/v2/attachments/ATT%2F1/process',
+      method: 'POST',
+    });
+    expect(result).toMatchObject({ status: 'ready' });
+  });
+
+  it('상태 카드용 업로드는 실패 응답을 그대로 반환할 수 있다', async () => {
+    request.mockResolvedValueOnce({
+      id: 'ATT-FAILED',
+      filename: 'scan.png',
+      status: 'failed',
+      parse_error: 'OCR 실행 환경이 없습니다.',
+    });
+
+    const result = await v2ChatHttpApi.uploadAttachments([
+      { file: new File(['image'], 'scan.png', { type: 'image/png' }) },
+    ], { throwOnFailure: false });
+
+    expect(result[0]).toMatchObject({ status: 'failed' });
+  });
+
+  it('공통 업로드 경로에서 열한 번째 파일을 서버 호출 전에 거부한다', async () => {
+    const files = Array.from({ length: 11 }, (_, index) => (
+      new File(['x'], `${index}.txt`, { type: 'text/plain' })
+    ));
+
+    await expect(v2ChatHttpApi.uploadAttachments(files)).rejects.toThrow('최대 10개');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('첨부 원본은 저장됐지만 파싱이 실패하면 메시지 전송 전에 이유를 알린다', async () => {
+    request.mockResolvedValueOnce({
+      id: 'ATT-FAILED',
+      filename: 'scan.png',
+      status: 'failed',
+      parse_error: 'Tesseract 실행 파일을 찾을 수 없습니다.',
+    });
+
+    await expect(v2ChatHttpApi.uploadAttachments([
+      {
+        file: new File(['image'], 'scan.png', { type: 'image/png' }),
+        contentHash: 'a'.repeat(64),
+      },
+    ])).rejects.toThrow('scan.png: Tesseract 실행 파일을 찾을 수 없습니다.');
+  });
 });

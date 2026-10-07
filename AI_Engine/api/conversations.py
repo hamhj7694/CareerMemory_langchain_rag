@@ -34,6 +34,7 @@ from AI_Engine.database.schemas import (
 )
 from AI_Engine.chatbot_ai import ChatbotAI
 from AI_Engine.AI_langchain import CareerMemoryAI
+from AI_Engine.file_extraction import MAX_FILES_TOTAL_BYTES, MAX_FILES_TOTAL_MIB
 from AI_Engine.schemas import ChatMessage, ChatMode, ChatRequest, ChatRole
 
 
@@ -182,20 +183,42 @@ def validate_attachment_ownership(
 
     if not attachment_ids:
         return
-    owned_ids = set(database.scalars(
-        select(Attachment.id).where(
+    attachments = list(database.scalars(
+        select(Attachment).where(
             Attachment.user_id == user_id,
             Attachment.id.in_(attachment_ids),
         )
     ))
+    attachments_by_id = {
+        attachment.id: attachment
+        for attachment in attachments
+    }
     missing = [
         attachment_id for attachment_id in attachment_ids
-        if attachment_id not in owned_ids
+        if attachment_id not in attachments_by_id
     ]
     if missing:
         raise HTTPException(
             status_code=422,
             detail="열 수 없는 첨부 파일이 포함되어 있습니다.",
+        )
+    not_ready = [
+        attachment.filename
+        for attachment in attachments
+        if attachment.parse_status not in {"ready", "partial"}
+    ]
+    if not_ready:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "본문 추출이 완료되지 않은 첨부 파일이 있습니다: "
+                + ", ".join(not_ready)
+            ),
+        )
+    if sum(attachment.size_bytes for attachment in attachments) > MAX_FILES_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"한 메시지의 첨부 파일 합계는 {MAX_FILES_TOTAL_MIB}MiB 이하여야 합니다.",
         )
 
 

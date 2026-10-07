@@ -175,10 +175,11 @@ type MessageAction = {
 
 | Method | Endpoint | 의미 |
 |---|---|---|
-| POST | `/api/v2/attachments` | `multipart/form-data`, `files` 반복 |
+| POST | `/api/v2/attachments/preflight` | 최대 10개 해시의 중복·동일 파일명 확인 |
+| POST | `/api/v2/attachments` | `multipart/form-data`, 단일 `file`; 원본 저장 후 추출 |
+| POST | `/api/v2/attachments/{id}/process` | 저장된 원본을 현재 파서로 재처리 |
 | GET | `/api/v2/attachments/{id}` | 처리 상태·메타데이터 |
-| GET | `/api/v2/attachments/{id}/download` | 원본 다운로드 |
-| DELETE | `/api/v2/attachments/{id}` | 미확정 첨부 삭제; 연결 시 영향 결과 반환 |
+| DELETE | `/api/v2/attachments/{id}` | 사용자 소유 첨부 삭제 |
 
 ```ts
 type Attachment = {
@@ -186,15 +187,31 @@ type Attachment = {
   filename: string;
   mime_type: string;
   size_bytes: number;
-  kind: "pdf" | "text";
-  status: "uploaded" | "scanning" | "parsing" | "ready" | "failed";
-  page_count?: number;
-  error?: ApiError["error"];
+  content_hash: string;
+  status: "queued" | "processing" | "ready" | "partial" | "failed" | "unsupported";
+  extracted_text_available: boolean;
+  parse_error?: string;
+  parser_version: string;
+  quality_score?: number;
+  warnings: string[];
+  media_kind: "document" | "audio" | "video";
+  duration_ms?: number;
+  storage_backend: "local" | "database";
+  processing_job_id?: Id;
+  processing_job_status?: "queued" | "processing" | "completed" | "failed";
+  original_attachment_id?: Id;
+  reused: boolean;
   created_at: IsoDateTime;
 };
 ```
 
-기본 한도는 PDF/TXT 최대 5개, 파일당 25MiB, 요청 합계 100MiB다. 서버가 반환한 `limits`가 있으면 프론트는 이를 우선한다. 메시지는 `ready` 첨부만 참조하는 것을 기본으로 하며, 처리 중이면 `409 ATTACHMENT_NOT_READY`를 반환한다.
+채팅 composer와 경험·공고 직접 입력은 모두 최대 10개다. 파일당 25MiB,
+한 요청·메시지의 합계는 100MiB다. 지원 형식은 TXT·MD·PDF·이미지·DOCX·PPTX·
+HWPX·DOC·PPT·HWP·음성·영상이며 확장자와 실제 시그니처를 함께 검사한다. 레거시
+문서와 미디어는 서버 capability가 없으면 원본 보존 후 실패 상태가 된다. 메시지는
+`ready` 또는 원본 확인이 필요한 `partial` 첨부만 참조할 수 있다.
+`queued/processing/failed/unsupported`이면 409를 반환하고,
+합계 용량은 서버가 다시 검증한다.
 
 ## 6. 근거와 인용
 

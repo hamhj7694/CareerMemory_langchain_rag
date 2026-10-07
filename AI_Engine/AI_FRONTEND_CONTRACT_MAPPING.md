@@ -98,10 +98,13 @@ API Adapter는 저장소에서 대화 본문과 파싱된 첨부 본문을 조�
 - `POST /api/v2/experience-extractions/direct-input`에서 텍스트 직접 입력을 실제 경험정리 AI로 실행한다.
 - 반환된 `ExperienceExtractionResult`는 프론트 Adapter가 기존 경험 구조화 제안 화면 모델로 변환한다.
 - AI 결과에 없는 가짜 추가 초안은 생성하지 않는다.
-- 경험정리 직접 입력의 PDF·TXT·PNG·JPG·WEBP는 `/api/v2/experience-extractions/direct-input-files`에서 본문을 추출한다.
+- 경험정리 직접 입력의 문서·이미지·음성·영상은 `/api/v2/experience-extractions/direct-input-files`에서 공통 AttachmentService로 저장·추출한다.
 - 직접 작성한 텍스트와 파일 근거는 동일한 분석 범위로 묶어 한 번에 경험 초안을 생성한다.
-- TXT와 텍스트 PDF는 서버에서 직접 추출하고, 이미지와 스캔 PDF는 로컬 Tesseract OCR(`kor+eng`)로 읽는다.
+- 텍스트·Open XML 문서는 전용 파서로 읽고, PDF는 native text와 페이지별 OCR을 혼합하며, 이미지는 로컬 Tesseract OCR(`kor+eng`)로 읽는다.
 - 파일 판독에는 Gemini를 사용하지 않으며, 추출된 텍스트를 경험 초안으로 구조화할 때만 활성 AI Provider를 호출한다.
+- 채팅 첨부는 메시지당 최대 10개이며 `+`, 붙여넣기, 드래그앤드롭이 같은 검증·중복 확인·업로드 경로를 사용한다.
+- 유효한 파일은 LocalBlobStore에 원본을 먼저 저장하고 `queued/processing/ready/partial/failed/unsupported` 상태, 파서 버전, 품질 점수와 오류를 보존한다.
+- 선택 즉시 상태 카드를 갱신하며 실패·미지원 파일은 보존 원본으로 재처리할 수 있다.
 - 승인된 초안은 로그인 사용자 ID와 연결된 실제 Experience DB에 저장한다.
 
 ### 3.2 출력 변환
@@ -325,14 +328,14 @@ AI 모델의 `RequirementExperienceLink.status`와 화면의 관련성 `status`�
 
 - `GET /api/jobs`: 로그인 사용자의 분석 기록 목록을 최신순으로 조회한다.
 - `POST /api/jobs/analyze`: 요구사항 추출과 사용자별 확정 경험 RAG를 실행한 뒤 DB에 저장한다.
-- `POST /api/jobs/extract-text`: TXT는 서버에서 읽고 PDF·PNG·JPG·WEBP는 Gemini 시각 인식으로 원문을 추출한다.
+- `POST /api/jobs/extract-text`: 다른 진입점과 같은 AttachmentService로 원본을 저장한 뒤 문서·이미지·음성·영상을 처리한다.
 - `GET /api/jobs/{job_id}`: 새로고침 뒤에도 저장된 분석 결과를 복원한다.
 - `POST /api/jobs/{job_id}/match`: 저장된 요구사항별 추천 경험과 근거를 화면 모델로 반환한다.
 - 요구사항–경험 `PUT/DELETE`: 사용자가 직접 변경한 연결을 DB에 반영한다.
 - `DELETE /api/jobs/{job_id}`: 현재 사용자 소유의 분석 기록만 삭제한다.
 - 채용공고 레코드와 Chroma 컬렉션은 모두 사용자별로 분리한다.
 - 파일 원문은 먼저 화면의 공고 원문 칸에 표시하여 사용자가 확인·수정한 뒤 분석한다.
-- 파일은 최대 5개, 파일당 25MiB·요청 전체 100MiB로 제한하며 현재 허용 형식은 PDF·TXT·PNG·JPG·WEBP이다.
+- 공고 직접 입력은 최대 10개, 파일당 25MiB·요청 전체 100MiB로 제한한다. DOC/PPT/HWP와 음성·영상은 외부 capability가 준비된 환경에서 처리한다.
 - 경험 근거 PDF는 기본 최대 100페이지까지 읽으며 `AI_MAX_PDF_PAGES`로 조절한다.
 
 ## 6. AI 오류 → 공개 API 오류

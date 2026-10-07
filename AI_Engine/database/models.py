@@ -10,6 +10,7 @@ from sqlalchemy import (
     JSON,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -308,17 +309,34 @@ class Attachment(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    storage_backend: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="database",
+    )
+    storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_kind: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="document",
+    )
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     extracted_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     parse_status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        default="ready",
+        default="queued",
     )
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     parser_version: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
         default="experience-file-parser-v1",
+    )
+    extraction_metadata: Mapped[dict] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
     )
     original_attachment_id: Mapped[str | None] = mapped_column(
         ForeignKey("attachments.id", ondelete="SET NULL"),
@@ -337,6 +355,92 @@ class Attachment(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="attachments")
+
+
+class FileProcessingJob(Base):
+    """서버 재시작 뒤에도 다시 실행할 수 있는 파일 처리 작업."""
+
+    __tablename__ = "file_processing_jobs"
+    __table_args__ = (
+        Index(
+            "ix_file_processing_jobs_status_available",
+            "status",
+            "available_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    attachment_id: Mapped[str] = mapped_column(
+        ForeignKey("attachments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False, default="parse")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    processor_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class TranscriptionSegment(Base):
+    """음성·영상 STT 결과를 원본 재생 위치와 연결하는 구간."""
+
+    __tablename__ = "transcription_segments"
+    __table_args__ = (
+        UniqueConstraint(
+            "attachment_id",
+            "sequence",
+            name="uq_transcription_segments_attachment_sequence",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    attachment_id: Mapped[str] = mapped_column(
+        ForeignKey("attachments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    speaker: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
 
 
 # 7. 메시지 테이블
@@ -609,8 +713,10 @@ __all__ = [
     "ExperienceDomain",
     "ExperienceDraftTrash",
     "ExperienceProject",
+    "FileProcessingJob",
     "JobAnalysisRecord",
     "Message",
+    "TranscriptionSegment",
     "User",
     "utc_now",
 ]

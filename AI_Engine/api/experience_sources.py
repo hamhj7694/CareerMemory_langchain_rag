@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from AI_Engine.api.experience_extractions import get_experience_ai
 from AI_Engine.api.experiences import experience_dict, owned_experience
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
+from AI_Engine.blob_store import read_attachment_bytes
 from AI_Engine.database.connection import get_database_session
 from AI_Engine.database.models import (
     Attachment,
@@ -46,7 +47,7 @@ class TextSourceCreate(BaseModel):
 
 
 class FileSourcesAttach(BaseModel):
-    attachment_ids: list[str] = Field(min_length=1, max_length=5)
+    attachment_ids: list[str] = Field(min_length=1, max_length=10)
     client_request_id: str
 
 
@@ -399,7 +400,7 @@ def download_source(
     attachment = _owned_attachment(attachment_id, current_user.id, database)
     encoded_filename = quote(attachment.filename)
     return Response(
-        content=attachment.content,
+        content=read_attachment_bytes(attachment),
         media_type=attachment.mime_type or "application/octet-stream",
         headers={
             "Content-Disposition": (

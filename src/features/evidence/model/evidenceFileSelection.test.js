@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { v2ChatApi } from '../../../api/v2ChatApi.js';
 import { discardPendingProposalAttachments } from '../../experience/api/experienceProposalService.js';
-import { mergeEvidenceFileSelections } from './evidenceFileSelection.js';
+import { CHAT_ATTACHMENT_LIMITS, evidenceFileStatusLabel, mergeEvidenceFileSelections } from './evidenceFileSelection.js';
 
 function textFile(name, content) {
   const bytes = new TextEncoder().encode(content);
@@ -50,5 +50,25 @@ describe('evidence file duplicate selection', () => {
     });
     expect(revised.id).not.toBe(stored.id);
     expect(revised.original_attachment_id).toBe(stored.id);
+  });
+
+  it('accepts up to ten chat attachments and rejects the eleventh', async () => {
+    const files = Array.from({ length: 11 }, (_, index) => textFile(`${index}.md`, `# ${index}`));
+    const result = await mergeEvidenceFileSelections(
+      [],
+      files,
+      async (items) => ({ items: items.map((item) => ({ client_id: item.client_id, status: 'new_file' })) }),
+      CHAT_ATTACHMENT_LIMITS,
+    );
+
+    expect(result.files).toHaveLength(10);
+    expect(result.error).toContain('최대 개수 10개 초과');
+  });
+
+  it('maps persisted processing states to attachment card labels', () => {
+    expect(evidenceFileStatusLabel({ processingStatus: 'queued' })).toBe('처리 대기');
+    expect(evidenceFileStatusLabel({ processingStatus: 'ready' })).toBe('분석 준비 완료');
+    expect(evidenceFileStatusLabel({ processingStatus: 'failed' })).toBe('처리 실패');
+    expect(evidenceFileStatusLabel({ processingStatus: 'unsupported' })).toBe('지원 불가');
   });
 });

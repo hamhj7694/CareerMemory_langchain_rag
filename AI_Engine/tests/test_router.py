@@ -46,6 +46,16 @@ class HealthApiTests(unittest.TestCase):
             "http://localhost:5173",
         )
 
+    def test_capabilities_reports_file_parsers_and_ocr_readiness(self) -> None:
+        response = self.client.get("/capabilities")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["file_parsing"])
+        self.assertIn("docx", payload["supported_file_types"])
+        self.assertIn("available", payload["ocr"])
+        self.assertIn("languages", payload["ocr"])
+
 
 if __name__ == "__main__":
     unittest.main()

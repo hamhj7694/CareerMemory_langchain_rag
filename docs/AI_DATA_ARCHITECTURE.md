@@ -30,12 +30,20 @@
 ### 3.1 Bronze — 원본
 
 - `Conversation`, `Message`
-- 업로드한 `Attachment` 바이너리와 메타데이터
+- `LocalBlobStore`에 저장한 `Attachment` 원본과 DB 메타데이터
 - 직접 입력한 경험 텍스트
 - 채용공고 원문과 원본 URL
 - 원본 해시, MIME type, 생성 시각
 
 Bronze 데이터는 사용자 삭제 정책 외에는 AI 분석으로 덮어쓰지 않는다.
+
+현재 `Attachment`는 파일 형식 검증 직후 원본을 `LocalBlobStore`에 기록하고,
+사용자별 SHA-256 해시, storage key, MIME과 크기를 DB에 먼저 저장한다. 신규 원본을
+DB BLOB에 중복 저장하지 않지만 기존 BLOB 레코드는 호환해서 읽는다. 텍스트 추출은
+그 다음 단계에서 실행하며 실패해도 원본은 남는다. `parse_status`는
+`queued -> processing -> ready/partial/failed/unsupported`로 변하고, 오류·파서
+버전·품질 점수·warning·segment locator는 Silver 성격의 파생 필드로 분리한다.
+같은 사용자의 같은 해시는 기존 원본을 재사용한다.
 
 ### 3.2 Silver — 근거와 정규화
 
@@ -45,8 +53,20 @@ Bronze 데이터는 사용자 삭제 정책 외에는 AI 분석으로 덮어쓰�
 - ontology concept, alias, relation
 - 분석·파서·청커·스키마 버전
 - `EmbeddingRecord`
+- `FileProcessingJob`, `TranscriptionSegment`
 
 Silver 데이터는 원본과 버전을 이용해 다시 만들 수 있어야 한다.
+
+통합 파일 파서는 확장자·시그니처·Open XML/HWPX 컨테이너를 함께 검증하고,
+TXT/MD·PDF·이미지·DOCX·PPTX·HWPX를 형식별로 처리하고 DOC/PPT/HWP는 설치된
+격리 변환기를 통해 현대 형식으로 바꾼 뒤 같은 파서를 사용한다. PDF는 페이지별 native
+text/OCR hybrid 방식이며 한 페이지 실패를 전체 문서 실패로 확대하지 않는다.
+OCR 실행기는 외부 capability이므로 `GET /capabilities`의 실제 설치·언어팩 상태와
+분리해 판단한다. 상세 운영 기준은 `FILE_EXTRACTION_GUIDE.md`를 따른다.
+
+음성·영상은 FFmpeg로 단일 channel 16kHz audio로 정규화한 뒤 STT한다. 전사
+결과는 본문뿐 아니라 provider, model, 시작·종료 ms를 `TranscriptionSegment`로
+저장해 해당 원본 구간까지 역추적할 수 있게 한다.
 
 ### 3.3 Gold — 사용자 승인 지식
 
@@ -74,7 +94,10 @@ Serving 데이터는 Bronze, Silver, Gold에서 다시 생성할 수 있어야 �
 Message / Attachment / Job posting
               │
               ▼
-       원문 보존 및 파싱
+ LocalBlobStore 원문 보존 + DB 작업 생성
+              │
+              ▼
+   lease 기반 파싱·변환·STT 작업
               │
               ▼
  Evidence source · exact citation
@@ -255,6 +278,9 @@ Experience fact
 
 ## 8. 저장과 삭제 정책
 
+- LocalBlobStore가 첨부 원본의 source of truth이고 DB는 해시·경로·처리 상태를 가진다.
+- `file_processing_jobs`는 서버 재시작에도 남으며 만료 lease만 제한 횟수 안에서 복구한다.
+- 기존 DB BLOB은 dry-run과 해시 검증을 거친 `--apply`에서만 로컬 저장소로 옮긴다.
 - 원본 삭제, 경험 연결 해제, 경험 삭제, 초안 삭제는 서로 다른 동작이다.
 - 대화 삭제가 이미 승인된 경험을 자동 삭제해서는 안 된다.
 - 계정 삭제는 원본, 파생 데이터, ontology mention, 벡터를 사용자 범위에서 제거한다.

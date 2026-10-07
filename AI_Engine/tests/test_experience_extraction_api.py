@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+import hashlib
+import os
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from AI_Engine.api.experience_extractions import get_experience_ai
 from AI_Engine.auth.dependencies import require_csrf_user
+from AI_Engine.blob_store import clear_blob_store_cache
+from AI_Engine.database import models  # noqa: F401
+from AI_Engine.database.connection import Base, get_database_session
+from AI_Engine.database.models import Attachment
 from AI_Engine.router import app
 from AI_Engine.schemas import (
     EvidenceSource,
@@ -75,8 +86,34 @@ class FakeExperienceAI:
 class ExperienceExtractionApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls.attachment_storage = TemporaryDirectory()
+        cls.storage_environment = patch.dict(
+            os.environ,
+            {"ATTACHMENT_STORAGE_ROOT": cls.attachment_storage.name},
+        )
+        cls.storage_environment.start()
+        clear_blob_store_cache()
+        cls.engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        cls.session_factory = sessionmaker(
+            bind=cls.engine,
+            expire_on_commit=False,
+        )
+        Base.metadata.create_all(bind=cls.engine)
+
+        def get_test_session():
+            database = cls.session_factory()
+            try:
+                yield database
+            finally:
+                database.close()
+
         cls.fake_ai = FakeExperienceAI()
         app.dependency_overrides[get_experience_ai] = lambda: cls.fake_ai
+        app.dependency_overrides[get_database_session] = get_test_session
         app.dependency_overrides[require_csrf_user] = lambda: SimpleNamespace(
             id="USER-test"
         )
@@ -86,9 +123,19 @@ class ExperienceExtractionApiTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         app.dependency_overrides.pop(get_experience_ai, None)
         app.dependency_overrides.pop(require_csrf_user, None)
+        app.dependency_overrides.pop(get_database_session, None)
+        Base.metadata.drop_all(bind=cls.engine)
+        cls.engine.dispose()
+        clear_blob_store_cache()
+        cls.storage_environment.stop()
+        cls.attachment_storage.cleanup()
 
     def setUp(self) -> None:
         self.fake_ai.requests.clear()
+        with self.session_factory() as database:
+            for table in reversed(Base.metadata.sorted_tables):
+                database.execute(table.delete())
+            database.commit()
 
     def test_direct_text_returns_experience_draft(self) -> None:
         request_id = str(uuid4())
@@ -109,7 +156,27 @@ class ExperienceExtractionApiTests(unittest.TestCase):
         )
         self.assertEqual(len(self.fake_ai.requests), 1)
 
-    def test_file_input_is_rejected_until_parser_is_connected(self) -> None:
+    def test_saved_attachment_is_used_as_experience_evidence(self) -> None:
+        content = "파일 근거로 전환율을 50% 개선했습니다."
+        encoded = content.encode()
+        with self.session_factory() as database:
+            database.add(Attachment(
+                id="ATT-test",
+                user_id="USER-test",
+                filename="evidence.txt",
+                normalized_filename="evidence.txt",
+                mime_type="text/plain",
+                size_bytes=len(encoded),
+                content_hash=hashlib.sha256(encoded).hexdigest(),
+                content=encoded,
+                storage_backend="database",
+                extracted_text=content,
+                parse_status="ready",
+                parser_version="test-v1",
+                extraction_metadata={},
+            ))
+            database.commit()
+
         response = self.client.post(
             "/api/v2/experience-extractions/direct-input",
             json={
@@ -119,11 +186,9 @@ class ExperienceExtractionApiTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 501)
-        self.assertEqual(
-            response.json()["error"]["message"],
-            "파일을 이용한 경험 정리는 아직 제공되지 않아요!",
-        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sources"][0]["attachment_id"], "ATT-test")
+        self.assertIn("50%", response.json()["sources"][0]["text"])
 
     def test_text_and_txt_file_are_analyzed_together(self) -> None:
         response = self.client.post(
