@@ -6,7 +6,9 @@
 
 기준 문서는 다음과 같다.
 
+- 문서 체계: `../docs/DOCUMENTATION_INDEX.md`
 - 사용자 흐름: `../Data_Flow_Summary.md`
+- 데이터 구조: `../docs/AI_DATA_ARCHITECTURE.md`
 - AI 역할과 파이프라인: `AI_ENGINE_DEVELOPMENT_GUIDE.md`
 - AI 작업 상태: `AI_ENGINE_WORK_MAP.md`
 - 프론트 V2 계약: `../docs/v2/V2_API_CONTRACT.md`
@@ -40,12 +42,16 @@ AI Pydantic DTO (snake_case)
 12. 경험 관리에 확정 저장된 경험만 현재 사용자의 모든 대화에서 RAG 검색할 수 있다.
 13. 다른 대화 세션의 메시지 원문과 미확정 Proposal은 자동으로 전달하지 않는다.
 14. 경험 검색의 사용자 ID는 요청 본문이 아니라 인증된 서버 세션에서 가져온다.
+15. raw 기술명·수치 표현·원문은 canonical projection의 성공 여부와 무관하게 보존한다.
+16. ontology concept ID와 Evidence ID는 내부 저장에 먼저 도입하고, 화면에 필요한 경우에만 공개 DTO에 추가한다.
+17. Chroma의 문서와 ID는 파생 인덱스이며 공개 API의 source of truth로 사용하지 않는다.
 
-확정 경험 검색 인덱스의 현재 기본값은 다음과 같다.
+확정 경험 검색 인덱스의 모델과 버전은 활성 Provider에 따라
+`llm_provider.py`의 상수를 사용한다. API 소비자가 특정 버전을 하드코딩하지 않는다.
 
 ```text
-embedding_model: text-embedding-3-small
-index_version: experience-index-v3
+OpenAI 기본 embedding_model: text-embedding-3-small
+index_version: Provider·검색 문서 schema별 버전
 ```
 
 임베딩 모델이나 검색 문서 구성이 바뀌면 `index_version`을 올리고 기존 문서를 새 인덱스로 전체 재임베딩한다. 서로 다른 임베딩 모델로 생성한 벡터를 같은 컬렉션에 혼합하지 않는다.
@@ -395,6 +401,9 @@ AI 또는 프론트 연동 코드를 변경할 때 다음 순서로 확인한다
 
 ## 8. 아직 구현이 필요한 항목
 
+- ontology concept·alias·relation의 영속화와 공개 필드 범위 확정
+- EvidenceDocument·EvidenceChunk·EmbeddingRecord 영속화
+- content hash 기반 증분 인덱싱과 전체 재구축 API 또는 관리 명령
 - SSE heartbeat와 `Last-Event-ID` 기반 중간 스트림 재연결
 - AI 오류 예외의 공개 오류 envelope 변환
 - 정상·빈 결과·부분 성공·오류 JSON fixture

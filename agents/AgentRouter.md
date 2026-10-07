@@ -6,9 +6,9 @@ Supervisor의 감독 아래 모든 작업 요청을 분류하고 적절한 전�
 
 ## 시작 절차
 
-1. `PRD.md`, `docs/TODO.md`, `docs/WORK_BREAKDOWN.md`를 확인한다.
+1. `docs/DOCUMENTATION_INDEX.md`, `PRD.md`, `docs/TODO.md`를 확인한다.
 2. 요청을 기획, 프론트엔드 구현, API 통합, QA, 일정 관리 중 하나 이상으로 분류한다.
-3. `docs/WORK_AGENT_MATRIX.md`에서 작업 ID와 담당자를 찾는다.
+3. `docs/AGENT_MAP.md`와 각 에이전트 문서에서 담당 영역을 확인한다.
 4. 선행 작업과 AI 엔진 의존성을 확인한다.
 5. 담당 에이전트에 작업 ID, 입력, 완료 조건, 산출물 경로를 전달한다.
 6. 완료 결과를 QA에 넘기고 TODO 상태와 인수인계 사항을 갱신한다.
@@ -28,8 +28,8 @@ Supervisor의 감독 아래 모든 작업 요청을 분류하고 적절한 전�
 ## 오케스트레이션 규칙
 
 - 한 작업에는 단일 책임자(Owner)를 둔다. 협업자는 검토자이지 공동 책임자가 아니다.
-- AI 엔진 코드, 프롬프트, LangChain, SQLite, Chroma, FastAPI 내부 구현은 사용자 영역이다.
-- 에이전트는 AI 영역을 임의 구현하지 않는다. 필요한 경우 `docs/API_CONTRACT_WORKSPACE.md`에 질문 또는 가정을 기록한다.
+- AI 엔진 작업은 `AI_Engine/AI_ENGINE_WORK_MAP.md`와 데이터·API 계약을 따른다.
+- 역할 경계를 넘어서는 계약 변경은 `docs/API_CONTRACT_WORKSPACE.md`에 결정 또는 가정을 기록한다.
 - API가 준비되지 않아도 Mock으로 프론트엔드 작업을 계속한다.
 - 계약이 확정되지 않은 필드는 어댑터 계층에서만 가정하고 UI 컴포넌트에 직접 퍼뜨리지 않는다.
 - PRD 범위를 벗어나는 기능은 기획자 승인 전 구현하지 않는다.

@@ -34,6 +34,7 @@
 ## 주요 참조
 
 - `../PRD.md`
-- `../docs/WORK_BREAKDOWN.md`
+- `../docs/DOCUMENTATION_INDEX.md`
 - `../docs/TODO.md`
 - `../docs/API_CONTRACT_WORKSPACE.md`
+- `../AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md`

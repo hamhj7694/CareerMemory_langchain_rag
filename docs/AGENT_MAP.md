@@ -23,9 +23,9 @@ AI 엔진 관련 결정은 `API Integration → 사용자`로 전달하고 확�
 
 - 라우터: `agents/AgentRouter.md`
 - 전문 에이전트: `agents/*_agent.md`
-- 작업 기준: `docs/WORK_BREAKDOWN.md`
-- 실행 목록: `docs/TODO.md`
-- 책임 매핑: `docs/WORK_AGENT_MATRIX.md`
+- 문서 기준: `docs/DOCUMENTATION_INDEX.md`
+- 실행 목록과 우선순위: `docs/TODO.md`
+- AI 세부 작업: `AI_Engine/AI_ENGINE_WORK_MAP.md`
 - API 협업: `docs/API_CONTRACT_WORKSPACE.md`
 - 회의 규칙: `docs/MEETING_PROTOCOL.md`
 - 사용자 보고: `docs/reports/`

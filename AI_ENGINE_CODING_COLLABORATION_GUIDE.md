@@ -46,28 +46,34 @@ Codex는 다음 원칙에 따라 직접 코드를 작성한다.
 
 AI 엔진 작업을 시작하기 전에 다음 문서를 우선순위대로 확인한다.
 
-1. `Data_Flow_Summary.md`
-   - 사용자의 서비스 이용 흐름
-   - AI 기능별 전체 파이프라인
+1. `docs/DOCUMENTATION_INDEX.md`
+   - 현재 사용하는 기준 문서와 우선순위
 
-2. `AI_Engine/AI_ENGINE_DEVELOPMENT_GUIDE.md`
+2. `Data_Flow_Summary.md`
+   - 사용자 입력부터 저장·검색까지의 전체 흐름
+
+3. `docs/AI_DATA_ARCHITECTURE.md`
+   - 원본·근거·승인 데이터 계층
+   - 온톨로지, Evidence, 인덱스와 migration 원칙
+
+4. `AI_Engine/AI_ENGINE_DEVELOPMENT_GUIDE.md`
    - AI 엔진 개발 원칙
    - 엔진별 책임과 구현 기준
 
-3. `작업 가이드.md`
-   - 스키마 이후의 구현 순서
-   - 단계별 작업 범위
+5. `AI_Engine/AI_ENGINE_WORK_MAP.md`
+   - 현재 구현 상태
+   - 다음 작업과 완료 조건
 
-4. `AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md`
+6. `AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md`
    - 프론트엔드와 AI 스키마의 필드 대응
    - intent와 AI mode 변환
    - AI 결과와 공개 API 응답 변환
 
-5. `docs/API_CONTRACT_WORKSPACE.md`
+7. `docs/API_CONTRACT_WORKSPACE.md`
    - API 공통 규칙
    - 오류, 재시도, 요청 ID, 시간 형식
 
-6. `docs/v2/V2_API_CONTRACT.md`
+8. `docs/v2/V2_API_CONTRACT.md`
    - 실제 V2 API 주소와 요청·응답 계약
    - 대화, 메시지, 첨부, Proposal 계약
 
@@ -79,9 +85,9 @@ AI 엔진 작업을 시작하기 전에 다음 문서를 우선순위대로 확�
 - AI 엔진: `AI_Engine/chatbot_ai.py`, `experience_ai.py`, `job_analysis_ai.py`
 - 모델 Provider: `AI_Engine/llm_provider.py`
 - 테스트: `AI_Engine/tests/`
-- 코드 구성 방식 확인: `AI_Engine/레퍼런스/`
 
-레퍼런스 폴더는 코드의 학습 난이도, 구성 순서, 라이브러리 사용 방식을 확인하는 용도로 사용한다. 현재 서비스의 스키마와 API 계약이 레퍼런스보다 우선한다.
+과거 보고서와 포트폴리오 원본은 구현 기준으로 사용하지 않는다. 현재 서비스의
+스키마와 API 계약이 모든 기록 문서보다 우선한다.
 
 ---
 
