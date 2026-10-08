@@ -6,10 +6,10 @@ function readPositiveNumber(value, fallback) {
 function readApiBaseUrl(value) {
   const configured = String(value || '').trim();
   const localPreviewApi = /^http:\/\/(?:localhost|127\.0\.0\.1):8000$/i.test(configured);
-  if (configured === 'same-origin' || (import.meta.env.PROD && localPreviewApi)) {
+  if (!configured || configured === 'same-origin' || (import.meta.env.PROD && localPreviewApi)) {
     return typeof window === 'undefined' ? 'http://localhost:5173' : window.location.origin;
   }
-  return (configured || 'http://localhost:8000').replace(/\/$/, '');
+  return configured.replace(/\/$/, '');
 }
 
 export const apiConfig = Object.freeze({

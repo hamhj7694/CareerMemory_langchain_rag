@@ -69,6 +69,7 @@ content routing
 | AI-600 | `[?]` | 음성·영상 FFmpeg·STT | `file_extraction/media.py`, `TranscriptionSegment` | mock STT·timestamp 저장 통과, 현재 FFmpeg 미탐지·실제 음성 API smoke 미실행 |
 | AI-610 | `[x]` | 첨부 파이프라인 benchmark | `evaluate_attachment_pipeline.py` | 10개 원본 해시·DB BLOB 0·작업 완료·stale 복구 측정 |
 | AI-620 | `[x]` | 요청·스트림 운영 안정화 | `operational_metrics.py`, `api/conversations.py` | 원문 없는 route P50/P95·오류율, request ID, SSE snapshot 재접속·중복 호출 방지 |
+| AI-630 | `[x]` | `/chat` 브라우저 E2E 자동화 | `e2e/`, `playwright.config.js` | 격리 DB·파일·vector, 로그인·SSE·첨부·붙여넣기·드롭·복원, 실행 후 자동 정리 |
 
 현재 측정값과 테스트 결과는 `benchmarks/RESULTS.md`를 기준으로 한다.
 

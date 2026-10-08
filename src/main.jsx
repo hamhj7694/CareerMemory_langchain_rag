@@ -9,7 +9,7 @@ import './styles/global.css';
 const canonicalUrl = import.meta.env.DEV
   ? getCanonicalDevelopmentUrl(
       window.location.href,
-      import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
+      import.meta.env.VITE_API_BASE_URL || 'same-origin',
     )
   : null;
 

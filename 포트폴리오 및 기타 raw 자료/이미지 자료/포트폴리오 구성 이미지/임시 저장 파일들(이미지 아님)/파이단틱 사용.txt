@@ -1,0 +1,10 @@
+파이단틱 사용
+통화 원문
+ → LLM이 구조화 JSON 생성
+ → Pydantic 스키마 검증
+ → 이벤트·Context Feature·Semantic Atom 저장
+ → Feature Builder와 ML 추론
+- 이미 정의된 범주 안의 미분류 값: OTHER
+- 정식 범주로 매핑하지 못한 정보: UNMAPPED 상태의 UnmappedObservation
+
+즉, 확인되지 않은 정보를 억지로 기타로 넣기보다, UNMAPPED로 보존해 나중에 사람이 검토하거나 새 범주로 매핑할 수 있게 만든 구조입니다.

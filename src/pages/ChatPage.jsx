@@ -612,6 +612,10 @@ export function ChatPage({ onSend }) {
     shouldFollowLatest.current = true;
     setShowJumpToLatest(false);
     setQuestionMode('general');
+    setText('');
+    setFiles([]);
+    setBusy(false);
+    setExtracting(false);
     setRestoring(false);
     setMessages([]); setProposals({}); setNotice(''); setExtractionStatus(null);
     if (routeConversationId) {

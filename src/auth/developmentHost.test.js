@@ -19,4 +19,11 @@ describe('개발 서버 로그인 주소 통일', () => {
       'https://api.career.example.com',
     )).toBeNull();
   });
+
+  it('same-origin 설정은 현재 프론트 주소를 API 주소로 사용한다', () => {
+    expect(getCanonicalDevelopmentUrl(
+      'http://127.0.0.1:14173/login',
+      'same-origin',
+    )).toBeNull();
+  });
 });

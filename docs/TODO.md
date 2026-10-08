@@ -49,7 +49,7 @@
 - [?] 익명화 음성·영상으로 실제 STT WER·숫자 재현율·비용 smoke test
 - [ ] AI DTO와 공개 API DTO의 자동 계약 테스트 확대
 - [ ] 정상·빈 결과·부분 성공·오류 fixture 정리
-- [ ] 핵심 사용자 흐름 브라우저 E2E 자동화
+- [x] 격리 DB·BlobStore·vector 기반 `/chat` 핵심 사용자 흐름 Playwright E2E 자동화
 - [x] SSE heartbeat와 동일 요청 ID 기반 snapshot 재연결 정책
 - [ ] AI 오류의 공개 오류 envelope 일관성 검증
 - [ ] 실제·익명화 NLU/RAG 평가 세트 확대

@@ -28,8 +28,14 @@ from AI_Engine.llm_provider import create_embeddings
 from AI_Engine.schemas import ChatContextDocument
 
 
-EXPERIENCE_VECTOR_ROOT = PROJECT_ROOT / "data" / "vector_store" / "jobs"
-EVIDENCE_VECTOR_ROOT = PROJECT_ROOT / "data" / "vector_store" / "evidence"
+EXPERIENCE_VECTOR_ROOT = Path(os.getenv(
+    "AI_EXPERIENCE_VECTOR_ROOT",
+    str(PROJECT_ROOT / "data" / "vector_store" / "jobs"),
+))
+EVIDENCE_VECTOR_ROOT = Path(os.getenv(
+    "AI_EVIDENCE_VECTOR_ROOT",
+    str(PROJECT_ROOT / "data" / "vector_store" / "evidence"),
+))
 
 
 def _collection_name(prefix: str, user_id: str) -> str:

@@ -9,6 +9,29 @@ Career Memory RAG는 사용자와의 대화, 직접 입력한 글, 첨부 파일
 - 기본 모델: `gpt-4o-mini`
 - 기본 임베딩 모델: `text-embedding-3-small`
 
+## 로컬 서버 실행
+
+백엔드와 프론트엔드는 서로 다른 터미널에서 실행합니다. 프론트엔드는
+`same-origin` API와 Vite 프록시를 사용하여 로그인 세션 쿠키의 호스트를
+일치시킵니다.
+
+```powershell
+# 터미널 1: 백엔드
+python -m uvicorn AI_Engine.router:app --reload --host 127.0.0.1 --port 8000
+```
+
+```powershell
+# 터미널 2: 프론트엔드
+$env:VITE_USE_MOCK="false"
+$env:VITE_API_BASE_URL="same-origin"
+$env:VITE_PROXY_TARGET="http://127.0.0.1:8000"
+npm run dev
+```
+
+브라우저에서는 `http://localhost:5173`을 사용합니다. `localhost`와
+`127.0.0.1`을 프론트엔드·API 주소에 교차 사용하면 브라우저가 서로 다른
+쿠키 호스트로 처리하므로, 직접 API 주소를 지정하지 않습니다.
+
 ## 1. 주요 기능
 
 ### 커리어 챗
@@ -151,6 +174,19 @@ python -m AI_Engine.benchmarks.evaluate_knowledge_layers
 파생 인덱스로 취급합니다. 상세 migration·rollback 정책은
 [AI_DATA_ARCHITECTURE.md](docs/AI_DATA_ARCHITECTURE.md)에 있습니다.
 
+### 브라우저 E2E
+
+`/chat` 핵심 흐름은 실제 Chrome과 격리된 SQLite·첨부 저장소·vector 경로에서
+검증합니다. 기본 실행은 결정론적 AI 대역을 사용하므로 외부 API 비용이 발생하지 않습니다.
+
+```powershell
+npm run test:e2e
+npm run test:e2e:headed
+```
+
+실제 OpenAI smoke test와 실패 trace 확인 방법은
+[E2E_TESTING.md](docs/E2E_TESTING.md)를 참고하세요.
+
 ### Output Parser
 
 별도의 `OutputParser` 클래스 대신 다음 방식으로 출력 파싱과 검증을 처리합니다.
@@ -170,6 +206,7 @@ python -m AI_Engine.benchmarks.evaluate_knowledge_layers
 - AI 데이터 흐름: [Data_Flow_Summary.md](Data_Flow_Summary.md)
 - AI 데이터 아키텍처: [AI_DATA_ARCHITECTURE.md](docs/AI_DATA_ARCHITECTURE.md)
 - 파일 첨부·OCR·파서 운영: [FILE_EXTRACTION_GUIDE.md](docs/FILE_EXTRACTION_GUIDE.md)
+- 브라우저 E2E: [E2E_TESTING.md](docs/E2E_TESTING.md)
 - AI 개발 가이드: [AI_ENGINE_DEVELOPMENT_GUIDE.md](AI_Engine/AI_ENGINE_DEVELOPMENT_GUIDE.md)
 - AI 작업 매핑: [AI_ENGINE_WORK_MAP.md](AI_Engine/AI_ENGINE_WORK_MAP.md)
 - AI·프론트엔드 계약: [AI_FRONTEND_CONTRACT_MAPPING.md](AI_Engine/AI_FRONTEND_CONTRACT_MAPPING.md)
