@@ -188,6 +188,57 @@ describe('실제 대화 HTTP API', () => {
     );
   });
 
+  it('SSE가 완료 전에 끊기면 같은 요청 ID로 재연결해 저장된 스냅샷을 받는다', async () => {
+    const encoder = new TextEncoder();
+    const responseFromFrames = (frames) => new Response(
+      new ReadableStream({
+        start(controller) {
+          frames.forEach((frame) => controller.enqueue(encoder.encode(frame)));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    );
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseFromFrames([
+        'event: message.accepted\ndata: {"type":"message.accepted","sequence":1,"assistant_message_id":"MSG-AI"}\n\n',
+        'event: assistant.delta\ndata: {"type":"assistant.delta","sequence":2,"message_id":"MSG-AI","delta":"일부"}\n\n',
+      ]))
+      .mockResolvedValueOnce(responseFromFrames([
+        'event: message.accepted\ndata: {"type":"message.accepted","sequence":1,"assistant_message_id":"MSG-AI"}\n\n',
+        'event: assistant.snapshot\ndata: {"type":"assistant.snapshot","sequence":2,"message_id":"MSG-AI","content":"전체 답변"}\n\n',
+        'event: message.completed\ndata: {"type":"message.completed","sequence":3,"message":{"id":"MSG-AI","content":"전체 답변"}}\n\n',
+      ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const events = [];
+    for await (const event of v2ChatHttpApi.streamMessage('CONV-001', {
+      content: '재연결해줘',
+      intent: 'auto',
+      client_request_id: 'request-reconnect',
+      reconnect_attempts: 1,
+    })) {
+      events.push(event);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events.map((event) => event.type)).toEqual([
+      'message.accepted',
+      'assistant.delta',
+      'message.accepted',
+      'assistant.snapshot',
+      'message.completed',
+    ]);
+    expect(events[3].content).toBe('전체 답변');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).client_request_id)
+      .toBe('request-reconnect');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).client_request_id)
+      .toBe('request-reconnect');
+  });
+
   it('URL에 들어가는 대화 ID를 안전하게 인코딩한다', async () => {
     await v2ChatHttpApi.getConversation('CONV/한글');
 

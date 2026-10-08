@@ -1,0 +1,25 @@
+{
+  "fixture_id": "knowledge-layers-gold-v1",
+  "concept_cases": [
+    {"raw_name": "FastAPI", "concept_id": "skill-fastapi", "match_type": "exact"},
+    {"raw_name": "페스트API", "concept_id": "skill-fastapi", "match_type": "alias"},
+    {"raw_name": "JS", "concept_id": "skill-javascript", "match_type": "alias"},
+    {"raw_name": "자바스크립트", "concept_id": "skill-javascript", "match_type": "alias"},
+    {"raw_name": "TypeScript", "concept_id": "skill-typescript", "match_type": "exact"},
+    {"raw_name": "사내 FluxEngine", "concept_id": null, "match_type": "unresolved"}
+  ],
+  "relation_cases": [
+    {"source_id": "skill-fastapi", "target_id": "skill-fastapi", "relationship": "exact", "satisfies": true},
+    {"source_id": "skill-fastapi", "target_id": "skill-rest-api", "relationship": "related_to", "satisfies": false},
+    {"source_id": "skill-javascript", "target_id": "skill-typescript", "relationship": "related_to", "satisfies": false},
+    {"source_id": "skill-fastapi", "target_id": "skill-python-web-framework", "relationship": "narrower_than", "satisfies": false},
+    {"source_id": "skill-python-web-framework", "target_id": "skill-fastapi", "relationship": "broader_than", "satisfies": false},
+    {"source_id": "skill-react", "target_id": "skill-python", "relationship": "unresolved", "satisfies": false}
+  ],
+  "evidence": {
+    "source_ref_id": "source-gold-1",
+    "text": "페스트API로 응답 시간을 50% 줄였고 사내 FluxEngine도 함께 사용했습니다.",
+    "valid_quote": "응답 시간을 50% 줄였고",
+    "invalid_quote": "응답 시간을 49% 줄였고"
+  }
+}

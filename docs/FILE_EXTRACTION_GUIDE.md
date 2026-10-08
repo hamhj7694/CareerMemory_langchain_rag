@@ -75,7 +75,10 @@ OCR이 준비되지 않은 환경에서는 native text 문서는 계속 처리�
 
 - EXIF 방향, 투명 배경, 저조도 반전, 대비, 작은 이미지 확대를 전처리한다.
 - OSD가 있으면 회전을 보정한다.
-- 문서 자동·단일 block·희소 text 프로필을 순서대로 평가하고 품질이 좋은 결과를 쓴다.
+- 문서 자동·단일 block·희소 text·column 프로필을 모두 평가한다. confidence가 높아도
+  지나치게 짧거나 조각난 결과는 감점해 누락이 적은 결과를 선택한다.
+- 반복되는 수평선이 있는 표 이미지는 행 경계를 찾아 각 행을 추가 OCR한 뒤 전체 페이지
+  결과와 fuzzy dedup 병합한다.
 - PDF는 native text block을 우선 사용하고 이미지 비중이 높거나 글자가 부족한
   페이지만 300 DPI OCR한다.
 - 한 페이지의 OCR 실패가 다른 페이지의 native text를 버리지 않도록 격리한다.
@@ -115,7 +118,7 @@ python -m AI_Engine.migrate_attachment_blobs --apply  # 해시 검증 후 실제
 | Tesseract | `TESSERACT_CMD`, `TESSDATA_PREFIX` | 5.4.0, kor+eng+osd 사용 가능 |
 | LibreOffice | `LIBREOFFICE_CMD` | 미설치, DOC/PPT 변환 비활성 |
 | 한컴 변환기 | `HWPX_CONVERTER_CMD` | 미설치, HWP 변환 비활성 |
-| FFmpeg/FFprobe | `FFMPEG_CMD`, `FFPROBE_CMD` | 9.0 WinGet 설치본 자동 탐지 |
+| FFmpeg/FFprobe | `FFMPEG_CMD`, `FFPROBE_CMD` | 2026-10-08 capability 검사에서 미탐지 |
 | STT | `OPENAI_API_KEY`, `AI_STT_MODEL` | `whisper-1` 타임스탬프 모드 구성 |
 
 STT는 구간 타임스탬프를 원본 근거로 저장해야 하므로 현재 `whisper-1`의
@@ -142,3 +145,8 @@ python -m pytest AI_Engine/tests -q
 
 평가 지표는 required fragment recall, numeric token recall, character error rate,
 OCR quality와 처리 시간이다. 결과는 `AI_Engine/benchmarks/RESULTS.md`에 기록한다.
+
+2026-10-08에는 실제 포트폴리오 UI 캡처와 KPI 표 이미지를 읽기 전용으로 인수
+검증했다. UI 핵심 문구는 6/6, KPI 표의 핵심 9개 수치는 9/9 재현됐다. 다만 작은
+하단 주석의 `477,293`, `P95 34.06`은 오인식되어 전체 이미지 수치 100%로 간주하지
+않는다. 저화질·소형 글자 corpus 확대와 사용자 원본 대조 UI는 후속 품질 항목이다.

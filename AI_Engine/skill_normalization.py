@@ -5,72 +5,15 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
+from AI_Engine.ontology_repository import get_default_ontology_repository
+from AI_Engine.ontology_seed import SKILL_REGISTRY, SkillDefinition
 from AI_Engine.schemas.normalization import (
     NormalizationStatus,
     SkillMatchEvidence,
     SkillMatchType,
     SkillMention,
-)
-
-
-@dataclass(frozen=True)
-class SkillDefinition:
-    id: str
-    canonical_name: str
-    aliases: tuple[str, ...] = ()
-    related_skill_ids: tuple[str, ...] = ()
-
-
-# This registry is intentionally conservative. Unknown names remain searchable
-# raw data instead of being guessed into the nearest known technology.
-SKILL_REGISTRY: tuple[SkillDefinition, ...] = (
-    SkillDefinition("skill-python", "Python", ("파이썬",)),
-    SkillDefinition(
-        "skill-fastapi",
-        "FastAPI",
-        ("Fast API", "패스트API", "패스트 API", "페스트API", "페스트 API"),
-        ("skill-python", "skill-rest-api"),
-    ),
-    SkillDefinition(
-        "skill-rest-api",
-        "REST API",
-        ("RESTful API", "레스트 API", "레스트API"),
-        ("skill-fastapi", "skill-flask", "skill-django"),
-    ),
-    SkillDefinition(
-        "skill-javascript",
-        "JavaScript",
-        ("Javascript", "JS", "자바스크립트"),
-        ("skill-typescript",),
-    ),
-    SkillDefinition(
-        "skill-typescript",
-        "TypeScript",
-        ("Typescript", "TS", "타입스크립트"),
-        ("skill-javascript",),
-    ),
-    SkillDefinition("skill-react", "React", ("React.js", "ReactJS", "리액트")),
-    SkillDefinition(
-        "skill-flask",
-        "Flask",
-        ("플라스크",),
-        ("skill-python", "skill-rest-api"),
-    ),
-    SkillDefinition(
-        "skill-django",
-        "Django",
-        ("장고",),
-        ("skill-python", "skill-rest-api"),
-    ),
-    SkillDefinition(
-        "skill-nodejs",
-        "Node.js",
-        ("NodeJS", "Node JS", "노드JS", "노드.js"),
-        ("skill-javascript", "skill-typescript"),
-    ),
 )
 
 
@@ -106,27 +49,26 @@ def normalize_skill_mention(
     """Normalize a skill only through canonical names or curated aliases."""
 
     raw = _nfkc(raw_name)
-    exact = _CANONICAL_EXACT.get(_exact_key(raw))
-    definition = exact or _ALIASES.get(_alias_key(raw))
-    if definition is None:
+    resolution = get_default_ontology_repository().resolve(raw)
+    if resolution.concept_id is None:
         return SkillMention(
             raw_name=raw,
             match_type=SkillMatchType.UNRESOLVED,
             normalization_status=NormalizationStatus.UNRESOLVED,
             source_ref_id=source_ref_id,
             quote=quote,
+            ontology_version=resolution.ontology_version,
         )
     return SkillMention(
         raw_name=raw,
-        normalized_name=definition.canonical_name,
-        canonical_skill_id=definition.id,
-        match_type=(
-            SkillMatchType.EXACT if exact is not None else SkillMatchType.ALIAS
-        ),
+        normalized_name=resolution.canonical_name,
+        canonical_skill_id=resolution.concept_id,
+        match_type=SkillMatchType(resolution.match_type),
         normalization_status=NormalizationStatus.RESOLVED,
         source_ref_id=source_ref_id,
         quote=quote,
         confidence=1.0,
+        ontology_version=resolution.ontology_version,
     )
 
 
@@ -267,11 +209,8 @@ def skill_relationship(
         return SkillMatchType.UNRESOLVED
     if left == right:
         return SkillMatchType.EXACT
-    definition = _BY_ID.get(left)
-    if definition and right in definition.related_skill_ids:
-        return SkillMatchType.RELATED
-    reverse = _BY_ID.get(right)
-    if reverse and left in reverse.related_skill_ids:
+    decision = get_default_ontology_repository().relationship(left, right)
+    if decision.relationship == "related_to":
         return SkillMatchType.RELATED
     return SkillMatchType.UNRESOLVED
 
@@ -294,6 +233,16 @@ def build_skill_match_evidence(
                 relationship=relationship,
                 requirement_raw_name=requirement.raw_name,
                 experience_raw_name=experience.raw_name,
+                matching_policy=(
+                    "satisfies"
+                    if relationship == SkillMatchType.EXACT
+                    else "candidate_only"
+                ),
+                satisfies_requirement=relationship == SkillMatchType.EXACT,
+                ontology_version=(
+                    requirement.ontology_version
+                    or experience.ontology_version
+                ),
             ))
     return matches
 

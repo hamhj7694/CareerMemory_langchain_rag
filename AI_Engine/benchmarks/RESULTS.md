@@ -110,6 +110,42 @@ by 2.16%. This is the measured cost of lossless skill/metric projections and
 their source validation; the main routing savings over the original baseline
 remain intact.
 
+## V4 ontology/Evidence actual-model validation
+
+Measured on 2026-10-08 with the synthetic Korean gold fixture and
+`gpt-4o-mini`. The run used one cold execution plus three repeated executions.
+All 12 model calls succeeded without fallback or workflow failure.
+
+| Runtime KPI | V4 result |
+|---|---:|
+| Successful runs | 4/4 |
+| Input tokens/run, median | 3,995.5 |
+| Output tokens/run, median | 1,374.5 |
+| LLM calls/run | 3 |
+| Duration/run, median | 18.955s |
+| Estimated cost/run, median | $0.00142463 |
+| Total cost for four runs | $0.00574995 |
+| Database writes detected | 0/4 |
+
+| Gold-set KPI | V4 result |
+|---|---:|
+| Experience fact recall | 100% |
+| Context-dependent fact recall | 100% |
+| Expected source usage / citation coverage | 100% / 100% |
+| Exact citation validity | 100% |
+| Job detection recall / precision | 100% / 100% |
+| Job requirement term recall | 100% |
+| Skill normalization recall | 100% |
+| Structured metric value recall | 100% |
+| Assistant-only claim contamination | 0% |
+| Irrelevant-chat leakage | 0% |
+| Numeric hallucination | 0% |
+
+This V4 run validates that the ontology/Evidence persistence changes preserve the
+previous structured-v3 gold-set quality. Runtime values are reported as a new
+fixture validation, not as a direct long-conversation comparison with the v1/v2/v3
+tables above because their input sizes and measurement dates differ.
+
 ## File extraction quality
 
 The deterministic `file-extraction-gold-v1` fixture covers Markdown with a
@@ -128,13 +164,20 @@ same parser registry used by the APIs.
 | OCR required-fragment recall | 100% |
 | OCR numeric-token recall | 100% |
 | OCR character error rate | 8.333% |
-| OCR quality score | 0.8073 |
-| OCR duration | 754.432ms |
+| OCR quality score | 0.8246 |
+| OCR duration | 1,102.862ms |
 
-`run_ocr` now evaluates all three PSM profiles before selecting the best result.
-The previous early exit selected a lower-quality PSM 3 result even when PSM 6/11
-recognized the complete Korean phrase. The real smoke test reproduced that issue
-and passed after the selection policy changed.
+`run_ocr` now evaluates PSM 3/4/6/11 candidates and penalizes short or fragmented
+results even when their confidence is high. Repeated horizontal table separators
+trigger row-level OCR whose output is fuzzy-deduplicated with the whole-page result.
+
+Two existing portfolio assets were also inspected read-only as an acceptance check.
+The chat UI screenshot reproduced 6/6 required phrases. The KPI table reproduced
+all nine core values (`41.45%`, `68.0%`, `+26.55%p`, `23.59%`, `52.0%`,
+`+28.41%p`, `96.67%`, `98.0%`, `+1.33%p`). Small footer text still misread
+`477,293` and `P95 34.06`, so this is not reported as 100% recall over every numeric
+token in the source image. The actual 31-slide PPTX parsed 31 segments and 18,937
+characters without warnings.
 
 ### Attachment storage and durable queue
 
@@ -150,15 +193,50 @@ simulates one expired worker lease.
 | SHA-256 verification | 10/10 |
 | Completed processing jobs | 10/10 |
 | Expired leases recovered | 1/1, returned to `queued` |
-| Ingest duration | 288.572ms |
-| Parse duration | 218.149ms |
-| Total duration | 542.943ms |
+| Ingest duration | 113.007ms |
+| Parse duration | 44.857ms |
+| Total duration | 175.314ms |
 | Persistent database writes | 0 |
+
+### Ontology, Evidence, and incremental index
+
+`knowledge-layers-gold-v1` uses an isolated in-memory database and fake vector
+store. It verifies conservative concept resolution, evidence lineage, invalid quote
+rejection, dry-run safety, and content-hash-based incremental indexing.
+
+| KPI | Result |
+|---|---:|
+| Concept resolution accuracy | 100% |
+| Relation classification accuracy | 100% |
+| Unresolved expression preservation | 100% |
+| Evidence lineage completeness | 100% |
+| Invalid quote rejection | passed |
+| Ontology dry-run data writes | 0 |
+| Evidence dry-run data writes | 0 |
+| Seed projection | 10 concepts / 26 aliases / 19 relations |
+| Initial evidence projection | 1 document / 1 chunk / 1 link |
+| Initial embedding writes | 1 |
+| Repeated unchanged embedding writes | 0 |
+
+The regression suite also covers changed source text, stale record transitions,
+source unlink deletion, stale vector removal, and full rebuild. The production DB
+dry-run scanned zero existing confirmed experiences/source refs and planned no user
+data writes; it reported the same deterministic ontology seed projection.
+
+### Product and operational stability
+
+- File workers claim a queued job atomically with `UPDATE ... RETURNING`, a worker
+  lease, and ownership checks, preventing two workers from processing one job.
+- SSE sends heartbeats and reconnects once with the same `client_request_id`.
+  The server returns the persisted `assistant.snapshot` and terminal event without
+  starting another model call or storing duplicate messages.
+- HTTP middleware records route count, error rate, P50/P95 latency and request ID.
+  It deliberately excludes query strings, request bodies, and user source text.
 
 Capability check on the development PC:
 
 - Tesseract 5.4.0: available with `kor`, `eng`, `osd`.
-- FFmpeg/FFprobe 9.0: available; OpenAI STT key configured.
+- FFmpeg/FFprobe: not detected in the 2026-10-08 capability run; STT key configured.
 - LibreOffice: unavailable, so actual DOC/PPT conversion remains environment-blocked.
 - Hancom HWP→HWPX converter: unavailable, so actual HWP conversion remains environment-blocked.
 - STT timestamp mapping and persistence passed mocked integration tests; a paid live-audio
@@ -166,14 +244,19 @@ Capability check on the development PC:
 
 ### Validation
 
-- Backend: 212 tests passed, including the real Korean OCR smoke test.
-- Frontend: 107 tests passed.
+- Backend: 219 tests passed, including actual Korean OCR, ontology/Evidence/index,
+  atomic file claim, request metrics, and SSE replay coverage.
+- Frontend: 108 tests passed, including interrupted SSE reconnection.
 - Frontend production build passed.
 - ESLint passed.
 - `git diff --check` passed.
 - Normalization backfill dry-run scanned 0 existing experiences and wrote no data.
 - Attachment BLOB migration dry-run examined 0 existing attachments and wrote no data.
 - Both four-run benchmark suites detected 0 database writes.
+
+The 2026-10-08 V4 actual-model rerun completed successfully after explicit approval
+to send the synthetic fixture to OpenAI. The earlier connection-failed attempt is
+not included in any quality, token, cost, or latency result.
 
 ## Raw reports
 
@@ -188,3 +271,5 @@ Runtime reports are intentionally written under the ignored
 - `routed-v3-structured-normalization-20261007.json`
 - `gold-routed-v3-structured-normalization-20261007.json`
 - `gold-routed-v3-structured-normalization-20261007-evaluation.json`
+- `routed-v4-ontology-evidence-20261008-155150.json`
+- `routed-v4-ontology-evidence-20261008-155150-evaluation.json`

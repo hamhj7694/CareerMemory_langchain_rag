@@ -316,6 +316,7 @@ class JobAnalysisResult(SchemaModel):
     prompt_version: Identifier
     schema_version: Identifier
     index_version: Identifier
+    ontology_version: Identifier = "career-ontology-v1"
 
     @field_validator("warnings")
     @classmethod

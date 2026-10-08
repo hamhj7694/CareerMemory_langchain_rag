@@ -24,6 +24,7 @@ from AI_Engine.database.models import (
     User,
     utc_now,
 )
+from AI_Engine.evidence_repository import sync_experience_evidence
 from AI_Engine.normalization_backfill import structured_fields_for_experience
 from AI_Engine.experience_ai import ExperienceAI, ExperienceAIInputError, ExperienceAIOutputError
 from AI_Engine.file_extraction import FileInputError, run_file_extraction
@@ -578,6 +579,7 @@ def approve_chat_experience_proposal(
     experience.project = project
     database.add(experience)
     database.flush()
+    sync_experience_evidence(database, experience)
 
     saved_at = utc_now()
     draft["saved_experience_id"] = experience.id

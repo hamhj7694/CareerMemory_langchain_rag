@@ -392,7 +392,10 @@ DELETE:
 
 ## 10. SSE 스트리밍 이벤트 모델
 
-SSE 형식은 `event: <type>`, `id: <sequence>`, `data: <JSON>`이다. 연결 재개를 위해 `Last-Event-ID`를 지원하며 이벤트는 최소 10분 보존을 권장한다.
+SSE 형식은 `event: <type>`, `id: <sequence>`, `data: <JSON>`이다. 현재 구현은
+이벤트 로그를 보존하는 `Last-Event-ID` replay 대신 같은 `client_request_id` 재요청을
+사용한다. 서버는 중복 AI 호출 없이 DB에 저장된 최신 전체 답변을
+`assistant.snapshot`으로 재전송한다.
 
 ```ts
 type StreamEvent =
@@ -400,20 +403,25 @@ type StreamEvent =
   | { type: "intent.resolved"; sequence: number; intents: string[] }
   | { type: "attachment.processing"; sequence: number; attachment_id: Id; status: string; progress?: number }
   | { type: "assistant.delta"; sequence: number; message_id: Id; delta: string }
+  | { type: "assistant.snapshot"; sequence: number; message_id: Id; content: string }
   | { type: "citation.added"; sequence: number; message_id: Id; citation: Citation }
   | { type: "proposal.created"; sequence: number; proposal: Proposal }
   | { type: "message.completed"; sequence: number; message: Message }
-  | { type: "message.failed"; sequence: number; message_id: Id; error: ApiError["error"] }
-  | { type: "stream.heartbeat"; sequence: number; at: IsoDateTime };
+  | { type: "message.failed"; sequence: number; message_id: Id; error: ApiError["error"] };
 ```
+
+Heartbeat는 JSON 이벤트가 아니라 SSE comment `: heartbeat`로 보내며 프론트 이벤트
+목록에는 추가하지 않는다.
 
 이벤트 순서 보장:
 
 1. `message.accepted`가 항상 첫 의미 이벤트다.
 2. `assistant.delta`는 누적 문자열이 아니라 추가분이다.
-3. proposal은 delta 도중 또는 이후 도착할 수 있으나 `message.completed` 전에 생성된다.
-4. 정상 종료는 `message.completed`, 실패 종료는 `message.failed` 중 하나뿐이다.
-5. 연결이 끊겼지만 서버 처리가 계속되면 GET 메시지 조회로 최종 상태를 복구한다.
+3. 재연결의 `assistant.snapshot`은 저장된 누적 문자열 전체이며 기존 화면 내용을 교체한다.
+4. proposal은 delta 도중 또는 이후 도착할 수 있으나 `message.completed` 전에 생성된다.
+5. 정상 종료는 `message.completed`, 실패 종료는 `message.failed` 중 하나뿐이다.
+6. 프론트는 완료 전 연결 종료 시 같은 요청 ID로 1회 자동 재연결하고, 계속 실패하면
+   GET 메시지 조회로 최종 상태를 복구할 수 있다.
 
 비스트리밍 Mock도 동일한 내부 이벤트 배열을 순서대로 소비한 뒤 최종 Message를 반환하도록 만들어 두 adapter의 UI 차이를 최소화한다.
 
@@ -427,7 +435,7 @@ type StreamEvent =
 | `job-match` | intent(job) → delta → citations → proposal 또는 job action → completed |
 | `advice-no-evidence` | intent(advice) → delta → warnings 포함 completed |
 | `partial-evidence` | 답변·일부 citation·missing information |
-| `stream-interrupted` | delta 후 연결 종료; GET 복구 성공/실패 분기 |
+| `stream-interrupted` | delta 후 연결 종료; 같은 요청 ID 재연결 → snapshot → completed |
 | `proposal-conflict` | PATCH/approve 409 + 최신 proposal |
 | `upload-failure` | 특정 첨부만 failed, 나머지 유지 |
 | `empty-memory` | 근거 없는 답변과 경험 입력 CTA |

@@ -7,6 +7,7 @@ import os
 import json
 import queue
 import threading
+import time
 from functools import lru_cache
 from uuid import uuid4
 
@@ -665,30 +666,92 @@ def stream_message(
                 detail="같은 요청의 AI 처리가 아직 완료되지 않았습니다.",
             )
 
+        replay_session_factory = sessionmaker(
+            bind=database.get_bind(),
+            autoflush=False,
+            expire_on_commit=False,
+        )
+
         def replay_saved_message():
+            public_sequence = 1
             yield format_sse_event(
                 "message.accepted",
-                1,
+                public_sequence,
                 {
                     "type": "message.accepted",
-                    "sequence": 1,
+                    "sequence": public_sequence,
                     "user_message": MessageResponse.model_validate(
                         existing_user
                     ).model_dump(mode="json"),
                     "assistant_message_id": existing_assistant.id,
                 },
             )
-            yield format_sse_event(
-                "message.completed",
-                2,
-                {
-                    "type": "message.completed",
-                    "sequence": 2,
-                    "message": MessageResponse.model_validate(
-                        existing_assistant
-                    ).model_dump(mode="json"),
-                },
-            )
+            public_sequence += 1
+            last_content: str | None = None
+            with replay_session_factory() as replay_database:
+                while True:
+                    current = replay_database.get(Message, existing_assistant.id)
+                    if current is None:
+                        yield format_sse_event(
+                            "message.failed",
+                            public_sequence,
+                            {
+                                "type": "message.failed",
+                                "sequence": public_sequence,
+                                "message_id": existing_assistant.id,
+                                "error": {
+                                    "code": "message_not_found",
+                                    "message": "저장된 AI 답변 작업을 찾지 못했습니다.",
+                                    "retryable": True,
+                                },
+                            },
+                        )
+                        return
+                    replay_database.refresh(current)
+                    if current.content != last_content:
+                        last_content = current.content
+                        yield format_sse_event(
+                            "assistant.snapshot",
+                            public_sequence,
+                            {
+                                "type": "assistant.snapshot",
+                                "sequence": public_sequence,
+                                "message_id": current.id,
+                                "content": current.content,
+                            },
+                        )
+                        public_sequence += 1
+                    if current.status == "completed":
+                        yield format_sse_event(
+                            "message.completed",
+                            public_sequence,
+                            {
+                                "type": "message.completed",
+                                "sequence": public_sequence,
+                                "message": MessageResponse.model_validate(
+                                    current
+                                ).model_dump(mode="json"),
+                            },
+                        )
+                        return
+                    if current.status in {"failed", "cancelled"}:
+                        yield format_sse_event(
+                            "message.failed",
+                            public_sequence,
+                            {
+                                "type": "message.failed",
+                                "sequence": public_sequence,
+                                "message_id": current.id,
+                                "error": current.error or {
+                                    "code": "chat_model_error",
+                                    "message": "AI 답변을 생성하지 못했습니다.",
+                                    "retryable": True,
+                                },
+                            },
+                        )
+                        return
+                    yield ": heartbeat\n\n"
+                    time.sleep(1)
 
         return StreamingResponse(
             replay_saved_message(),

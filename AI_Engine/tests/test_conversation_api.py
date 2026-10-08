@@ -662,6 +662,7 @@ class ConversationApiTests(unittest.TestCase):
 
     def test_stream_sends_deltas_and_saves_completed_message(self) -> None:
         conversation = self.create_conversation().json()
+        client_request_id = str(uuid4())
 
         with self.client.stream(
             "POST",
@@ -670,7 +671,7 @@ class ConversationApiTests(unittest.TestCase):
                 "content": "실시간으로 답해줘",
                 "intent": "auto",
                 "response_mode": "stream",
-                "client_request_id": str(uuid4()),
+                "client_request_id": client_request_id,
             },
         ) as response:
             stream_text = "".join(response.iter_text())
@@ -691,6 +692,29 @@ class ConversationApiTests(unittest.TestCase):
             history["items"][1]["content"],
             "AI 답변: 실시간으로 답해줘",
         )
+
+        with self.client.stream(
+            "POST",
+            f"/api/v2/conversations/{conversation['id']}/messages/stream",
+            json={
+                "content": "실시간으로 답해줘",
+                "intent": "auto",
+                "response_mode": "stream",
+                "client_request_id": client_request_id,
+            },
+        ) as replay_response:
+            replay_text = "".join(replay_response.iter_text())
+
+        self.assertEqual(replay_response.status_code, 200)
+        self.assertIn("event: message.accepted", replay_text)
+        self.assertIn("event: assistant.snapshot", replay_text)
+        self.assertIn("AI 답변: 실시간으로 답해줘", replay_text)
+        self.assertIn("event: message.completed", replay_text)
+        self.assertEqual(self.chatbot.invoke_count, 1)
+        replay_history = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/messages"
+        ).json()
+        self.assertEqual(replay_history["total_count"], 2)
 
     def test_unconnected_intent_is_rejected_before_message_save(self) -> None:
         conversation = self.create_conversation().json()

@@ -37,6 +37,7 @@ from AI_Engine.job_file_text import (
     MAX_JOB_FILE_COUNT,
     MAX_JOB_FILES_TOTAL_BYTES,
 )
+from AI_Engine.ontology_seed import ONTOLOGY_VERSION
 from AI_Engine.schemas import JobAnalysisRequest, JobRequirement
 
 
@@ -405,6 +406,11 @@ def analyze_job(
             "prompt": result.prompt_version,
             "schema": result.schema_version,
             "index": result.index_version,
+                "ontology": getattr(
+                    result,
+                    "ontology_version",
+                    ONTOLOGY_VERSION,
+                ),
         },
         analyzed_at=result.analyzed_at,
     )

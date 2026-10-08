@@ -18,6 +18,11 @@ from sqlalchemy.orm import Session, selectinload
 from AI_Engine.chat_context import split_text_chunks
 from AI_Engine.database.connection import PROJECT_ROOT
 from AI_Engine.database.models import Experience, ExperienceProject
+from AI_Engine.evidence_index import (
+    EVIDENCE_INDEX_VERSION,
+    build_persisted_evidence_documents,
+    sync_evidence_index,
+)
 from AI_Engine.job_analysis_ai import create_experience_retriever
 from AI_Engine.llm_provider import create_embeddings
 from AI_Engine.schemas import ChatContextDocument
@@ -25,7 +30,6 @@ from AI_Engine.schemas import ChatContextDocument
 
 EXPERIENCE_VECTOR_ROOT = PROJECT_ROOT / "data" / "vector_store" / "jobs"
 EVIDENCE_VECTOR_ROOT = PROJECT_ROOT / "data" / "vector_store" / "evidence"
-EVIDENCE_INDEX_VERSION = "evidence-index-v1"
 
 
 def _collection_name(prefix: str, user_id: str) -> str:
@@ -306,18 +310,30 @@ def retrieve_evidence_context(
 
     if not query.strip():
         return []
-    documents = build_evidence_documents(
-        load_searchable_experiences(database, user_id)
-    )
+    documents = build_persisted_evidence_documents(database, user_id)
+    persisted = bool(documents)
+    if not documents:
+        documents = build_evidence_documents(
+            load_searchable_experiences(database, user_id)
+        )
     if not documents:
         return []
     k = search_k or max(1, int(os.getenv("AI_CHAT_EVIDENCE_TOP_K", "6")))
     try:
-        vector_db = _sync_evidence_store(documents, user_id=user_id)
+        if persisted:
+            vector_db, _report = sync_evidence_index(
+                database,
+                user_id,
+                persist_directory=EVIDENCE_VECTOR_ROOT,
+            )
+            database.commit()
+        else:
+            vector_db = _sync_evidence_store(documents, user_id=user_id)
         matches = vector_db.as_retriever(
             search_kwargs={"k": k}
         ).invoke(query)
     except Exception:
+        database.rollback()
         matches = _lexical_documents(documents, query, k)
     return [
         ChatContextDocument(

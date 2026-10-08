@@ -266,13 +266,13 @@ export function ChatPage({ onSend }) {
                 ...current.map((message) => message.id === userMessage.id
                   ? { ...message, id: event.user_message.id, status: 'sent' }
                   : message),
-                {
+                ...(current.some((message) => message.id === event.assistant_message_id) ? [] : [{
                   id: event.assistant_message_id,
                   role: 'assistant',
                   content: '',
                   status: 'streaming',
                   proposalIds: [],
-                },
+                }]),
               ]);
             }
           } else if (event.type === 'assistant.delta') {
@@ -280,6 +280,14 @@ export function ChatPage({ onSend }) {
               setMessages((current) => current.map((message) => (
                 message.id === event.message_id
                   ? { ...message, content: `${message.content}${event.delta}` }
+                  : message
+              )));
+            }
+          } else if (event.type === 'assistant.snapshot') {
+            if (conversationId.current === submittedConversationId) {
+              setMessages((current) => current.map((message) => (
+                message.id === event.message_id
+                  ? { ...message, content: event.content, status: 'streaming' }
                   : message
               )));
             }

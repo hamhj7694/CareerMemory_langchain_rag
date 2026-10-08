@@ -21,6 +21,7 @@ from AI_Engine.database.models import (
     User,
     utc_now,
 )
+from AI_Engine.evidence_repository import sync_experience_evidence
 from AI_Engine.normalization_backfill import structured_fields_for_experience
 
 router = APIRouter(prefix="/api/v2", tags=["experiences"])
@@ -490,6 +491,8 @@ def create_experience(
     )
     item.project = project
     database.add(item)
+    database.flush()
+    sync_experience_evidence(database, item)
     database.commit()
     database.refresh(item)
     return experience_dict(owned_experience(item.id, current_user.id, database))
@@ -535,6 +538,7 @@ def update_experience(
         )
     item.version += 1
     item.updated_at = utc_now()
+    sync_experience_evidence(database, item)
     database.commit()
     return experience_dict(owned_experience(item.id, current_user.id, database))
 

@@ -134,6 +134,23 @@ Pydantic Schema 검증
 
 관련 구현은 [chat_retrieval.py](AI_Engine/chat_retrieval.py)와 [job_analysis_ai.py](AI_Engine/job_analysis_ai.py)에 있습니다.
 
+### 온톨로지·Evidence 운영 명령
+
+기술 concept·alias·relation과 기존 경험 근거 projection은 기본 dry-run으로
+검토합니다. `--apply`를 명시해야 DB 또는 vector가 변경됩니다.
+
+```powershell
+python -m AI_Engine.knowledge_layer_backfill
+python -m AI_Engine.knowledge_layer_backfill --apply
+python -m AI_Engine.rebuild_evidence_index
+python -m AI_Engine.rebuild_evidence_index --apply
+python -m AI_Engine.benchmarks.evaluate_knowledge_layers
+```
+
+사용자 원문과 기존 `source_refs`는 덮어쓰지 않으며 Chroma는 DB에서 재생성 가능한
+파생 인덱스로 취급합니다. 상세 migration·rollback 정책은
+[AI_DATA_ARCHITECTURE.md](docs/AI_DATA_ARCHITECTURE.md)에 있습니다.
+
 ### Output Parser
 
 별도의 `OutputParser` 클래스 대신 다음 방식으로 출력 파싱과 검증을 처리합니다.
