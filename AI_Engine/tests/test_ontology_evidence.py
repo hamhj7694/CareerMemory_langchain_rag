@@ -65,7 +65,13 @@ class OntologyEvidenceTests(unittest.TestCase):
             poolclass=StaticPool,
         )
         Base.metadata.create_all(bind=self.engine)
-        self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
+        # 실제 SessionLocal과 같은 autoflush=False에서도 seed가 중복 alias를
+        # 한 번에 INSERT하지 않는지 검증한다.
+        self.Session = sessionmaker(
+            bind=self.engine,
+            autoflush=False,
+            expire_on_commit=False,
+        )
         with self.Session() as database:
             database.add(User(
                 id="user-1",

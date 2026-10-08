@@ -149,7 +149,13 @@ class MessageCreate(BaseModel):
         return self
 
 
-# 8. 메시지 응답
+# 8. 메시지 첨부 참조
+class MessageAttachmentReference(BaseModel):
+    id: str
+    filename: str
+
+
+# 9. 메시지 응답
 class MessageResponse(DatabaseResponse):
     id: str
     conversation_id: str
@@ -167,6 +173,7 @@ class MessageResponse(DatabaseResponse):
     requested_intent: str
     resolved_intents: list[str]
     attachment_ids: list[str]
+    attachment_refs: list[MessageAttachmentReference] = Field(default_factory=list)
     citations: list[dict[str, object]]
     proposal_ids: list[str]
     actions: list[dict[str, object]]
@@ -202,6 +209,7 @@ __all__ = [
     "ConversationUpdate",
     "DatabaseResponse",
     "InputIntent",
+    "MessageAttachmentReference",
     "MessageContext",
     "MessageCreate",
     "MessageListResponse",

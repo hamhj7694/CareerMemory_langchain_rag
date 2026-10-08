@@ -365,6 +365,19 @@ class ConversationApiTests(unittest.TestCase):
         self.assertIn("18%", context.attachments[0].content)
         self.assertGreater(context.token_usage.estimated_input_tokens, 0)
 
+        history = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/messages"
+        )
+        self.assertEqual(history.status_code, 200)
+        user_message = next(
+            item for item in history.json()["items"]
+            if item["role"] == "user"
+        )
+        self.assertEqual(
+            user_message["attachment_refs"],
+            [{"id": attachment["id"], "filename": "career.txt"}],
+        )
+
     def test_failed_parser_keeps_original_attachment_and_error_status(self) -> None:
         image = BytesIO()
         Image.new("RGB", (40, 40), "white").save(image, format="PNG")

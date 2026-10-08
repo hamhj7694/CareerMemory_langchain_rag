@@ -29,6 +29,7 @@ from AI_Engine.database.schemas import (
     ConversationListResponse,
     ConversationResponse,
     ConversationUpdate,
+    MessageAttachmentReference,
     MessageCreate,
     MessageListResponse,
     MessageResponse,
@@ -1048,6 +1049,37 @@ def list_messages(
         )
     )
 
+    attachment_ids = list(dict.fromkeys(
+        attachment_id
+        for message in messages
+        for attachment_id in message.attachment_ids
+    ))
+    attachments_by_id = {
+        attachment.id: attachment
+        for attachment in database.scalars(
+            select(Attachment).where(
+                Attachment.user_id == current_user.id,
+                Attachment.id.in_(attachment_ids),
+            )
+        )
+    } if attachment_ids else {}
+
+    response_items: list[MessageResponse] = []
+    for message in messages:
+        response = MessageResponse.model_validate(message)
+        response.attachment_refs = [
+            MessageAttachmentReference(
+                id=attachment_id,
+                filename=(
+                    attachments_by_id[attachment_id].filename
+                    if attachment_id in attachments_by_id
+                    else attachment_id
+                ),
+            )
+            for attachment_id in message.attachment_ids
+        ]
+        response_items.append(response)
+
     next_offset = offset + len(messages)
     next_cursor = (
         str(next_offset)
@@ -1055,10 +1087,7 @@ def list_messages(
         else None
     )
     return MessageListResponse(
-        items=[
-            MessageResponse.model_validate(message)
-            for message in messages
-        ],
+        items=response_items,
         total_count=total_count or 0,
         next_cursor=next_cursor,
     )

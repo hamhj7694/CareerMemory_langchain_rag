@@ -56,6 +56,21 @@ describe('ChatPage 메시지 제안 복원', () => {
 
     expect(message.jobAnalysisIds).toEqual(['JOB-1', 'JOB-2']);
   });
+
+  it('저장된 첨부 파일을 내부 ID가 아닌 원래 파일명으로 복원한다', () => {
+    const message = toUiMessage({
+      id: 'MSG-USER-1',
+      conversation_id: 'CONV-1',
+      role: 'user',
+      status: 'completed',
+      content: '첨부 문서를 확인해 주세요.',
+      attachment_ids: ['ATT-1'],
+      attachment_refs: [{ id: 'ATT-1', filename: 'career.txt' }],
+      actions: [],
+    });
+
+    expect(message.attachments).toEqual(['career.txt']);
+  });
 });
 
 describe('streamed proposal server identifiers', () => {

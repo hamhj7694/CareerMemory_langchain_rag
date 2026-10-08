@@ -213,7 +213,7 @@ rejection, dry-run safety, and content-hash-based incremental indexing.
 | Invalid quote rejection | passed |
 | Ontology dry-run data writes | 0 |
 | Evidence dry-run data writes | 0 |
-| Seed projection | 10 concepts / 26 aliases / 19 relations |
+| Seed projection | 10 concepts / 20 normalized aliases / 19 relations |
 | Initial evidence projection | 1 document / 1 chunk / 1 link |
 | Initial embedding writes | 1 |
 | Repeated unchanged embedding writes | 0 |

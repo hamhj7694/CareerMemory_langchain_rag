@@ -230,6 +230,7 @@ def seed_ontology(database: Session, *, dry_run: bool = False) -> OntologySeedRe
         "relations_created": 0,
         "relations_updated": 0,
     }
+    seed_alias_owners: dict[tuple[str, str], str] = {}
     for definition in SKILL_REGISTRY:
         concept = database.get(OntologyConcept, definition.id)
         concept_values = {
@@ -252,6 +253,17 @@ def seed_ontology(database: Session, *, dry_run: bool = False) -> OntologySeedRe
 
         for alias in definition.aliases:
             key = alias_key(alias)
+            alias_identity = (key, "und")
+            prior_owner = seed_alias_owners.get(alias_identity)
+            if prior_owner == definition.id:
+                # 공백·점 표기만 다른 별칭은 같은 normalization key이므로 한 번만 seed한다.
+                continue
+            if prior_owner is not None:
+                raise ValueError(
+                    "동일한 ontology alias normalization key가 여러 concept에 "
+                    f"할당됐습니다: {key} ({prior_owner}, {definition.id})"
+                )
+            seed_alias_owners[alias_identity] = definition.id
             existing = database.scalar(select(OntologyAlias).where(
                 OntologyAlias.normalization_key == key,
                 OntologyAlias.locale == "und",
