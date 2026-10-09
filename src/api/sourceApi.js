@@ -5,6 +5,7 @@ import { toScreenModel } from './modelMapper.js';
 import { createClientRequestId } from './requestId.js';
 import { unifiedMockApi } from './unifiedMockApi.js';
 import { v2ChatApi } from './v2ChatApi.js';
+import { toUserFacingErrorMessage } from './userFacingError.js';
 
 const idPath = (value) => encodeURIComponent(String(value));
 const aiHttp = createHttpAdapter({
@@ -84,7 +85,10 @@ export const sourceApi = {
     );
     if (!response.ok) {
       const payload = await response.json().catch(() => undefined);
-      throw new Error(payload?.error?.message || '파일을 다운로드하지 못했습니다.');
+      throw new Error(toUserFacingErrorMessage(
+        payload?.error,
+        '파일을 다운로드하지 못했어요. 잠시 후 다시 시도해 주세요.',
+      ));
     }
     return response.blob();
   },

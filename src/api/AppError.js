@@ -1,3 +1,5 @@
+import { toUserFacingErrorMessage } from './userFacingError.js';
+
 export class AppError extends Error {
   constructor({ code, message, status = 0, fieldErrors = [], requestId = '', retryable = false, retryAfterSeconds, details, cause }) {
     super(message, { cause });
@@ -15,11 +17,20 @@ export class AppError extends Error {
 export function normalizeApiError(payload, status) {
   const error = payload?.error;
   if (!error) {
-    return new AppError({ code: 'INVALID_RESPONSE', message: '서버 응답을 처리할 수 없습니다.', status });
+    return new AppError({
+      code: 'INVALID_RESPONSE',
+      message: toUserFacingErrorMessage({ code: 'INVALID_RESPONSE', status }),
+      status,
+    });
   }
+  const code = error.code || 'UNKNOWN_ERROR';
+  const rawMessage = error.message || '';
   return new AppError({
-    code: error.code || 'UNKNOWN_ERROR',
-    message: error.message || '요청을 처리하지 못했습니다.',
+    code,
+    message: toUserFacingErrorMessage(
+      { code, message: rawMessage, status },
+      '요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.',
+    ),
     status,
     fieldErrors: error.field_errors || [],
     requestId: error.request_id || '',

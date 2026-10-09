@@ -25,13 +25,19 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
     : null;
 
   return <div className="v2-message-list" aria-live="polite">
-    {messages.map((message) => <article key={message.id} data-message-id={message.id} className={`v2-message v2-message--${message.role}`}>
+    {messages.map((message) => <article
+      key={message.id}
+      data-message-id={message.id}
+      data-selectable-text={message.role === 'user' ? 'true' : undefined}
+      draggable={false}
+      className={`v2-message v2-message--${message.role}`}
+    >
       <div className="v2-message__meta">{message.role === 'assistant' ? 'Career Memory' : '나'}</div>
       {message.id === streamingMessageId && !message.content
         ? <p className="v2-message--thinking" role="status"><span /> {busyLabel}</p>
         : message.role === 'assistant'
         ? <MarkdownMessage content={message.content} />
-        : <p className="v2-message__content">{message.content}</p>}
+        : <p className="v2-message__content" draggable={false}>{message.content}</p>}
       {message.status === 'failed' && <small className="v2-message__failed">전송되지 않았습니다. 입력창에서 다시 전송해 주세요.</small>}
       {message.attachments?.length > 0 && <div className="v2-message__files">{message.attachments.map((file) => <span key={file}>▧ {file}</span>)}</div>}
       {message.evidence?.length > 0 && !message.proposalIds?.length && <div className="v2-message__links">

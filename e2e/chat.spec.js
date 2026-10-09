@@ -85,6 +85,54 @@ test('로그인 후 채팅 스트리밍과 새로고침 복원이 동작한다',
   await expect(page.locator('.v2-message--assistant').last()).toContainText('채팅 응답 정상');
 });
 
+test('답변 생성 중 추가 메시지를 보내면 이전 답변을 취소하고 사용자 문장을 합친다', async ({ page }) => {
+  await startNewConversation(page);
+  const textarea = page.locator('textarea');
+  const sendButton = page.getByRole('button', { name: '메시지 보내기' });
+
+  await textarea.fill('안녕 나는 함');
+  await sendButton.click();
+  await expect(page.locator('.v2-message--user')).toHaveCount(1);
+
+  await expect(textarea).toBeEnabled();
+  await textarea.fill('형준이야.');
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+
+  await expect(page.locator('.v2-message--user')).toHaveCount(2);
+  await expect(page.locator('.v2-message--assistant')).toHaveCount(1);
+  await expect(page.locator('.v2-message--assistant').last()).toContainText(
+    '통합 프롬프트 확인: 안녕 나는 함형준이야.',
+  );
+
+  await page.reload();
+  await expect(page.locator('.v2-message--user')).toHaveCount(2);
+  await expect(page.locator('.v2-message--assistant')).toHaveCount(1);
+  await expect(page.locator('.v2-message--assistant').last()).toContainText(
+    '통합 프롬프트 확인: 안녕 나는 함형준이야.',
+  );
+});
+
+test('사용자 말풍선의 텍스트를 마우스 드래그로 선택할 수 있다', async ({ page }) => {
+  await startNewConversation(page);
+  const prompt = '드래그해서 복사할 수 있는 사용자 메시지입니다.';
+
+  await page.locator('textarea').fill(prompt);
+  await page.getByRole('button', { name: '메시지 보내기' }).click();
+  const userContent = page.locator('.v2-message--user .v2-message__content').last();
+  await expect(userContent).toContainText(prompt);
+
+  const box = await userContent.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box.x + 3, box.y + (box.height / 2));
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 3, box.y + (box.height / 2), { steps: 12 });
+  await page.mouse.up();
+
+  const selectedText = await page.evaluate(() => window.getSelection()?.toString() || '');
+  expect(selectedText).toContain('복사할 수 있는 사용자 메시지');
+});
+
 test('파일 선택 첨부·파싱·전송과 원래 파일명 복원이 동작한다', async ({ page }) => {
   await startNewConversation(page);
   const filename = 'career-e2e.txt';
@@ -157,6 +205,23 @@ test('클립보드 붙여넣기와 드래그앤드롭이 같은 첨부 파이프
   await waitForReadyAttachment(page, 'drop-e2e.md');
   await page.getByRole('button', { name: 'drop-e2e.md 제거' }).click();
   await expect(page.locator('.v2-attachments > li')).toHaveCount(0);
+});
+
+test('첨부 오류를 쉬운 문구로 안내하고 사용자가 닫을 수 있다', async ({ page }) => {
+  await startNewConversation(page);
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: '파일 첨부' }).click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: 'unsupported-e2e.exe',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from('not an executable', 'utf8'),
+  });
+
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('지원하지 않는 형식의 파일 1개는 추가하지 않았습니다.');
+  await page.getByRole('button', { name: '첨부 오류 닫기' }).click();
+  await expect(alert).toHaveCount(0);
 });
 
 test('실제 모델 채팅 smoke test @live', async ({ page }) => {

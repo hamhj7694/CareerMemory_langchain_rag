@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -15,6 +16,8 @@ class E2EChatbot:
 
     @staticmethod
     def _answer(content: str) -> str:
+        if "안녕 나는 함" in content and "형준이야." in content:
+            return "통합 프롬프트 확인: 안녕 나는 함형준이야."
         if "첨부 문서" in content or "FastAPI" in content:
             return "FastAPI 기반 API의 응답 시간을 50% 줄였습니다."
         return "채팅 응답 정상"
@@ -36,6 +39,8 @@ class E2EChatbot:
         midpoint = max(1, len(answer) // 2)
         yield SimpleNamespace(type="started")
         yield SimpleNamespace(type="token", text_delta=answer[:midpoint])
+        if "안녕 나는 함" in request.content and "형준이야." not in request.content:
+            time.sleep(1)
         yield SimpleNamespace(type="token", text_delta=answer[midpoint:])
         yield SimpleNamespace(type="completed")
 

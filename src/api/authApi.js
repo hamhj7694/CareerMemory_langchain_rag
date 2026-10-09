@@ -65,6 +65,13 @@ export const authApi = {
       body: input,
     });
   },
+  getRecoveryQuestion(input) {
+    return http.request({
+      path: '/api/v2/auth/password/recovery-question',
+      method: 'POST',
+      body: input,
+    });
+  },
   recoverPassword(input) {
     return http.request({
       path: '/api/v2/auth/password/recover',

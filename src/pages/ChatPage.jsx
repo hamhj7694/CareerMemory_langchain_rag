@@ -4,11 +4,20 @@ import { ChatComposer, ConversationGuide, ConversationSidebar, MessageThread } f
 import { applyProposalPanelChanges, toProposalView } from '../features/chat/proposalMapper.js';
 import { toEmbeddedProposalView, toUiMessage } from '../features/chat/chatMessageMapper.js';
 import { chatAnalysisApi, chatExperienceApi, experienceTrashApi, jobApi, v2ChatApi } from '../api/index.js';
+import { attachmentUnavailableMessage, toUserFacingErrorMessage } from '../api/userFacingError.js';
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
 import '../styles/v2-chat.css';
 
 const makeId = () => globalThis.crypto?.randomUUID?.() ?? `message-${Date.now()}`;
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 72;
+const isAbortError = (error) => error?.name === 'AbortError' || error?.code === 'ABORT_ERR';
+const isActiveAssistantMessage = (message) => (
+  message?.role === 'assistant'
+  && ['queued', 'processing', 'streaming'].includes(message.status)
+);
+const toVisibleUiMessages = (items) => items
+  .filter((message) => message.status !== 'cancelled')
+  .map(toUiMessage);
 
 export function ChatPage({ onSend }) {
   const { conversationId: routeConversationId } = useParams();
@@ -36,12 +45,15 @@ export function ChatPage({ onSend }) {
   const messageCount = messages.length;
   const extractionRequestInFlight = useRef(false);
   const initialScrollPending = useRef(Boolean(routeConversationId));
+  const latestSubmission = useRef(null);
+  const submissionStartTail = useRef(Promise.resolve());
+  const streamControllers = useRef(new Set());
 
   const openEvidence = (evidence) => setNotice(`원본 근거 ‘${evidence.label}’가 이 답변과 연결되어 있습니다.`);
 
   const refreshConversations = async () => {
     try { setConversations((await v2ChatApi.listConversations()).items); }
-    catch (error) { setNotice(error?.message ?? '대화 기록을 불러오지 못했습니다.'); }
+    catch (error) { setNotice(toUserFacingErrorMessage(error, '대화 기록을 불러오지 못했어요. 다시 시도해 주세요.')); }
   };
   const refreshExtractionStatus = async (targetConversationId = conversationId.current) => {
     if (!targetConversationId) {
@@ -76,7 +88,7 @@ export function ChatPage({ onSend }) {
           navigate(`/chat/${items[0].id}`, { replace: true });
         }
       } catch (error) {
-        if (active) setNotice(error?.message ?? '대화 기록을 불러오지 못했습니다.');
+        if (active) setNotice(toUserFacingErrorMessage(error, '대화 기록을 불러오지 못했어요. 다시 시도해 주세요.'));
       }
     };
 
@@ -137,6 +149,10 @@ export function ChatPage({ onSend }) {
     }, 700);
   };
   useEffect(() => () => window.clearTimeout(jumpToLatestTimer.current), []);
+  useEffect(() => () => {
+    streamControllers.current.forEach((controller) => controller.abort());
+    streamControllers.current.clear();
+  }, []);
   const searchConversations = useCallback(async (query) => {
     const result = await v2ChatApi.listConversations({ query, limit: 100 });
     return result.items;
@@ -159,7 +175,7 @@ export function ChatPage({ onSend }) {
         await v2ChatApi.getConversation(routeConversationId);
         let result = await v2ChatApi.listMessages(routeConversationId);
         if (!active) return;
-        const restoredMessages = result.items.map(toUiMessage);
+        const restoredMessages = toVisibleUiMessages(result.items);
         const proposalIds = restoredMessages
           .flatMap((message) => message.proposalIds || [])
           .reverse();
@@ -201,7 +217,7 @@ export function ChatPage({ onSend }) {
         while (active && isGenerating(result.items.at(-1))) {
           await new Promise((resolve) => setTimeout(resolve, 750));
           result = await v2ChatApi.listMessages(routeConversationId);
-          if (active) setMessages(result.items.map(toUiMessage));
+          if (active) setMessages(toVisibleUiMessages(result.items));
         }
       } catch (error) {
         if (active) {
@@ -212,7 +228,7 @@ export function ChatPage({ onSend }) {
             setNotice('');
             navigate('/chat', { replace: true });
           } else {
-            setNotice(error?.message ?? '기존 대화를 불러오지 못했습니다.');
+            setNotice(toUserFacingErrorMessage(error, '기존 대화를 불러오지 못했어요. 다시 시도해 주세요.'));
           }
         }
       } finally {
@@ -229,54 +245,105 @@ export function ChatPage({ onSend }) {
 
   const submit = async () => {
     const content = text.trim();
-    if (busy || (!content && files.length === 0)) return;
+    if (extracting || restoring || (!content && files.length === 0)) return;
     const unavailable = files.find((file) => !['ready', 'partial'].includes(file.processingStatus));
     if (unavailable) {
-      setNotice(`${unavailable.name}: 첨부 처리가 완료되거나 재시도에 성공한 뒤 전송할 수 있습니다.`);
+      setNotice(attachmentUnavailableMessage(unavailable));
       return;
     }
+
+    let releaseStartGate;
+    let startGateReleased = false;
+    const acceptedOrFinished = new Promise((resolve) => { releaseStartGate = resolve; });
+    const waitForPreviousSubmission = submissionStartTail.current;
+    submissionStartTail.current = acceptedOrFinished;
+    const releaseGate = () => {
+      if (startGateReleased) return;
+      startGateReleased = true;
+      releaseStartGate();
+    };
+    const controller = new AbortController();
+    const submission = {
+      id: makeId(),
+      controller,
+      accepted: false,
+      superseded: false,
+    };
+    const previousSubmission = latestSubmission.current;
+    if (previousSubmission) {
+      previousSubmission.superseded = true;
+      if (previousSubmission.accepted) previousSubmission.controller.abort();
+    }
+    latestSubmission.current = submission;
+    streamControllers.current.add(controller);
+
     let submittedConversationId = conversationId.current;
     const submittedModeHint = questionMode;
     const submittedFiles = [...files];
     const attachments = files.map((file) => file.name);
     const userMessage = { id: makeId(), role: 'user', content: content || '첨부한 자료를 확인해 주세요.', attachments, status: 'sending' };
-    setMessages((current) => [...current, userMessage]);
+    setMessages((current) => [
+      ...current.filter((message) => !isActiveAssistantMessage(message)),
+      userMessage,
+    ]);
     setText(''); setFiles([]); setBusy(true); setNotice('');
     try {
+      // 각 요청은 앞선 사용자 메시지가 서버에 저장됐다는 accepted 이벤트까지만
+      // 기다린다. 따라서 매우 빠르게 연속 전송해도 원문 순서와 병합 대상이 보존된다.
+      await waitForPreviousSubmission;
       let response;
       let movedToConversation = false;
       if (onSend) {
-        response = await onSend({ mode: 'auto', modeHint: submittedModeHint, content, files });
+        submission.accepted = true;
+        releaseGate();
+        response = await onSend({
+          mode: 'auto',
+          modeHint: submittedModeHint,
+          content,
+          files: submittedFiles,
+          signal: controller.signal,
+        });
+        if (submission.superseded) return;
       } else {
-        if (!conversationId.current) conversationId.current = (await v2ChatApi.createConversation({ title: (content || files[0]?.name || '새 대화').slice(0, 28) })).id;
+        if (!conversationId.current) conversationId.current = (await v2ChatApi.createConversation({ title: (content || submittedFiles[0]?.name || '새 대화').slice(0, 28) })).id;
         submittedConversationId = conversationId.current;
-        const uploaded = files.length ? await v2ChatApi.uploadAttachments(files) : [];
+        const uploaded = submittedFiles.length ? await v2ChatApi.uploadAttachments(submittedFiles) : [];
         let completedMessage = null;
         let streamedAssistantMessageId = null;
+        let cancelledMessage = false;
         for await (const event of v2ChatApi.streamMessage(conversationId.current, {
           content,
           intent: 'auto',
           mode_hint: submittedModeHint,
           attachment_ids: uploaded.map(({ id }) => id),
+          signal: controller.signal,
         })) {
           if (event.type === 'message.accepted') {
+            submission.accepted = true;
+            releaseGate();
             streamedAssistantMessageId = event.assistant_message_id;
             if (conversationId.current === submittedConversationId) {
-              setMessages((current) => [
-                ...current.map((message) => message.id === userMessage.id
+              setMessages((current) => current.map((message) => message.id === userMessage.id
                   ? { ...message, id: event.user_message.id, status: 'sent' }
-                  : message),
-                ...(current.some((message) => message.id === event.assistant_message_id) ? [] : [{
-                  id: event.assistant_message_id,
-                  role: 'assistant',
-                  content: '',
-                  status: 'streaming',
-                  proposalIds: [],
-                }]),
-              ]);
+                  : message));
+            }
+            if (submission.superseded) {
+              controller.abort();
+              break;
+            }
+            if (conversationId.current === submittedConversationId) {
+              setMessages((current) => current.some((message) => message.id === event.assistant_message_id)
+                ? current
+                : [...current, {
+                    id: event.assistant_message_id,
+                    role: 'assistant',
+                    content: '',
+                    status: 'streaming',
+                    proposalIds: [],
+                  }]);
             }
           } else if (event.type === 'assistant.delta') {
-            if (conversationId.current === submittedConversationId) {
+            if (!submission.superseded && conversationId.current === submittedConversationId) {
               setMessages((current) => current.map((message) => (
                 message.id === event.message_id
                   ? { ...message, content: `${message.content}${event.delta}` }
@@ -284,7 +351,7 @@ export function ChatPage({ onSend }) {
               )));
             }
           } else if (event.type === 'assistant.snapshot') {
-            if (conversationId.current === submittedConversationId) {
+            if (!submission.superseded && conversationId.current === submittedConversationId) {
               setMessages((current) => current.map((message) => (
                 message.id === event.message_id
                   ? { ...message, content: event.content, status: 'streaming' }
@@ -296,13 +363,14 @@ export function ChatPage({ onSend }) {
               messageId: streamedAssistantMessageId,
               conversationId: submittedConversationId,
             });
-            if (streamedProposal && conversationId.current === submittedConversationId) {
+            if (streamedProposal && !submission.superseded && conversationId.current === submittedConversationId) {
               setProposals((current) => ({
                 ...current,
                 [streamedProposal.id]: streamedProposal,
               }));
             }
           } else if (event.type === 'message.completed') {
+            if (submission.superseded) break;
             completedMessage = event.message;
             const completedUiMessage = toUiMessage(event.message);
             if (conversationId.current === submittedConversationId) {
@@ -316,10 +384,18 @@ export function ChatPage({ onSend }) {
                 current,
               ));
             }
+          } else if (event.type === 'message.cancelled') {
+            cancelledMessage = true;
+            break;
           } else if (event.type === 'message.failed') {
+            if (event.error?.code === 'superseded_by_user') {
+              cancelledMessage = true;
+              break;
+            }
             throw new Error(event.error?.message || 'AI 답변 생성에 실패했습니다.');
           }
         }
+        if (submission.superseded || cancelledMessage) return;
         if (!completedMessage) throw new Error('스트리밍이 완료되기 전에 연결이 종료되었습니다.');
         response = { streamed: true };
         if (!routeConversationId && conversationId.current === submittedConversationId) {
@@ -342,13 +418,21 @@ export function ChatPage({ onSend }) {
       await refreshConversations();
       await refreshExtractionStatus();
     } catch (error) {
+      if (submission.superseded || isAbortError(error) || error?.code === 'superseded_by_user') return;
       if (conversationId.current === submittedConversationId) {
         setText((current) => current || content);
         setFiles((current) => current.length ? current : submittedFiles);
         setMessages((current) => current.map((message) => message.id === userMessage.id ? { ...message, status: 'failed' } : message));
-        setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: error?.message ?? '응답을 만들지 못했어요. 입력은 보존되었으니 다시 시도해 주세요.' }]);
+        setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: toUserFacingErrorMessage(error, '응답을 만들지 못했어요. 입력은 보존되었으니 다시 시도해 주세요.') }]);
       }
-    } finally { setBusy(false); }
+    } finally {
+      releaseGate();
+      streamControllers.current.delete(controller);
+      if (latestSubmission.current?.id === submission.id) {
+        latestSubmission.current = null;
+        setBusy(false);
+      }
+    }
   };
 
   const start = ({ id }) => { setQuestionMode(id); };
@@ -382,7 +466,7 @@ export function ChatPage({ onSend }) {
           : '새로 정리할 경험이나 채용공고를 찾지 못했어요.');
       await Promise.all([refreshConversations(), refreshExtractionStatus()]);
     } catch (error) {
-      setNotice(error?.message ?? '대화내용에서 경험과 채용공고를 분석하지 못했습니다.');
+      setNotice(toUserFacingErrorMessage(error, '대화에서 경험과 채용공고를 정리하지 못했어요. 잠시 후 다시 시도해 주세요.'));
       await refreshExtractionStatus();
     } finally {
       extractionRequestInFlight.current = false;
@@ -607,6 +691,10 @@ export function ChatPage({ onSend }) {
   };
 
   const startNewConversation = () => {
+    if (latestSubmission.current) latestSubmission.current.superseded = true;
+    streamControllers.current.forEach((controller) => controller.abort());
+    streamControllers.current.clear();
+    latestSubmission.current = null;
     conversationId.current = null;
     initialScrollPending.current = false;
     shouldFollowLatest.current = true;
@@ -695,8 +783,8 @@ export function ChatPage({ onSend }) {
           kind="combined"
         />
       </div>
-      {notice && <p className="v2-chat-notice" role="status">{notice}</p>}
-      <ChatComposer text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy || extracting} showQuickActions={messages.length > 0} selectedMode={questionMode} onModeChange={setQuestionMode} />
+      {notice && <div className="v2-chat-notice" role="status"><span>{notice}</span><button type="button" onClick={() => setNotice('')} aria-label="채팅 알림 닫기">×</button></div>}
+      <ChatComposer text={text} onTextChange={setText} files={files} onFilesChange={setFiles} onSubmit={submit} busy={busy} locked={extracting || restoring || changingConversation} showQuickActions={messages.length > 0} selectedMode={questionMode} onModeChange={setQuestionMode} />
     </section>
     <ConversationSidebar conversations={conversations} activeId={routeConversationId} open={sessionsOpen} onClose={() => setSessionsOpen(false)} onSelect={(id) => { setSessionsOpen(false); navigate(`/chat/${id}`); }} onCreate={() => { setSessionsOpen(false); startNewConversation(); }} onRename={renameConversation} onDelete={deleteConversation} onSearch={searchConversations} />
   </div>;

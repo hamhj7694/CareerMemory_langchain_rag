@@ -21,7 +21,11 @@ from AI_Engine.blob_store import clear_blob_store_cache, read_attachment_bytes
 from AI_Engine.database import models  # noqa: F401
 from AI_Engine.database.models import Attachment
 from AI_Engine.job_file_text import JobFileExtractionError
-from AI_Engine.api.conversations import get_chatbot_ai
+from AI_Engine.api.conversations import (
+    cancel_active_assistant_messages,
+    get_chatbot_ai,
+    update_active_assistant,
+)
 from AI_Engine.api.experience_extractions import get_experience_ai
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.router import app
@@ -672,6 +676,110 @@ class ConversationApiTests(unittest.TestCase):
             "방금 말한 직무가 뭐였지?",
             [message.content for message in second_request.history],
         )
+
+    def test_follow_up_cancels_active_answer_and_merges_user_turns(self) -> None:
+        conversation = self.create_conversation().json()
+        with self.session_factory() as database:
+            stored_conversation = database.get(
+                models.Conversation,
+                conversation["id"],
+            )
+            database.add_all([
+                models.Message(
+                    id="MSG-PREVIOUS-USER",
+                    conversation_id=conversation["id"],
+                    client_request_id=str(uuid4()),
+                    sequence=1,
+                    role="user",
+                    status="completed",
+                    content="안녕 나는 함",
+                    completed_at=datetime.now(timezone.utc),
+                ),
+                models.Message(
+                    id="MSG-PREVIOUS-ASSISTANT",
+                    conversation_id=conversation["id"],
+                    sequence=2,
+                    role="assistant",
+                    status="streaming",
+                    content="생성 중이던 답변",
+                ),
+            ])
+            stored_conversation.message_count = 2
+            database.commit()
+
+        with self.client.stream(
+            "POST",
+            f"/api/v2/conversations/{conversation['id']}/messages/stream",
+            json={
+                "content": "형준이야.",
+                "intent": "auto",
+                "response_mode": "stream",
+                "client_request_id": str(uuid4()),
+            },
+        ) as response:
+            stream_text = "".join(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: message.completed", stream_text)
+        self.assertEqual(
+            self.chatbot.requests[-1].content,
+            "안녕 나는 함\n형준이야.",
+        )
+        self.assertEqual(self.chatbot.requests[-1].history, [])
+
+        history = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/messages"
+        ).json()["items"]
+        self.assertEqual([message["sequence"] for message in history], [1, 2, 3, 4])
+        self.assertEqual(history[0]["content"], "안녕 나는 함")
+        self.assertEqual(history[1]["status"], "cancelled")
+        self.assertEqual(
+            history[1]["error"]["code"],
+            "superseded_by_user",
+        )
+        self.assertEqual(history[2]["content"], "형준이야.")
+        self.assertEqual(
+            history[3]["content"],
+            "AI 답변: 안녕 나는 함\n형준이야.",
+        )
+
+    def test_cancelled_answer_cannot_be_completed_by_old_worker(self) -> None:
+        conversation = self.create_conversation().json()
+        with self.session_factory() as database:
+            stored_conversation = database.get(
+                models.Conversation,
+                conversation["id"],
+            )
+            assistant = models.Message(
+                id="MSG-CANCEL-RACE",
+                conversation_id=conversation["id"],
+                sequence=1,
+                role="assistant",
+                status="streaming",
+                content="일부 답변",
+            )
+            database.add(assistant)
+            stored_conversation.message_count = 1
+            database.commit()
+
+            cancelled = cancel_active_assistant_messages(
+                database,
+                conversation["id"],
+            )
+            database.commit()
+            worker_updated = update_active_assistant(
+                database,
+                assistant.id,
+                status="completed",
+                content="취소 뒤 생성된 잘못된 답변",
+                completed_at=datetime.now(timezone.utc),
+            )
+            database.refresh(assistant)
+
+            self.assertEqual(cancelled, [assistant.id])
+            self.assertFalse(worker_updated)
+            self.assertEqual(assistant.status, "cancelled")
+            self.assertEqual(assistant.content, "일부 답변")
 
     def test_stream_sends_deltas_and_saves_completed_message(self) -> None:
         conversation = self.create_conversation().json()

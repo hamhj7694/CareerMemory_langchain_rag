@@ -1,10 +1,15 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { v2ChatApi } from '../../api/v2ChatApi.js';
+import {
+  attachmentUnavailableMessage,
+  toUserFacingAttachmentError,
+  toUserFacingErrorMessage,
+} from '../../api/userFacingError.js';
 import { filesFromDrop, filesFromPaste, hasFilePayload } from '../evidence/model/attachmentIngress.js';
 import { CHAT_ATTACHMENT_LIMITS, EVIDENCE_FILE_ACCEPT, evidenceFileKey, evidenceFileStatusLabel, mergeEvidenceFileSelections } from '../evidence/model/evidenceFileSelection.js';
 import { CHAT_QUICK_ACTIONS, GENERAL_CHAT_MODE } from './chatQuickActions.js';
 
-export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmit, busy, showQuickActions = false, selectedMode = 'general', onModeChange }) {
+export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmit, busy, locked = false, showQuickActions = false, selectedMode = 'general', onModeChange }) {
   const inputId = useId();
   const fileInput = useRef(null);
   const textInput = useRef(null);
@@ -20,14 +25,16 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
     serverAttachmentId: attachment.id,
     processingStatus: attachment.status,
     processingJobStatus: attachment.processing_job_status,
-    parseError: attachment.parse_error || '',
+    parseError: attachment.parse_error
+      ? toUserFacingAttachmentError(attachment.parse_error)
+      : '',
     qualityScore: attachment.quality_score,
     warnings: attachment.warnings || [],
     uploadedForComposer: !selection.existingAttachmentId && !attachment.reused,
   });
   const addIncomingFiles = async (incoming) => {
     if (!incoming.length) return;
-    if (busy || checkingFiles) {
+    if (locked || checkingFiles) {
       setFileError('현재 첨부파일을 처리하고 있습니다. 잠시 후 다시 시도해 주세요.');
       return;
     }
@@ -61,10 +68,14 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
         if (failed.length) setFileError(failed.map((file) => `${file.name}: ${file.parseError || evidenceFileStatusLabel(file)}`).join(' · '));
       }
     } catch (reason) {
-      setFileError(reason?.message || '파일의 중복 여부를 확인하지 못했습니다.');
+      const message = toUserFacingErrorMessage(
+        reason,
+        '파일을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.',
+      );
+      setFileError(message);
       onFilesChange(stagedFiles.map((file) => (
         file.processingStatus === 'uploading'
-          ? { ...file, processingStatus: 'upload_failed', parseError: reason?.message || '업로드에 실패했습니다.' }
+          ? { ...file, processingStatus: 'upload_failed', parseError: message }
           : file
       )));
     } finally {
@@ -116,7 +127,7 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
   };
 
   const retryFile = async (file) => {
-    if (busy || checkingFiles) return;
+    if (locked || checkingFiles) return;
     setCheckingFiles(true); setFileError('');
     onFilesChange(files.map((item) => (
       item === file ? { ...item, processingStatus: 'processing', parseError: '' } : item
@@ -130,15 +141,15 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
       ));
       onFilesChange(next);
       if (['failed', 'unsupported'].includes(attachment.status)) {
-        setFileError(`${file.name}: ${attachment.parse_error || '다시 처리하지 못했습니다.'}`);
+        setFileError(`${file.name}: ${toUserFacingAttachmentError(attachment.parse_error)}`);
       }
     } catch (reason) {
       onFilesChange(files.map((item) => (
         item === file
-          ? { ...item, processingStatus: 'upload_failed', parseError: reason?.message || '다시 처리하지 못했습니다.' }
+          ? { ...item, processingStatus: 'upload_failed', parseError: toUserFacingAttachmentError(reason) }
           : item
       )));
-      setFileError(reason?.message || '첨부 파일을 다시 처리하지 못했습니다.');
+      setFileError(toUserFacingAttachmentError(reason));
     } finally {
       setCheckingFiles(false);
     }
@@ -150,7 +161,10 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
       try {
         await v2ChatApi.deleteAttachment(file.serverAttachmentId);
       } catch (reason) {
-        setFileError(reason?.message || '서버에 임시 저장된 첨부 원본을 정리하지 못했습니다.');
+        setFileError(toUserFacingErrorMessage(
+          reason,
+          '첨부 파일을 목록에서 삭제했지만 서버 정리는 완료하지 못했어요. 잠시 후 다시 시도해 주세요.',
+        ));
       }
     }
   };
@@ -160,7 +174,7 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
       event.preventDefault();
       const unavailable = files.find((file) => !['ready', 'partial'].includes(file.processingStatus));
       if (unavailable) {
-        setFileError(`${unavailable.name}: 첨부 처리가 끝나거나 재시도에 성공한 뒤 전송할 수 있습니다.`);
+        setFileError(attachmentUnavailableMessage(unavailable));
         return;
       }
       onSubmit();
@@ -195,7 +209,7 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
           key={action.id}
           className={selectedMode === action.id ? 'is-active' : ''}
           aria-pressed={selectedMode === action.id}
-          disabled={busy}
+          disabled={locked}
           onClick={() => onModeChange?.(action.id)}
         >
           {action.title}
@@ -220,8 +234,8 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
         </span>
       </li>)}
     </ul>}
-    {fileError && <p className="v2-composer__error" role="alert">{fileError}</p>}
-    {fileNotice && <p className="v2-composer__file-notice" role="status">{fileNotice}</p>}
+    {fileError && <div className="v2-composer__error" role="alert"><span>{fileError}</span><button type="button" onClick={() => setFileError('')} aria-label="첨부 오류 닫기">×</button></div>}
+    {fileNotice && <div className="v2-composer__file-notice" role="status"><span>{fileNotice}</span><button type="button" onClick={() => setFileNotice('')} aria-label="첨부 안내 닫기">×</button></div>}
     <label className="sr-only" htmlFor={inputId}>Career Memory와 대화하기</label>
     <textarea
       ref={textInput}
@@ -236,11 +250,11 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
     <div className="v2-composer__tools">
       <div className="v2-composer__actions">
         <input ref={fileInput} className="sr-only" type="file" multiple accept={EVIDENCE_FILE_ACCEPT} onChange={addFiles} />
-        <button type="button" className="v2-icon-button" onClick={() => fileInput.current?.click()} disabled={busy || checkingFiles || files.length >= CHAT_ATTACHMENT_LIMITS.maxCount} aria-label="파일 첨부">{checkingFiles ? '…' : '＋'}</button>
-        <button type="button" className="v2-send-button" onClick={onSubmit} disabled={busy || checkingFiles || files.some((file) => !['ready', 'partial'].includes(file.processingStatus)) || (!text.trim() && files.length === 0)} aria-label="메시지 보내기">{busy || checkingFiles ? '…' : '↑'}</button>
+        <button type="button" className="v2-icon-button" onClick={() => fileInput.current?.click()} disabled={locked || checkingFiles || files.length >= CHAT_ATTACHMENT_LIMITS.maxCount} aria-label="파일 첨부">{checkingFiles ? '…' : '＋'}</button>
+        <button type="button" className="v2-send-button" onClick={onSubmit} disabled={locked || checkingFiles || files.some((file) => !['ready', 'partial'].includes(file.processingStatus)) || (!text.trim() && files.length === 0)} aria-label="메시지 보내기">{checkingFiles ? '…' : '↑'}</button>
       </div>
     </div>
-    <small className="v2-composer__hint">Enter로 전송 · 붙여넣기/드롭 지원 · 문서·이미지·음성·영상 최대 10개 · 파일당 25MiB·전체 100MiB</small>
+    <small className="v2-composer__hint">{busy ? '답변 중에도 이어서 전송할 수 있어요 · ' : ''}Enter로 전송 · 붙여넣기/드롭 지원 · 문서·이미지·음성·영상 최대 10개 · 파일당 25MiB·전체 100MiB</small>
     </div>
   </div>;
 }

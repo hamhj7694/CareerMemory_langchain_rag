@@ -3,6 +3,7 @@ import { createHttpAdapter } from './adapters/httpAdapter.js';
 import { normalizeApiError } from './AppError.js';
 import { toWireModel } from './modelMapper.js';
 import { getCsrfToken } from '../auth/authSession.js';
+import { toUserFacingAttachmentError } from './userFacingError.js';
 
 // 1. 실제 HTTP 요청 도구
 // 공통 Adapter가 base URL, JSON 변환, timeout, 오류 형식을 한곳에서 처리한다.
@@ -216,7 +217,11 @@ export async function* streamMessage(conversationId, input = {}) {
             .join('\n');
           if (!data) continue;
           const event = JSON.parse(data);
-          terminalEventReceived = ['message.completed', 'message.failed'].includes(event.type);
+          terminalEventReceived = [
+            'message.completed',
+            'message.failed',
+            'message.cancelled',
+          ].includes(event.type);
           yield event;
         }
         if (terminalEventReceived) return;
@@ -300,7 +305,7 @@ export async function uploadAttachments(selections = [], { throwOnFailure = true
   const failed = uploaded.filter((attachment) => ['failed', 'unsupported'].includes(attachment.status));
   if (throwOnFailure && failed.length) {
     const names = failed.map((attachment) => attachment.filename).join(', ');
-    const reason = failed[0].parse_error || '파일에서 분석 가능한 텍스트를 추출하지 못했습니다.';
+    const reason = toUserFacingAttachmentError(failed[0].parse_error);
     throw new Error(`${names}: ${reason}`);
   }
   return uploaded;
