@@ -7,13 +7,14 @@ import os
 import json
 import queue
 import threading
+import time
 from functools import lru_cache
 from uuid import uuid4
 
 # 2. FastAPI와 SQLAlchemy
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -28,6 +29,7 @@ from AI_Engine.database.schemas import (
     ConversationListResponse,
     ConversationResponse,
     ConversationUpdate,
+    MessageAttachmentReference,
     MessageCreate,
     MessageListResponse,
     MessageResponse,
@@ -51,6 +53,53 @@ CHAT_HISTORY_MESSAGE_LIMIT = max(
     0,
     int(os.getenv("CHAT_HISTORY_MESSAGE_LIMIT", "40")),
 )
+
+ACTIVE_ASSISTANT_STATUSES = ("queued", "processing", "streaming")
+SUPERSEDED_MESSAGE_ERROR = {
+    "code": "superseded_by_user",
+    "message": "새 메시지가 도착해 이전 답변 생성을 중단했습니다.",
+    "retryable": False,
+}
+
+
+def cancel_active_assistant_messages(
+    database: Session,
+    conversation_id: str,
+) -> list[str]:
+    """Cancel unfinished answers before accepting a newer user turn."""
+
+    active_messages = list(database.scalars(
+        select(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.role == "assistant",
+            Message.status.in_(ACTIVE_ASSISTANT_STATUSES),
+        )
+    ))
+    completed_at = utc_now()
+    for message in active_messages:
+        message.status = "cancelled"
+        message.error = dict(SUPERSEDED_MESSAGE_ERROR)
+        message.completed_at = completed_at
+    return [message.id for message in active_messages]
+
+
+def update_active_assistant(
+    database: Session,
+    assistant_id: str,
+    **values: object,
+) -> bool:
+    """Update a worker-owned answer only while it has not been cancelled."""
+
+    result = database.execute(
+        update(Message)
+        .where(
+            Message.id == assistant_id,
+            Message.status.in_(ACTIVE_ASSISTANT_STATUSES),
+        )
+        .values(**values)
+    )
+    database.commit()
+    return result.rowcount == 1
 
 
 # 5. 대화 ID 생성
@@ -507,6 +556,7 @@ def send_message(
             detail="같은 요청의 AI 처리가 아직 완료되지 않았습니다.",
         )
 
+    cancel_active_assistant_messages(database, conversation.id)
     user_sequence = conversation.message_count + 1
     user_message = Message(
         id=create_resource_id("MSG"),
@@ -665,30 +715,105 @@ def stream_message(
                 detail="같은 요청의 AI 처리가 아직 완료되지 않았습니다.",
             )
 
+        replay_session_factory = sessionmaker(
+            bind=database.get_bind(),
+            autoflush=False,
+            expire_on_commit=False,
+        )
+
         def replay_saved_message():
+            public_sequence = 1
             yield format_sse_event(
                 "message.accepted",
-                1,
+                public_sequence,
                 {
                     "type": "message.accepted",
-                    "sequence": 1,
+                    "sequence": public_sequence,
                     "user_message": MessageResponse.model_validate(
                         existing_user
                     ).model_dump(mode="json"),
                     "assistant_message_id": existing_assistant.id,
                 },
             )
-            yield format_sse_event(
-                "message.completed",
-                2,
-                {
-                    "type": "message.completed",
-                    "sequence": 2,
-                    "message": MessageResponse.model_validate(
-                        existing_assistant
-                    ).model_dump(mode="json"),
-                },
-            )
+            public_sequence += 1
+            last_content: str | None = None
+            with replay_session_factory() as replay_database:
+                while True:
+                    current = replay_database.get(Message, existing_assistant.id)
+                    if current is None:
+                        yield format_sse_event(
+                            "message.failed",
+                            public_sequence,
+                            {
+                                "type": "message.failed",
+                                "sequence": public_sequence,
+                                "message_id": existing_assistant.id,
+                                "error": {
+                                    "code": "message_not_found",
+                                    "message": "저장된 AI 답변 작업을 찾지 못했습니다.",
+                                    "retryable": True,
+                                },
+                            },
+                        )
+                        return
+                    replay_database.refresh(current)
+                    if current.content != last_content:
+                        last_content = current.content
+                        yield format_sse_event(
+                            "assistant.snapshot",
+                            public_sequence,
+                            {
+                                "type": "assistant.snapshot",
+                                "sequence": public_sequence,
+                                "message_id": current.id,
+                                "content": current.content,
+                            },
+                        )
+                        public_sequence += 1
+                    if current.status == "completed":
+                        yield format_sse_event(
+                            "message.completed",
+                            public_sequence,
+                            {
+                                "type": "message.completed",
+                                "sequence": public_sequence,
+                                "message": MessageResponse.model_validate(
+                                    current
+                                ).model_dump(mode="json"),
+                            },
+                        )
+                        return
+                    if current.status == "cancelled":
+                        yield format_sse_event(
+                            "message.cancelled",
+                            public_sequence,
+                            {
+                                "type": "message.cancelled",
+                                "sequence": public_sequence,
+                                "message_id": current.id,
+                                "error": current.error
+                                or dict(SUPERSEDED_MESSAGE_ERROR),
+                            },
+                        )
+                        return
+                    if current.status == "failed":
+                        yield format_sse_event(
+                            "message.failed",
+                            public_sequence,
+                            {
+                                "type": "message.failed",
+                                "sequence": public_sequence,
+                                "message_id": current.id,
+                                "error": current.error or {
+                                    "code": "chat_model_error",
+                                    "message": "AI 답변을 생성하지 못했습니다.",
+                                    "retryable": True,
+                                },
+                            },
+                        )
+                        return
+                    yield ": heartbeat\n\n"
+                    time.sleep(1)
 
         return StreamingResponse(
             replay_saved_message(),
@@ -696,6 +821,7 @@ def stream_message(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    cancel_active_assistant_messages(database, conversation.id)
     user_sequence = conversation.message_count + 1
     user_message = Message(
         id=create_resource_id("MSG"),
@@ -793,51 +919,90 @@ def stream_message(
                 return
 
             try:
-                for ai_event in chatbot.stream(ai_request):
-                    if ai_event.type == "token":
-                        delta = ai_event.text_delta or ""
-                        if not delta:
-                            continue
-                        answer_parts.append(delta)
+                ai_stream = chatbot.stream(ai_request)
+                try:
+                    for ai_event in ai_stream:
+                        if ai_event.type == "token":
+                            delta = ai_event.text_delta or ""
+                            if not delta:
+                                continue
+                            answer_parts.append(delta)
 
-                        # 중간 답변도 저장하므로 다른 화면에서 돌아왔을 때
-                        # 지금까지 생성된 내용을 다시 확인할 수 있다.
-                        saved_assistant.content = "".join(answer_parts)
-                        worker_database.commit()
-                        worker_events.put(("token", delta))
-                    elif ai_event.type == "error":
-                        saved_assistant.status = "failed"
-                        saved_assistant.error = ai_event.error.model_dump(
-                            mode="json"
-                        )
-                        saved_assistant.completed_at = utc_now()
-                        worker_database.commit()
-                        worker_events.put(
-                            ("error", saved_assistant.error)
-                        )
-                        return
-                    elif ai_event.type == "completed":
-                        completed_response = getattr(ai_event, "response", None)
+                            # 조건부 UPDATE를 사용해 새 사용자 메시지가 취소한
+                            # 답변을 이전 worker가 다시 덮어쓰지 못하게 한다.
+                            if not update_active_assistant(
+                                worker_database,
+                                assistant_id,
+                                content="".join(answer_parts),
+                            ):
+                                worker_events.put((
+                                    "cancelled",
+                                    dict(SUPERSEDED_MESSAGE_ERROR),
+                                ))
+                                return
+                            worker_events.put(("token", delta))
+                        elif ai_event.type == "error":
+                            error_payload = ai_event.error.model_dump(
+                                mode="json"
+                            )
+                            if not update_active_assistant(
+                                worker_database,
+                                assistant_id,
+                                status="failed",
+                                error=error_payload,
+                                completed_at=utc_now(),
+                            ):
+                                worker_events.put((
+                                    "cancelled",
+                                    dict(SUPERSEDED_MESSAGE_ERROR),
+                                ))
+                                return
+                            worker_events.put(("error", error_payload))
+                            return
+                        elif ai_event.type == "completed":
+                            completed_response = getattr(
+                                ai_event,
+                                "response",
+                                None,
+                            )
+                finally:
+                    close_stream = getattr(ai_stream, "close", None)
+                    if callable(close_stream):
+                        close_stream()
 
-                saved_assistant.content = "".join(answer_parts)
-                saved_assistant.status = "completed"
-                saved_assistant.resolved_intents = [resolved_intent]
+                citations = []
+                actions = []
                 if completed_response is not None:
-                    saved_assistant.citations = [
+                    citations = [
                         citation.model_dump(mode="json")
                         for citation in completed_response.citations
                     ]
-                    saved_assistant.actions = [
+                    actions = [
                         action.model_dump(mode="json")
                         for action in completed_response.suggested_actions
                     ]
-                saved_assistant.completed_at = utc_now()
+                if not update_active_assistant(
+                    worker_database,
+                    assistant_id,
+                    content="".join(answer_parts),
+                    status="completed",
+                    resolved_intents=[resolved_intent],
+                    citations=citations,
+                    actions=actions,
+                    completed_at=utc_now(),
+                ):
+                    worker_events.put((
+                        "cancelled",
+                        dict(SUPERSEDED_MESSAGE_ERROR),
+                    ))
+                    return
+
+                worker_database.refresh(saved_assistant)
                 saved_conversation.last_message_preview = (
                     saved_assistant.content[:300]
                 )
                 saved_conversation.version += 1
                 worker_database.commit()
-                worker_database.refresh(saved_assistant)
                 worker_events.put(
                     (
                         "completed",
@@ -847,15 +1012,24 @@ def stream_message(
                     )
                 )
             except Exception:
-                saved_assistant.status = "failed"
-                saved_assistant.error = {
+                error_payload = {
                     "code": "chat_model_error",
                     "message": "AI 답변을 생성하지 못했습니다.",
                     "retryable": True,
                 }
-                saved_assistant.completed_at = utc_now()
-                worker_database.commit()
-                worker_events.put(("error", saved_assistant.error))
+                if update_active_assistant(
+                    worker_database,
+                    assistant_id,
+                    status="failed",
+                    error=error_payload,
+                    completed_at=utc_now(),
+                ):
+                    worker_events.put(("error", error_payload))
+                else:
+                    worker_events.put((
+                        "cancelled",
+                        dict(SUPERSEDED_MESSAGE_ERROR),
+                    ))
 
     threading.Thread(
         target=generate_answer_in_background,
@@ -915,6 +1089,18 @@ def stream_message(
                     public_sequence,
                     {
                         "type": "message.failed",
+                        "sequence": public_sequence,
+                        "message_id": assistant_id,
+                        "error": payload,
+                    },
+                )
+                return
+            elif event_type == "cancelled":
+                yield format_sse_event(
+                    "message.cancelled",
+                    public_sequence,
+                    {
+                        "type": "message.cancelled",
                         "sequence": public_sequence,
                         "message_id": assistant_id,
                         "error": payload,
@@ -985,6 +1171,37 @@ def list_messages(
         )
     )
 
+    attachment_ids = list(dict.fromkeys(
+        attachment_id
+        for message in messages
+        for attachment_id in message.attachment_ids
+    ))
+    attachments_by_id = {
+        attachment.id: attachment
+        for attachment in database.scalars(
+            select(Attachment).where(
+                Attachment.user_id == current_user.id,
+                Attachment.id.in_(attachment_ids),
+            )
+        )
+    } if attachment_ids else {}
+
+    response_items: list[MessageResponse] = []
+    for message in messages:
+        response = MessageResponse.model_validate(message)
+        response.attachment_refs = [
+            MessageAttachmentReference(
+                id=attachment_id,
+                filename=(
+                    attachments_by_id[attachment_id].filename
+                    if attachment_id in attachments_by_id
+                    else attachment_id
+                ),
+            )
+            for attachment_id in message.attachment_ids
+        ]
+        response_items.append(response)
+
     next_offset = offset + len(messages)
     next_cursor = (
         str(next_offset)
@@ -992,10 +1209,7 @@ def list_messages(
         else None
     )
     return MessageListResponse(
-        items=[
-            MessageResponse.model_validate(message)
-            for message in messages
-        ],
+        items=response_items,
         total_count=total_count or 0,
         next_cursor=next_cursor,
     )

@@ -24,6 +24,7 @@ from AI_Engine.database.models import (
     User,
     utc_now,
 )
+from AI_Engine.evidence_repository import sync_experience_evidence
 from AI_Engine.experience_ai import (
     ExperienceAI,
     ExperienceAIInputError,
@@ -273,6 +274,7 @@ def add_text_source(
     refs = _source_refs(experience)
     refs.append(source)
     _touch_sources(experience, refs)
+    sync_experience_evidence(database, experience)
     database.commit()
     return {
         **_source_payload(experience),
@@ -314,6 +316,7 @@ def attach_file_sources(
         added_source_ids.append(source_id)
     if added_source_ids:
         _touch_sources(experience, refs)
+        sync_experience_evidence(database, experience)
         database.commit()
     return {
         **_source_payload(experience),
@@ -349,6 +352,7 @@ def update_text_source(
     source["text"] = text
     source["updated_at"] = utc_now().isoformat()
     _touch_sources(experience, refs)
+    sync_experience_evidence(database, experience)
     database.commit()
     return {
         **source,
@@ -375,6 +379,7 @@ def unlink_source(
             detail="현재 경험에 연결된 원본 근거가 아닙니다.",
         )
     _touch_sources(experience, remaining)
+    sync_experience_evidence(database, experience)
     database.commit()
     return {
         **_source_payload(experience),
@@ -496,6 +501,8 @@ def reorganize_from_sources(
     )
     created.project = source_experience.project
     database.add(created)
+    database.flush()
+    sync_experience_evidence(database, created)
     database.commit()
     database.refresh(created)
     return {

@@ -9,7 +9,7 @@ import socket
 import unicodedata
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from AI_Engine.blob_store import (
@@ -192,7 +192,7 @@ class AttachmentService:
             return job
         if job.status == "failed":
             return job
-        if job.attempt_count >= job.max_attempts:
+        if job.status != "processing" and job.attempt_count >= job.max_attempts:
             job.status = "failed"
             job.error_code = "MAX_ATTEMPTS_EXCEEDED"
             job.error_message = "파일 처리 최대 재시도 횟수를 초과했습니다."
@@ -202,12 +202,19 @@ class AttachmentService:
             database.commit()
             return job
 
-        job.status = "processing"
-        job.attempt_count += 1
-        job.worker_id = worker_id or f"{socket.gethostname()}:{uuid4().hex[:8]}"
-        job.lease_until = utc_now() + timedelta(minutes=5)
-        job.error_code = None
-        job.error_message = None
+        resolved_worker_id = worker_id or f"{socket.gethostname()}:{uuid4().hex[:8]}"
+        if job.status == "processing":
+            if job.worker_id and job.worker_id != resolved_worker_id:
+                raise FileInputError("다른 worker가 이미 처리 중인 파일 작업입니다.")
+            job.worker_id = resolved_worker_id
+            job.lease_until = utc_now() + timedelta(minutes=5)
+        else:
+            job.status = "processing"
+            job.attempt_count += 1
+            job.worker_id = resolved_worker_id
+            job.lease_until = utc_now() + timedelta(minutes=5)
+            job.error_code = None
+            job.error_message = None
         attachment.parse_status = "processing"
         attachment.parse_error = None
         database.commit()
@@ -307,6 +314,58 @@ class AttachmentService:
             )
             .order_by(FileProcessingJob.created_at.asc())
         )
+
+    def claim_next_queued_job(
+        self,
+        database: Session,
+        *,
+        worker_id: str,
+        lease_minutes: int = 5,
+    ) -> FileProcessingJob | None:
+        """대기 작업 하나를 단일 UPDATE로 원자적으로 점유한다."""
+
+        now = utc_now()
+        candidate = (
+            select(FileProcessingJob.id)
+            .where(
+                FileProcessingJob.status == "queued",
+                FileProcessingJob.available_at <= now,
+                FileProcessingJob.attempt_count < FileProcessingJob.max_attempts,
+            )
+            .order_by(FileProcessingJob.created_at.asc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        claimed_id = database.scalar(
+            update(FileProcessingJob)
+            .where(
+                FileProcessingJob.id == candidate,
+                FileProcessingJob.status == "queued",
+            )
+            .values(
+                status="processing",
+                attempt_count=FileProcessingJob.attempt_count + 1,
+                worker_id=worker_id,
+                lease_until=now + timedelta(minutes=max(1, lease_minutes)),
+                error_code=None,
+                error_message=None,
+            )
+            .returning(FileProcessingJob.id)
+        )
+        if claimed_id is None:
+            database.rollback()
+            return None
+        job = database.get(FileProcessingJob, claimed_id)
+        if job is None:
+            database.rollback()
+            return None
+        attachment = database.get(Attachment, job.attachment_id)
+        if attachment is not None:
+            attachment.parse_status = "processing"
+            attachment.parse_error = None
+        database.commit()
+        database.refresh(job)
+        return job
 
     def delete_blob(self, attachment: Attachment) -> None:
         if attachment.storage_backend == "local" and attachment.storage_key:

@@ -115,6 +115,38 @@ class AttachmentPipelineTests(unittest.TestCase):
             self.assertEqual(second.job.status, "failed")
             self.assertEqual(second.job.error_code, "MAX_ATTEMPTS_EXCEEDED")
 
+    def test_worker_claim_is_atomic_and_does_not_double_increment_attempt(self) -> None:
+        with self.session_factory() as database:
+            ingested = self.service.ingest(
+                database,
+                user_id="USER-1",
+                filename="atomic.txt",
+                mime_type="text/plain",
+                content=b"atomic claim",
+            )
+
+            claimed = self.service.claim_next_queued_job(
+                database,
+                worker_id="worker-1",
+            )
+            duplicate = self.service.claim_next_queued_job(
+                database,
+                worker_id="worker-2",
+            )
+
+            self.assertEqual(claimed.id, ingested.job.id)
+            self.assertEqual(claimed.status, "processing")
+            self.assertEqual(claimed.attempt_count, 1)
+            self.assertIsNone(duplicate)
+
+            completed = self.service.process_job(
+                database,
+                claimed.id,
+                worker_id="worker-1",
+            )
+            self.assertEqual(completed.status, "completed")
+            self.assertEqual(completed.attempt_count, 1)
+
     def test_stt_segments_are_persisted_with_timestamps(self) -> None:
         extracted = FileExtractionResult(
             filename="meeting.wav",

@@ -188,6 +188,92 @@ describe('실제 대화 HTTP API', () => {
     );
   });
 
+  it('새 사용자 메시지로 취소된 스트림을 정상 종료 이벤트로 처리한다', async () => {
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async () => new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(
+            'event: message.cancelled\ndata: {"type":"message.cancelled","sequence":2,"message_id":"MSG-OLD","error":{"code":"superseded_by_user"}}\n\n'
+          ));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const events = [];
+    for await (const event of v2ChatHttpApi.streamMessage('CONV-001', {
+      content: '이어서 말할게',
+      reconnect_attempts: 1,
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'message.cancelled',
+        message_id: 'MSG-OLD',
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('SSE가 완료 전에 끊기면 같은 요청 ID로 재연결해 저장된 스냅샷을 받는다', async () => {
+    const encoder = new TextEncoder();
+    const responseFromFrames = (frames) => new Response(
+      new ReadableStream({
+        start(controller) {
+          frames.forEach((frame) => controller.enqueue(encoder.encode(frame)));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    );
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseFromFrames([
+        'event: message.accepted\ndata: {"type":"message.accepted","sequence":1,"assistant_message_id":"MSG-AI"}\n\n',
+        'event: assistant.delta\ndata: {"type":"assistant.delta","sequence":2,"message_id":"MSG-AI","delta":"일부"}\n\n',
+      ]))
+      .mockResolvedValueOnce(responseFromFrames([
+        'event: message.accepted\ndata: {"type":"message.accepted","sequence":1,"assistant_message_id":"MSG-AI"}\n\n',
+        'event: assistant.snapshot\ndata: {"type":"assistant.snapshot","sequence":2,"message_id":"MSG-AI","content":"전체 답변"}\n\n',
+        'event: message.completed\ndata: {"type":"message.completed","sequence":3,"message":{"id":"MSG-AI","content":"전체 답변"}}\n\n',
+      ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const events = [];
+    for await (const event of v2ChatHttpApi.streamMessage('CONV-001', {
+      content: '재연결해줘',
+      intent: 'auto',
+      client_request_id: 'request-reconnect',
+      reconnect_attempts: 1,
+    })) {
+      events.push(event);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events.map((event) => event.type)).toEqual([
+      'message.accepted',
+      'assistant.delta',
+      'message.accepted',
+      'assistant.snapshot',
+      'message.completed',
+    ]);
+    expect(events[3].content).toBe('전체 답변');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).client_request_id)
+      .toBe('request-reconnect');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).client_request_id)
+      .toBe('request-reconnect');
+  });
+
   it('URL에 들어가는 대화 ID를 안전하게 인코딩한다', async () => {
     await v2ChatHttpApi.getConversation('CONV/한글');
 
@@ -279,6 +365,8 @@ describe('실제 대화 HTTP API', () => {
         file: new File(['image'], 'scan.png', { type: 'image/png' }),
         contentHash: 'a'.repeat(64),
       },
-    ])).rejects.toThrow('scan.png: Tesseract 실행 파일을 찾을 수 없습니다.');
+    ])).rejects.toThrow(
+      'scan.png: 이미지의 글자를 읽지 못했어요. 더 선명한 이미지로 다시 시도하거나 PDF·텍스트 파일을 첨부해 주세요.',
+    );
   });
 });

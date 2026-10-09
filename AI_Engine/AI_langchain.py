@@ -67,23 +67,37 @@ class CareerMemoryAI:
         stored_history: Sequence[Message],
         mode_hint: str = "general",
     ) -> PreparedChatRequest:
+        pending_user_messages = _trailing_user_messages(stored_history)
+        history_before_pending = (
+            list(stored_history[:-len(pending_user_messages)])
+            if pending_user_messages
+            else list(stored_history)
+        )
+        combined_content = _combined_user_content(
+            pending_user_messages,
+            user_message,
+        )
+        combined_attachment_ids = _combined_user_attachment_ids(
+            pending_user_messages,
+            user_message,
+        )
         context_attachment_ids = _conversation_attachment_ids(
-            current_attachment_ids=user_message.attachment_ids,
+            current_attachment_ids=combined_attachment_ids,
             stored_history=stored_history,
         )
         attachments = self._attachment_context(
             database,
             current_user.id,
             context_attachment_ids,
-            query=user_message.content,
-            current_attachment_ids=set(user_message.attachment_ids),
+            query=combined_content,
+            current_attachment_ids=set(combined_attachment_ids),
         )
         route_request = AIRouteRequest(
             request_id=user_message.client_request_id or user_message.id,
             request_type=_request_type(user_message.requested_intent),
             conversation_id=conversation.id,
-            text=user_message.content,
-            attachment_ids=user_message.attachment_ids,
+            text=combined_content,
+            attachment_ids=combined_attachment_ids,
             attachment_context=_routing_attachment_context(attachments),
         )
         if route_request.request_type == AIRequestType.AUTO:
@@ -111,8 +125,12 @@ class CareerMemoryAI:
         summary, recent_history = self.memory_manager.prepare(
             database,
             conversation,
-            stored_history,
-            before_sequence=user_message.sequence,
+            history_before_pending,
+            before_sequence=(
+                pending_user_messages[0].sequence
+                if pending_user_messages
+                else user_message.sequence
+            ),
         )
         history_models = [
             ChatMessage(
@@ -133,7 +151,7 @@ class CareerMemoryAI:
         history_models = fit_history(history_models)
 
         retrieval_query = _retrieval_query(
-            user_message.content,
+            combined_content,
             attachments,
         )
         experiences = retrieve_experience_context(
@@ -158,7 +176,7 @@ class CareerMemoryAI:
             evidence=evidence,
             base_sections={
                 "system_prompt": 1_500,
-                "current_message": estimate_tokens(user_message.content),
+                "current_message": estimate_tokens(combined_content),
                 "recent_history": sum(
                     estimate_tokens(message.content)
                     for message in history_models
@@ -175,8 +193,8 @@ class CareerMemoryAI:
             mode=ChatMode.CHAT,
             mode_hint=mode_hint,
             routed_intent=route.route,
-            content=user_message.content,
-            attachment_ids=user_message.attachment_ids,
+            content=combined_content,
+            attachment_ids=combined_attachment_ids,
             user_display_name=current_user.display_name,
             history=history_models,
             context=context,
@@ -274,6 +292,48 @@ def _routing_attachment_context(
         "\n\n".join(previews),
         budget=2_500,
     )
+
+
+def _trailing_user_messages(
+    stored_history: Sequence[Message],
+) -> list[Message]:
+    """Return consecutive user turns that have no completed assistant reply."""
+
+    pending: list[Message] = []
+    for message in reversed(stored_history):
+        if message.role != "user":
+            break
+        pending.append(message)
+    pending.reverse()
+    return pending
+
+
+def _combined_user_content(
+    pending_messages: Sequence[Message],
+    current_message: Message,
+) -> str:
+    """Preserve each raw message while presenting the burst as one model turn."""
+
+    parts = [
+        message.content.strip()
+        for message in [*pending_messages, current_message]
+        if message.content.strip()
+    ]
+    return "\n".join(parts)
+
+
+def _combined_user_attachment_ids(
+    pending_messages: Sequence[Message],
+    current_message: Message,
+) -> list[str]:
+    """Keep attachments from every unanswered user turn in stable order."""
+
+    attachment_ids: list[str] = []
+    for message in [*pending_messages, current_message]:
+        for attachment_id in message.attachment_ids:
+            if attachment_id not in attachment_ids:
+                attachment_ids.append(attachment_id)
+    return attachment_ids
 
 
 def _conversation_attachment_ids(

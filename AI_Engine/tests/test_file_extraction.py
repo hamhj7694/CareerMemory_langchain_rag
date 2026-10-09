@@ -20,7 +20,13 @@ from AI_Engine.file_extraction.metrics import (
     numeric_token_recall,
     word_error_rate,
 )
-from AI_Engine.file_extraction.ocr import get_ocr_capability, run_ocr
+from AI_Engine.file_extraction.ocr import (
+    OCRResult,
+    _candidate_selection_score,
+    _table_row_ranges,
+    get_ocr_capability,
+    run_ocr,
+)
 
 
 def zip_bytes(files: dict[str, str | bytes]) -> bytes:
@@ -209,6 +215,40 @@ class FileExtractionTests(unittest.TestCase):
         self.assertGreater(character_error_rate(expected, actual), 0)
         self.assertGreater(word_error_rate(expected, actual), 0)
         self.assertEqual(numeric_token_recall(expected, actual), 2 / 3)
+
+    def test_ocr_candidate_selection_penalizes_short_high_confidence_result(self) -> None:
+        short = OCRResult(
+            text="영역 지표",
+            confidence=0.95,
+            profile="--psm 6",
+            word_boxes=(),
+        )
+        complete = OCRResult(
+            text=(
+                "맥락 피처 재현율 41.45% 68.0% +26.55%p\n"
+                "수치 피처 재현율 23.59% 52.0% +28.41%p"
+            ),
+            confidence=0.82,
+            profile="--psm 4",
+            word_boxes=(),
+        )
+        longest = len(complete.text.replace(" ", "").replace("\n", ""))
+
+        self.assertGreater(
+            _candidate_selection_score(complete, longest),
+            _candidate_selection_score(short, longest),
+        )
+
+    def test_table_row_ranges_detect_repeated_horizontal_separators(self) -> None:
+        image = Image.new("RGB", (1_000, 700), "white")
+        draw = ImageDraw.Draw(image)
+        for y in (100, 200, 300, 400, 500, 600):
+            draw.rectangle((0, y, 999, y + 2), fill="black")
+
+        ranges = _table_row_ranges(image)
+
+        self.assertGreaterEqual(len(ranges), 5)
+        self.assertTrue(all(bottom > top for top, bottom in ranges))
 
     def test_real_ocr_smoke_when_runtime_is_available(self) -> None:
         capability = get_ocr_capability()

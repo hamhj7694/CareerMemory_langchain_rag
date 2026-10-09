@@ -29,7 +29,7 @@ export function AccountPage() {
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [form, setForm] = useState({
     current_password: '',
-    recovery_question: RECOVERY_QUESTIONS[0].value,
+    recovery_question: user?.recovery_question || RECOVERY_QUESTIONS[0].value,
     recovery_answer: '',
   });
   const [message, setMessage] = useState('');

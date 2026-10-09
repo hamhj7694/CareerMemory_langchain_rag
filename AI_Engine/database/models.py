@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 # 2. SQLAlchemy 컬럼과 관계 기능
 from sqlalchemy import (
+    Boolean,
     JSON,
     CheckConstraint,
     DateTime,
@@ -443,6 +444,299 @@ class TranscriptionSegment(Base):
     )
 
 
+class OntologyConcept(Base):
+    """표준 기술 개념. 사용자 원문과 분리된 전역 Silver 데이터다."""
+
+    __tablename__ = "ontology_concepts"
+    __table_args__ = (
+        UniqueConstraint(
+            "concept_type",
+            "normalization_key",
+            name="uq_ontology_concepts_type_key",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'deprecated')",
+            name="ck_ontology_concepts_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    concept_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="skill", index=True
+    )
+    canonical_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    normalization_key: Mapped[str] = mapped_column(String(250), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", index=True
+    )
+    ontology_version: Mapped[str] = mapped_column(
+        String(100), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class OntologyAlias(Base):
+    """표준 개념으로 안전하게 귀속된 표기 별칭."""
+
+    __tablename__ = "ontology_aliases"
+    __table_args__ = (
+        UniqueConstraint(
+            "normalization_key",
+            "locale",
+            name="uq_ontology_aliases_key_locale",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    concept_id: Mapped[str] = mapped_column(
+        ForeignKey("ontology_concepts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    alias: Mapped[str] = mapped_column(String(200), nullable=False)
+    locale: Mapped[str] = mapped_column(String(20), nullable=False, default="und")
+    normalization_key: Mapped[str] = mapped_column(String(250), nullable=False)
+    provenance: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="curated"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class OntologyRelation(Base):
+    """개념 간 관계와 최종 매칭 허용 범위를 명시한다."""
+
+    __tablename__ = "ontology_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_concept_id",
+            "relation_type",
+            "target_concept_id",
+            name="uq_ontology_relations_edge",
+        ),
+        CheckConstraint(
+            "relation_type IN "
+            "('alias_of', 'related_to', 'broader_than', 'narrower_than')",
+            name="ck_ontology_relations_type",
+        ),
+        CheckConstraint(
+            "matching_policy IN ('satisfies', 'candidate_only', 'explicit_only')",
+            name="ck_ontology_relations_policy",
+        ),
+        CheckConstraint(
+            "source_concept_id <> target_concept_id",
+            name="ck_ontology_relations_no_self_edge",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    source_concept_id: Mapped[str] = mapped_column(
+        ForeignKey("ontology_concepts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    relation_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    target_concept_id: Mapped[str] = mapped_column(
+        ForeignKey("ontology_concepts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    matching_policy: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="candidate_only"
+    )
+    provenance: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="curated"
+    )
+    ontology_version: Mapped[str] = mapped_column(
+        String(100), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class EvidenceDocument(Base):
+    """기존 source_ref를 원본 레코드까지 연결하는 영속 Evidence 문서."""
+
+    __tablename__ = "evidence_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "source_type",
+            "source_record_id",
+            "content_hash",
+            name="uq_evidence_documents_source_hash",
+        ),
+        Index(
+            "ix_evidence_documents_user_source",
+            "user_id",
+            "source_type",
+            "source_record_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_record_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    legacy_source_ref_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    original_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    parser_version: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="source-ref-v1"
+    )
+    parse_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="ready"
+    )
+    evidence_version: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="evidence-v1"
+    )
+    is_stale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class EvidenceChunk(Base):
+    """Evidence 문서의 위치 보존 검색 단위."""
+
+    __tablename__ = "evidence_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "chunk_index",
+            "content_hash",
+            name="uq_evidence_chunks_document_index_hash",
+        ),
+        Index(
+            "ix_evidence_chunks_document_current",
+            "document_id",
+            "is_stale",
+            "chunk_index",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("evidence_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chunker_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_stale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class EvidenceExperienceLink(Base):
+    """확정 경험이 현재 사용하는 Evidence 문서를 연결하는 내부 projection."""
+
+    __tablename__ = "evidence_experience_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "experience_id",
+            "document_id",
+            name="uq_evidence_experience_links_pair",
+        ),
+        Index(
+            "ix_evidence_experience_links_user_document",
+            "user_id",
+            "document_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    experience_id: Mapped[str] = mapped_column(
+        ForeignKey("experiences.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("evidence_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class EmbeddingRecord(Base):
+    """재생성 가능한 벡터의 해시·모델·인덱스 버전 기록."""
+
+    __tablename__ = "embedding_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_type",
+            "target_id",
+            "provider",
+            "model",
+            "index_version",
+            "content_hash",
+            name="uq_embedding_records_target_version_hash",
+        ),
+        Index(
+            "ix_embedding_records_user_status",
+            "user_id",
+            "target_type",
+            "status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(150), nullable=False)
+    dimensions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    index_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    collection_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    vector_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="current", index=True
+    )
+    indexed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    stale_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 # 7. 메시지 테이블
 # AI 연결 전에도 사용자·assistant 메시지의 순서와 처리 상태를 일관되게 저장할 수 있다.
 class Message(Base):
@@ -709,6 +1003,10 @@ __all__ = [
     "AuthSession",
     "Conversation",
     "ConversationMemory",
+    "EmbeddingRecord",
+    "EvidenceChunk",
+    "EvidenceDocument",
+    "EvidenceExperienceLink",
     "Experience",
     "ExperienceDomain",
     "ExperienceDraftTrash",
@@ -716,6 +1014,9 @@ __all__ = [
     "FileProcessingJob",
     "JobAnalysisRecord",
     "Message",
+    "OntologyAlias",
+    "OntologyConcept",
+    "OntologyRelation",
     "TranscriptionSegment",
     "User",
     "utc_now",

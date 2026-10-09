@@ -55,6 +55,9 @@ def error_response(
 def get_request_id(request: Request) -> str:
     """요청 헤더의 ID를 사용하거나 서버에서 새 추적 ID를 만든다."""
 
+    state_id = str(getattr(request.state, "request_id", "") or "").strip()
+    if state_id:
+        return state_id
     header_id = request.headers.get("X-Request-ID", "").strip()
     return header_id or str(uuid4())
 

@@ -2,7 +2,7 @@
 // 개발 중 API가 localhost를 사용한다면 프론트 주소도 localhost로 통일한다.
 export function getCanonicalDevelopmentUrl(currentUrl, apiBaseUrl) {
   const current = new URL(currentUrl);
-  const api = new URL(apiBaseUrl);
+  const api = apiBaseUrl === 'same-origin' ? current : new URL(apiBaseUrl);
   if (current.hostname !== '127.0.0.1' || api.hostname !== 'localhost') {
     return null;
   }

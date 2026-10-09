@@ -3,6 +3,7 @@ import { createHttpAdapter } from './adapters/httpAdapter.js';
 import { normalizeApiError } from './AppError.js';
 import { toWireModel } from './modelMapper.js';
 import { getCsrfToken } from '../auth/authSession.js';
+import { toUserFacingAttachmentError } from './userFacingError.js';
 
 // 1. 실제 HTTP 요청 도구
 // 공통 Adapter가 base URL, JSON 변환, timeout, 오류 형식을 한곳에서 처리한다.
@@ -150,65 +151,95 @@ export function sendMessage(conversationId, input = {}) {
 // 8. 실시간 대화 메시지 전송
 // fetch의 응답 본문을 직접 읽어 SSE의 data JSON을 이벤트 하나씩 화면에 전달한다.
 export async function* streamMessage(conversationId, input = {}) {
-  const response = await fetch(
-    `${apiConfig.baseUrl}/api/v2/conversations/${encodeURIComponent(conversationId)}/messages/stream`,
-    {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-        'X-CSRF-Token': getCsrfToken(),
-      },
-      body: JSON.stringify(toWireModel({
-        content: input.content || '',
-        intent: input.intent || 'auto',
-        mode_hint: input.mode_hint || 'general',
-        attachment_ids: input.attachment_ids || [],
-        context: input.context || {
-          experience_ids: [],
-          job_id: null,
-          selected_proposal_id: null,
-        },
-        response_mode: 'stream',
-        client_request_id: input.client_request_id || createRequestId(),
-      })),
-      signal: input.signal,
+  const clientRequestId = input.client_request_id || createRequestId();
+  const requestBody = JSON.stringify(toWireModel({
+    content: input.content || '',
+    intent: input.intent || 'auto',
+    mode_hint: input.mode_hint || 'general',
+    attachment_ids: input.attachment_ids || [],
+    context: input.context || {
+      experience_ids: [],
+      job_id: null,
+      selected_proposal_id: null,
     },
-  );
+    response_mode: 'stream',
+    client_request_id: clientRequestId,
+  }));
+  const maxReconnectAttempts = Math.max(0, input.reconnect_attempts ?? 1);
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => undefined);
-    throw normalizeApiError(payload, response.status);
-  }
-  if (!response.body) {
-    throw normalizeApiError({
-      error: {
-        code: 'INVALID_RESPONSE',
-        message: '스트리밍 응답 본문이 없습니다.',
-      },
-    }, response.status);
-  }
+  for (let attempt = 0; attempt <= maxReconnectAttempts; attempt += 1) {
+    try {
+      const response = await fetch(
+        `${apiConfig.baseUrl}/api/v2/conversations/${encodeURIComponent(conversationId)}/messages/stream`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+            'X-CSRF-Token': getCsrfToken(),
+          },
+          body: requestBody,
+          signal: input.signal,
+        },
+      );
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+      if (!response.ok) {
+        const payload = await response.json().catch(() => undefined);
+        throw normalizeApiError(payload, response.status);
+      }
+      if (!response.body) {
+        throw normalizeApiError({
+          error: {
+            code: 'INVALID_RESPONSE',
+            message: '스트리밍 응답 본문이 없습니다.',
+            retryable: true,
+          },
+        }, response.status);
+      }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() || '';
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let terminalEventReceived = false;
 
-    for (const frame of frames) {
-      const data = frame
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n');
-      if (data) yield JSON.parse(data);
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() || '';
+
+        for (const frame of frames) {
+          const data = frame
+            .split('\n')
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trimStart())
+            .join('\n');
+          if (!data) continue;
+          const event = JSON.parse(data);
+          terminalEventReceived = [
+            'message.completed',
+            'message.failed',
+            'message.cancelled',
+          ].includes(event.type);
+          yield event;
+        }
+        if (terminalEventReceived) return;
+        if (done) break;
+      }
+      throw normalizeApiError({
+        error: {
+          code: 'STREAM_INTERRUPTED',
+          message: '스트리밍 연결이 완료 전에 종료되었습니다.',
+          retryable: true,
+        },
+      }, 503);
+    } catch (error) {
+      if (input.signal?.aborted || attempt >= maxReconnectAttempts || error?.retryable === false) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
     }
-    if (done) break;
   }
 }
 
@@ -274,7 +305,7 @@ export async function uploadAttachments(selections = [], { throwOnFailure = true
   const failed = uploaded.filter((attachment) => ['failed', 'unsupported'].includes(attachment.status));
   if (throwOnFailure && failed.length) {
     const names = failed.map((attachment) => attachment.filename).join(', ');
-    const reason = failed[0].parse_error || '파일에서 분석 가능한 텍스트를 추출하지 못했습니다.';
+    const reason = toUserFacingAttachmentError(failed[0].parse_error);
     throw new Error(`${names}: ${reason}`);
   }
   return uploaded;

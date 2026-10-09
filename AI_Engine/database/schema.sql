@@ -198,3 +198,127 @@ CREATE TABLE IF NOT EXISTS transcription_segments (
 
 CREATE INDEX IF NOT EXISTS ix_transcription_segments_attachment_id
     ON transcription_segments (attachment_id);
+
+-- Silver: 경량 기술 온톨로지. alias/relation 행 ID는 내부 전용이다.
+CREATE TABLE IF NOT EXISTS ontology_concepts (
+    id VARCHAR(100) PRIMARY KEY,
+    concept_type VARCHAR(50) NOT NULL DEFAULT 'skill',
+    canonical_name VARCHAR(200) NOT NULL,
+    normalization_key VARCHAR(250) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    ontology_version VARCHAR(100) NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    CONSTRAINT uq_ontology_concepts_type_key
+        UNIQUE (concept_type, normalization_key),
+    CONSTRAINT ck_ontology_concepts_status
+        CHECK (status IN ('active', 'deprecated'))
+);
+
+CREATE TABLE IF NOT EXISTS ontology_aliases (
+    id VARCHAR(100) PRIMARY KEY,
+    concept_id VARCHAR(100) NOT NULL,
+    alias VARCHAR(200) NOT NULL,
+    locale VARCHAR(20) NOT NULL DEFAULT 'und',
+    normalization_key VARCHAR(250) NOT NULL,
+    provenance VARCHAR(100) NOT NULL DEFAULT 'curated',
+    created_at DATETIME NOT NULL,
+    CONSTRAINT uq_ontology_aliases_key_locale
+        UNIQUE (normalization_key, locale),
+    FOREIGN KEY (concept_id) REFERENCES ontology_concepts (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ontology_relations (
+    id VARCHAR(120) PRIMARY KEY,
+    source_concept_id VARCHAR(100) NOT NULL,
+    relation_type VARCHAR(30) NOT NULL,
+    target_concept_id VARCHAR(100) NOT NULL,
+    matching_policy VARCHAR(30) NOT NULL DEFAULT 'candidate_only',
+    provenance VARCHAR(100) NOT NULL DEFAULT 'curated',
+    ontology_version VARCHAR(100) NOT NULL,
+    created_at DATETIME NOT NULL,
+    CONSTRAINT uq_ontology_relations_edge
+        UNIQUE (source_concept_id, relation_type, target_concept_id),
+    FOREIGN KEY (source_concept_id) REFERENCES ontology_concepts (id) ON DELETE CASCADE,
+    FOREIGN KEY (target_concept_id) REFERENCES ontology_concepts (id) ON DELETE CASCADE
+);
+
+-- Silver: 기존 source_ref와 exact quote를 원본까지 잇는 Evidence 계층.
+CREATE TABLE IF NOT EXISTS evidence_documents (
+    id VARCHAR(100) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    source_type VARCHAR(50) NOT NULL,
+    source_record_id VARCHAR(100) NOT NULL,
+    legacy_source_ref_id VARCHAR(100),
+    title VARCHAR(300) NOT NULL DEFAULT '',
+    original_text TEXT,
+    storage_key TEXT,
+    content_hash VARCHAR(64) NOT NULL,
+    parser_version VARCHAR(100) NOT NULL DEFAULT 'source-ref-v1',
+    parse_status VARCHAR(20) NOT NULL DEFAULT 'ready',
+    evidence_version VARCHAR(100) NOT NULL DEFAULT 'evidence-v1',
+    is_stale BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    CONSTRAINT uq_evidence_documents_source_hash
+        UNIQUE (user_id, source_type, source_record_id, content_hash),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS evidence_chunks (
+    id VARCHAR(120) PRIMARY KEY,
+    document_id VARCHAR(100) NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    chunker_version VARCHAR(100) NOT NULL,
+    is_stale BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    CONSTRAINT uq_evidence_chunks_document_index_hash
+        UNIQUE (document_id, chunk_index, content_hash),
+    FOREIGN KEY (document_id) REFERENCES evidence_documents (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS evidence_experience_links (
+    id VARCHAR(120) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    experience_id VARCHAR(50) NOT NULL,
+    document_id VARCHAR(100) NOT NULL,
+    created_at DATETIME NOT NULL,
+    CONSTRAINT uq_evidence_experience_links_pair
+        UNIQUE (experience_id, document_id),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (experience_id) REFERENCES experiences (id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES evidence_documents (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS embedding_records (
+    id VARCHAR(120) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    target_type VARCHAR(50) NOT NULL,
+    target_id VARCHAR(120) NOT NULL,
+    provider VARCHAR(50) NOT NULL,
+    model VARCHAR(150) NOT NULL,
+    dimensions INTEGER,
+    content_hash VARCHAR(64) NOT NULL,
+    index_version VARCHAR(100) NOT NULL,
+    collection_name VARCHAR(150) NOT NULL,
+    vector_id VARCHAR(150) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'current',
+    indexed_at DATETIME NOT NULL,
+    stale_at DATETIME,
+    CONSTRAINT uq_embedding_records_target_version_hash
+        UNIQUE (
+            target_type,
+            target_id,
+            provider,
+            model,
+            index_version,
+            content_hash
+        ),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);

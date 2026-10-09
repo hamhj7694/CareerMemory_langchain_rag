@@ -37,6 +37,7 @@ class SkillMention(SchemaModel):
     source_ref_id: Identifier | None = None
     quote: str = ""
     confidence: Confidence | None = None
+    ontology_version: Identifier | None = None
 
     @field_validator("raw_name")
     @classmethod
@@ -153,6 +154,9 @@ class SkillMatchEvidence(SchemaModel):
     relationship: SkillMatchType
     requirement_raw_name: str
     experience_raw_name: str
+    matching_policy: str = "candidate_only"
+    satisfies_requirement: bool = False
+    ontology_version: Identifier | None = None
 
 
 __all__ = [

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
+from typing import get_args
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -24,6 +27,9 @@ from AI_Engine.auth.schemas import (
     PasswordChangeRequest,
     PasswordResetRequest,
     ProfileUpdateRequest,
+    RecoveryQuestion,
+    RecoveryQuestionLookupRequest,
+    RecoveryQuestionResponse,
     RecoveryQuestionSetupRequest,
     RegisterRequest,
     UserResponse,
@@ -49,10 +55,23 @@ from AI_Engine.database.models import (
 router = APIRouter(prefix="/api/v2/auth", tags=["auth"])
 SESSION_LIFETIME_HOURS = int(os.getenv("SESSION_LIFETIME_HOURS", "168"))
 COOKIE_SECURE = os.getenv("APP_ENV", "development").lower() == "production"
-RECOVERY_FAILURE_MESSAGE = "이메일, 복구 질문 또는 답변이 올바르지 않습니다."
+RECOVERY_FAILURE_MESSAGE = "이메일, 아이디 또는 복구 답변이 올바르지 않습니다."
 
 # 존재하지 않는 이메일도 비밀번호 검증 시간을 비슷하게 맞추기 위한 고정 해시다.
 DUMMY_PASSWORD_HASH = hash_password("not-a-real-user-password")
+RECOVERY_LOOKUP_SECRET = secrets.token_bytes(32)
+RECOVERY_QUESTION_VALUES = get_args(RecoveryQuestion)
+
+
+def fallback_recovery_question(email: str, username: str) -> str:
+    """Return a stable plausible question without revealing account existence."""
+
+    digest = hmac.digest(
+        RECOVERY_LOOKUP_SECRET,
+        f"{email}\0{username}".encode("utf-8"),
+        "sha256",
+    )
+    return RECOVERY_QUESTION_VALUES[digest[0] % len(RECOVERY_QUESTION_VALUES)]
 
 
 def as_utc(value: datetime) -> datetime:
@@ -70,6 +89,7 @@ def user_response(user: User) -> UserResponse:
         has_recovery_question=bool(
             user.recovery_question and user.recovery_answer_hash
         ),
+        recovery_question=user.recovery_question,
         created_at=user.created_at,
     )
 
@@ -331,6 +351,35 @@ def find_username(
     return UsernameFindResponse(username=user.username)
 
 
+@router.post(
+    "/password/recovery-question",
+    response_model=RecoveryQuestionResponse,
+)
+def get_password_recovery_question(
+    request: RecoveryQuestionLookupRequest,
+    response: Response,
+    database: Session = Depends(get_database_session),
+) -> RecoveryQuestionResponse:
+    """Return the single question stored for the account recovery flow."""
+
+    user = database.scalar(
+        select(User).where(
+            User.email == request.email,
+            User.username == request.username,
+            User.is_active.is_(True),
+        )
+    )
+    recovery_question = (
+        user.recovery_question
+        if user and user.recovery_question and user.recovery_answer_hash
+        else fallback_recovery_question(request.email, request.username)
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return RecoveryQuestionResponse(
+        recovery_question=recovery_question,
+    )
+
+
 @router.post("/password/recover", response_model=GenericMessageResponse)
 def recover_password(
     request: PasswordResetRequest,
@@ -346,10 +395,6 @@ def recover_password(
         normalize_recovery_answer(request.recovery_answer),
         answer_hash,
     )
-    question_matches = bool(
-        user
-        and user.recovery_question == request.recovery_question
-    )
     username_matches = bool(user and user.username == request.username)
     is_locked = bool(
         user
@@ -361,7 +406,6 @@ def recover_password(
         user is None
         or not user.is_active
         or not answer_matches
-        or not question_matches
         or not username_matches
         or is_locked
     ):

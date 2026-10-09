@@ -69,6 +69,10 @@ class AuthApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["user"]["email"], "user@example.com")
+        self.assertEqual(
+            response.json()["user"]["recovery_question"],
+            "father_name",
+        )
         self.assertTrue(response.json()["csrf_token"])
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         with self.session_factory() as database:
@@ -114,6 +118,11 @@ class AuthApiTests(unittest.TestCase):
             user = database.query(models.User).one()
         self.assertEqual(user.recovery_question, "elementary_school")
         self.assertNotEqual(user.recovery_answer_hash, "초코")
+        me = self.client.get("/api/v2/auth/me")
+        self.assertEqual(
+            me.json()["user"]["recovery_question"],
+            "elementary_school",
+        )
 
     def test_first_local_account_claims_pre_authentication_conversations(
         self,
@@ -191,6 +200,46 @@ class AuthApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["username"], "test_user")
+
+    def test_recovery_lookup_returns_only_the_saved_question(self) -> None:
+        self.register()
+
+        response = self.client.post(
+            "/api/v2/auth/password/recovery-question",
+            json={
+                "email": "user@example.com",
+                "username": "test_user",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"recovery_question": "father_name"},
+        )
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_recovery_lookup_does_not_reveal_unknown_account(self) -> None:
+        response = self.client.post(
+            "/api/v2/auth/password/recovery-question",
+            json={
+                "email": "unknown@example.com",
+                "username": "unknown_user",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            response.json()["recovery_question"],
+            {
+                "father_name",
+                "mother_name",
+                "birthplace",
+                "childhood_nickname",
+                "elementary_school",
+                "first_company",
+            },
+        )
 
     def test_authenticated_user_can_set_unique_username(self) -> None:
         registration = self.register()
@@ -288,7 +337,6 @@ class AuthApiTests(unittest.TestCase):
             json={
                 "email": "user@example.com",
                 "username": "test_user",
-                "recovery_question": "father_name",
                 "recovery_answer": "홍길동",
                 "password": "새로운 안전한 비밀번호 5678",
                 "password_confirm": "새로운 안전한 비밀번호 5678",
@@ -320,7 +368,6 @@ class AuthApiTests(unittest.TestCase):
         request = {
             "email": "user@example.com",
             "username": "test_user",
-            "recovery_question": "father_name",
             "recovery_answer": "틀린 답변",
             "password": "새비밀번호1",
             "password_confirm": "새비밀번호1",

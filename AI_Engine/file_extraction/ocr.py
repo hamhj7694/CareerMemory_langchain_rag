@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from functools import lru_cache
 import os
 from pathlib import Path
 import re
 import shutil
+from statistics import fmean, median
 from typing import Any
 
 import pytesseract
@@ -208,13 +210,181 @@ def _data_to_result(data: dict[str, list[Any]], profile: str) -> OCRResult:
             })
     text = "\n".join(" ".join(words) for words in line_words.values()).strip()
     average = (sum(confidences) / len(confidences) / 100) if confidences else 0.0
-    length_factor = min(1.0, len(re.sub(r"\s+", "", text)) / 40)
-    quality = round((average * 0.85) + (length_factor * 0.15), 4)
+    length_factor = min(1.0, len(re.sub(r"\s+", "", text)) / 160)
+    quality = round((average * 0.9) + (length_factor * 0.1), 4)
     return OCRResult(
         text=text,
         confidence=quality,
         profile=profile,
         word_boxes=tuple(boxes),
+    )
+
+
+def _candidate_selection_score(result: OCRResult, longest_text: int) -> float:
+    """confidence만 높고 본문을 거의 놓친 OCR 후보를 선택하지 않는다."""
+
+    compact_lines = [re.sub(r"\s+", "", line) for line in result.text.splitlines()]
+    compact_lines = [line for line in compact_lines if line]
+    compact_length = sum(len(line) for line in compact_lines)
+    coverage = min(1.0, compact_length / max(1, longest_text))
+    coherent_characters = sum(len(line) for line in compact_lines if len(line) >= 3)
+    coherence = coherent_characters / max(1, compact_length)
+    fragmented_lines = sum(1 for line in compact_lines if len(line) <= 2)
+    fragmentation = fragmented_lines / max(1, len(compact_lines))
+    numeric_tokens = len(re.findall(r"(?<!\w)[+-]?\d[\d,.]*(?:%|%p|건|회|초)?", result.text))
+    numeric_signal = min(1.0, numeric_tokens / 8)
+    return (
+        (result.confidence * 0.55)
+        + (coverage * 0.25)
+        + (coherence * 0.15)
+        + (numeric_signal * 0.05)
+        - (fragmentation * 0.15)
+    )
+
+
+def _dark_horizontal_runs(image: Image.Image) -> list[tuple[int, int]]:
+    """페이지 너비 대부분을 가로지르는 어두운 선/영역을 저해상도로 찾는다."""
+
+    grayscale = ImageOps.grayscale(_flatten_transparency(image))
+    scale = min(1.0, 1_200 / max(1, grayscale.width))
+    analysis = grayscale.resize(
+        (max(1, round(grayscale.width * scale)), max(1, round(grayscale.height * scale))),
+        Image.Resampling.BILINEAR,
+    )
+    width, height = analysis.size
+    pixels = analysis.load()
+    dark_rows: list[int] = []
+    for y in range(height):
+        dark = sum(1 for x in range(width) if pixels[x, y] < 95)
+        if dark / max(1, width) >= 0.65:
+            dark_rows.append(y)
+    if not dark_rows:
+        return []
+    runs: list[tuple[int, int]] = []
+    start = previous = dark_rows[0]
+    for current in dark_rows[1:]:
+        if current > previous + 1:
+            runs.append((start, previous))
+            start = current
+        previous = current
+    runs.append((start, previous))
+    return [
+        (round(start / scale), round(end / scale))
+        for start, end in runs
+    ]
+
+
+def _table_row_ranges(image: Image.Image) -> tuple[tuple[int, int], ...]:
+    """반복되는 얇은 가로 구분선을 사용해 표의 데이터 행 범위를 찾는다."""
+
+    runs = _dark_horizontal_runs(image)
+    max_thickness = max(5, round(image.height * 0.006))
+    separators = [
+        round((start + end) / 2)
+        for start, end in runs
+        if end - start + 1 <= max_thickness
+    ]
+    if len(separators) < 4:
+        return ()
+
+    gaps = [right - left for left, right in zip(separators, separators[1:])]
+    useful_gaps = [gap for gap in gaps if gap >= max(24, round(image.height * 0.012))]
+    if len(useful_gaps) < 3:
+        return ()
+    typical_gap = median(useful_gaps)
+    max_gap = max(80, typical_gap * 2.2)
+
+    clusters: list[list[int]] = []
+    cluster = [separators[0]]
+    for separator in separators[1:]:
+        gap = separator - cluster[-1]
+        if max(24, round(image.height * 0.012)) <= gap <= max_gap:
+            cluster.append(separator)
+        else:
+            if len(cluster) >= 4:
+                clusters.append(cluster)
+            cluster = [separator]
+    if len(cluster) >= 4:
+        clusters.append(cluster)
+    if not clusters:
+        return ()
+
+    boundaries = max(clusters, key=len)
+    boundary_gaps = [
+        right - left for left, right in zip(boundaries, boundaries[1:])
+    ]
+    first_height = round(median(boundary_gaps[: min(5, len(boundary_gaps))]))
+    inferred_start = max(0, boundaries[0] - first_height)
+    boundaries = [inferred_start, *boundaries]
+
+    trim = max(2, round(image.height * 0.0015))
+    ranges = []
+    for top, bottom in zip(boundaries, boundaries[1:]):
+        row_top = min(image.height, top + trim)
+        row_bottom = max(row_top, min(image.height, bottom - trim))
+        if row_bottom - row_top >= 28:
+            ranges.append((row_top, row_bottom))
+    return tuple(ranges[:30]) if len(ranges) >= 3 else ()
+
+
+def _merge_ocr_lines(preferred: str, fallback: str) -> str:
+    """행 단위 결과를 우선하고 유사한 전체 페이지 문장은 중복시키지 않는다."""
+
+    lines = [line.strip() for line in preferred.splitlines() if line.strip()]
+    normalized = [re.sub(r"\s+", "", line).casefold() for line in lines]
+    for line in fallback.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        candidate = re.sub(r"\s+", "", line).casefold()
+        duplicate = any(
+            candidate == existing
+            or (min(len(candidate), len(existing)) >= 8 and (
+                candidate in existing
+                or existing in candidate
+                or SequenceMatcher(None, candidate, existing).ratio() >= 0.78
+            ))
+            for existing in normalized
+        )
+        if not duplicate:
+            lines.append(line)
+            normalized.append(candidate)
+    return "\n".join(lines).strip()
+
+
+def _table_row_ocr(
+    image: Image.Image,
+    *,
+    languages: list[str],
+) -> tuple[str, tuple[dict[str, Any], ...], float | None]:
+    ranges = _table_row_ranges(image)
+    if not ranges:
+        return "", (), None
+
+    results: list[OCRResult] = []
+    boxes: list[dict[str, Any]] = []
+    for row_index, (top, bottom) in enumerate(ranges, start=1):
+        row = image.crop((0, top, image.width, bottom))
+        prepared = prepare_image(row)
+        data = pytesseract.image_to_data(
+            prepared,
+            lang="+".join(languages),
+            config="--oem 1 --psm 6",
+            output_type=Output.DICT,
+            timeout=OCR_TIMEOUT_SECONDS,
+        )
+        result = _data_to_result(data, "--oem 1 --psm 6 table-row")
+        if not result.text:
+            continue
+        results.append(result)
+        for box in result.word_boxes:
+            boxes.append({**box, "table_row": row_index, "row_top": top, "row_bottom": bottom})
+    if len(results) < 3:
+        return "", (), None
+    return (
+        "\n".join(result.text for result in results),
+        tuple(boxes[:5_000]),
+        round(fmean(result.confidence for result in results), 4),
     )
 
 
@@ -228,10 +398,17 @@ def run_ocr(image: Image.Image) -> OCRResult:
     if not languages:
         raise FileExtractionError("Tesseract에 kor 또는 eng 언어 데이터가 없습니다.")
 
-    prepared = prepare_image(image)
+    image.load()
+    source = _flatten_transparency(ImageOps.exif_transpose(image))
+    prepared = prepare_image(source)
     prepared, rotation_warning = _rotate_from_osd(prepared, capability)
-    profiles = ("--oem 1 --psm 3", "--oem 1 --psm 6", "--oem 1 --psm 11")
-    best: OCRResult | None = None
+    profiles = (
+        "--oem 1 --psm 3",
+        "--oem 1 --psm 4",
+        "--oem 1 --psm 6",
+        "--oem 1 --psm 11",
+    )
+    candidates: list[OCRResult] = []
     try:
         for profile in profiles:
             data = pytesseract.image_to_data(
@@ -250,8 +427,31 @@ def run_ocr(image: Image.Image) -> OCRResult:
                     word_boxes=result.word_boxes,
                     warnings=(rotation_warning,),
                 )
-            if best is None or result.confidence > best.confidence:
-                best = result
+            candidates.append(result)
+        longest_text = max(
+            (len(re.sub(r"\s+", "", result.text)) for result in candidates),
+            default=0,
+        )
+        best = max(
+            candidates,
+            key=lambda result: _candidate_selection_score(result, longest_text),
+            default=None,
+        )
+        table_text, table_boxes, table_confidence = _table_row_ocr(
+            source,
+            languages=languages,
+        )
+        if best is not None and table_text:
+            best = OCRResult(
+                text=_merge_ocr_lines(table_text, best.text),
+                confidence=round(fmean([
+                    best.confidence,
+                    table_confidence or best.confidence,
+                ]), 4),
+                profile=f"{best.profile}+table-rows-psm6",
+                word_boxes=tuple([*table_boxes, *best.word_boxes])[:5_000],
+                warnings=best.warnings,
+            )
     except RuntimeError as error:
         raise FileExtractionError("이미지 OCR 처리 시간이 초과되었습니다.") from error
     except pytesseract.TesseractError as error:

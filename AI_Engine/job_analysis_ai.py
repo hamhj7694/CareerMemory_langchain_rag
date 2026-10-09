@@ -34,6 +34,7 @@ from AI_Engine.metric_normalization import (
     metric_satisfies_requirement,
     validate_proposed_metrics,
 )
+from AI_Engine.ontology_seed import ONTOLOGY_VERSION
 from AI_Engine.skill_normalization import (
     build_skill_match_evidence,
     extract_registered_skill_mentions,
@@ -361,6 +362,7 @@ class JobAnalysisAI:
         prompt_version: str = JOB_ANALYSIS_PROMPT_VERSION,
         schema_version: str = JOB_ANALYSIS_SCHEMA_VERSION,
         index_version: str | None = None,
+        ontology_version: str = ONTOLOGY_VERSION,
         match_min_score: float | None = None,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -384,6 +386,10 @@ class JobAnalysisAI:
         self.index_version = _require_text(
             index_version or get_experience_index_version(provider),
             "index_version",
+        )
+        self.ontology_version = _require_text(
+            ontology_version,
+            "ontology_version",
         )
         self.match_min_score = get_job_match_min_score(match_min_score)
         self.id_factory = id_factory or (lambda: str(uuid4()))
@@ -439,6 +445,7 @@ class JobAnalysisAI:
                 prompt_version=self.prompt_version,
                 schema_version=self.schema_version,
                 index_version=self.index_version,
+                ontology_version=self.ontology_version,
             )
         except ValidationError as error:
             raise JobAnalysisAIOutputError(

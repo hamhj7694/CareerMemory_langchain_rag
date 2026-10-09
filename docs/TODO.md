@@ -30,13 +30,14 @@
 
 ### P0 — 경량 온톨로지와 Evidence 기반
 
-- [ ] `ARCH-110` ontology·Evidence의 내부/공개 필드 경계 확정
-- [ ] `ARCH-120` additive migration과 rollback 설계
-- [ ] `ONT-100~150` 기술 concept·alias·relation 영속화와 매칭 정책 분리
-- [ ] `EVD-100~140` EvidenceDocument·Chunk·EmbeddingRecord 영속화
-- [ ] `IDX-100~140` content hash 기반 증분 인덱싱과 전체 재구축
-- [ ] `MIG-100~110` 기존 데이터 dry-run 백필
-- [ ] `QA-520~550` 온톨로지·lineage·인덱스 평가와 benchmark
+- [x] `ARCH-110` ontology·Evidence의 내부/공개 필드 경계 확정
+- [x] `ARCH-120` additive migration과 rollback 설계
+- [x] `ONT-100~150` 기술 concept·alias·relation 영속화와 매칭 정책 분리
+- [x] `EVD-100~140` EvidenceDocument·Chunk·EmbeddingRecord 영속화
+- [x] `IDX-100~140` content hash 기반 증분 인덱싱과 전체 재구축
+- [x] `MIG-100~110` 기존 데이터 dry-run 백필
+- [x] `QA-520~540` 온톨로지·lineage·인덱스 결정론 평가
+- [x] `QA-550` 실제 gpt-4o-mini 4회 품질·토큰·비용·시간 benchmark
 
 세부 완료 조건: `../AI_Engine/AI_ENGINE_WORK_MAP.md`
 
@@ -48,8 +49,8 @@
 - [?] 익명화 음성·영상으로 실제 STT WER·숫자 재현율·비용 smoke test
 - [ ] AI DTO와 공개 API DTO의 자동 계약 테스트 확대
 - [ ] 정상·빈 결과·부분 성공·오류 fixture 정리
-- [ ] 핵심 사용자 흐름 브라우저 E2E 자동화
-- [ ] SSE heartbeat와 스트림 재연결 정책
+- [x] 격리 DB·BlobStore·vector 기반 `/chat` 핵심 사용자 흐름 Playwright E2E 자동화
+- [x] SSE heartbeat와 동일 요청 ID 기반 snapshot 재연결 정책
 - [ ] AI 오류의 공개 오류 envelope 일관성 검증
 - [ ] 실제·익명화 NLU/RAG 평가 세트 확대
 - [ ] Retrieval Recall@K, Precision@K, MRR 측정
@@ -63,15 +64,15 @@
 
 ## 3. 운영 전 백로그
 
-- [ ] 요청별 P50/P95 지연시간, 토큰, 비용, 오류율 관측
-- [ ] 민감 원문을 남기지 않는 로그 정책
+- [~] 요청별 P50/P95 지연시간·오류율과 분석 token·비용 관측 분리 구현
+- [x] 민감 원문을 남기지 않는 request ID·method·route·status·duration 로그 정책
 - [ ] DB migration·백업·복구 검증
 - [ ] rate limit과 비용 한도
 - [ ] 장시간 AI 작업의 비동기 queue와 상태 조회
 - [ ] 계정 삭제 시 DB·Evidence·vector 연쇄 삭제 검증
 - [x] DB BLOB 밖 LocalBlobStore와 dry-run/additive migration
 - [x] 첨부 파싱 durable queue와 서버 재시작 lease 복구
-- [ ] 다중 worker 운영 시 원자적 claim과 관측성 보강
+- [x] 다중 worker 운영 시 원자적 claim과 lease 소유권 검증
 - [ ] 부하·장애·보안 테스트
 
 ## 4. 장기 검토 항목

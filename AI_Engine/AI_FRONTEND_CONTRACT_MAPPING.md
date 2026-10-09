@@ -46,6 +46,19 @@ AI Pydantic DTO (snake_case)
 16. ontology concept ID와 Evidence ID는 내부 저장에 먼저 도입하고, 화면에 필요한 경우에만 공개 DTO에 추가한다.
 17. Chroma의 문서와 ID는 파생 인덱스이며 공개 API의 source of truth로 사용하지 않는다.
 
+### 2.1 ontology·Evidence 공개 경계
+
+이번 additive 변경은 기존 공개 API 필드를 삭제하거나 이름을 바꾸지 않는다.
+
+- 공개 유지: raw `skills`, `skill_mentions`, `metrics`, `facts`, `source_refs`, exact quote,
+  기존 attachment·experience·job ID
+- 필요할 때만 공개: canonical concept ID, match type, 관계 설명, ontology version
+- 내부 전용: ontology alias normalization key와 provenance, Evidence document/chunk/link ID,
+  원문 전체·storage key·content hash·stale 상태, embedding provider/model/collection/vector ID
+- 프론트는 내부 Evidence/Chroma ID를 영속 상태로 보관하거나 조합하지 않는다.
+- 향후 Evidence 상세 조회가 필요하면 인증된 사용자 범위의 별도 locator DTO를 추가하고
+  SQLAlchemy 모델을 직접 응답하지 않는다.
+
 확정 경험 검색 인덱스의 모델과 버전은 활성 Provider에 따라
 `llm_provider.py`의 상수를 사용한다. API 소비자가 특정 버전을 하드코딩하지 않는다.
 
@@ -206,12 +219,13 @@ AI의 스트림은 내부 실행 이벤트다. 공개 SSE는 메시지 저장, �
 | 첨부 처리 Adapter | `attachment.processing` |
 | `started` | 별도 공개 이벤트 없음 |
 | `token.text_delta` | `assistant.delta.delta` |
+| 동일 요청 재연결 시 DB 누적 본문 | `assistant.snapshot.content` |
 | `citation.citation` | `citation.added.citation` |
 | `action.action` | 완료 Message의 `actions[]` |
 | 경험/공고 결과 저장 | `proposal.created` |
 | `completed.response` | `message.completed.message` |
 | `error.error` | `message.failed.error` |
-| API heartbeat timer | `stream.heartbeat` |
+| API heartbeat timer | SSE comment `: heartbeat` |
 
 공개 SSE 규칙:
 
@@ -220,7 +234,8 @@ AI의 스트림은 내부 실행 이벤트다. 공개 SSE는 메시지 저장, �
 3. Proposal은 `message.completed` 전에 생성한다.
 4. 정상 종료와 실패 종료 이벤트는 하나만 전송한다.
 5. SSE `id`에는 증가하는 `sequence`를 사용한다.
-6. 재연결을 위해 API 계층이 `Last-Event-ID`를 처리한다.
+6. 완료 전 연결이 끊기면 같은 `client_request_id`로 한 번 재요청하며, API는 AI를
+   중복 호출하지 않고 저장된 누적 본문 snapshot과 terminal event를 전송한다.
 
 ---
 
@@ -404,10 +419,8 @@ AI 또는 프론트 연동 코드를 변경할 때 다음 순서로 확인한다
 
 ## 8. 아직 구현이 필요한 항목
 
-- ontology concept·alias·relation의 영속화와 공개 필드 범위 확정
-- EvidenceDocument·EvidenceChunk·EmbeddingRecord 영속화
-- content hash 기반 증분 인덱싱과 전체 재구축 API 또는 관리 명령
-- SSE heartbeat와 `Last-Event-ID` 기반 중간 스트림 재연결
+- 운영 규모에서 저장 직후 실행할 별도 비동기 embedding queue
+- 표준 `Last-Event-ID` offset replay가 필요한 경우의 이벤트 로그 영속화
 - AI 오류 예외의 공개 오류 envelope 변환
 - 정상·빈 결과·부분 성공·오류 JSON fixture
 - AI DTO ↔ 공개 API DTO 계약 테스트
@@ -416,6 +429,10 @@ AI 또는 프론트 연동 코드를 변경할 때 다음 순서로 확인한다
 
 경험정리 Proposal 저장과 채용공고 analyze/match projection은 실제 API에 연결되어 있다.
 위 목록은 현재 남은 통합·품질 작업을 나타낸다.
+
+현재 SSE는 heartbeat를 보내고, 프론트가 같은 `client_request_id`로 1회 재접속하면
+백엔드가 AI를 중복 호출하지 않고 저장된 `assistant.snapshot`과 terminal event를
+재전송한다. 이벤트별 offset replay 대신 DB에 저장된 최신 전체 스냅샷을 사용한다.
 
 ---
 

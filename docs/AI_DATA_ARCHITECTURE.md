@@ -118,18 +118,23 @@ Message / Attachment / Job posting
 
 ### 5.1 현재 구현
 
-현재 `skill_normalization.py`의 레지스트리가 다음 기능을 제공한다.
+`ontology_concepts`, `ontology_aliases`, `ontology_relations` 테이블과
+`OntologyRepository`가 다음 기능을 제공한다.
 
 - canonical skill ID
 - canonical name
 - curated alias
 - related skill relation
+- ontology version과 관계별 `matching_policy`
 - unknown expression preservation
 - exact, alias, related, unresolved 구분
 
-이는 온톨로지의 초기 형태지만 코드 상수이므로 영속성, 버전 관리, 관리 UI가 없다.
+기존 코드 레지스트리는 `career-ontology-v1` seed로 이동했다. 서버 시작 시 stable ID로
+멱등 입력하며 DB를 우선 조회한다. DB 장애나 마이그레이션 전 환경에서는 curated seed만
+fallback으로 사용하고, 미등록 표현을 유사 개념으로 임의 추정하지 않는다. 관리 UI와
+사용자 승인 기반 개념 승격은 아직 범위 밖이다.
 
-### 5.2 목표 엔티티
+### 5.2 구현 엔티티
 
 ```text
 OntologyConcept
@@ -188,7 +193,7 @@ FastAPI --narrower_than--> Python Web Framework
 
 ## 6. Evidence와 lineage
 
-### 6.1 목표 엔티티
+### 6.1 구현 엔티티
 
 ```text
 EvidenceDocument
@@ -214,6 +219,11 @@ EvidenceChunk
 - chunker_version
 - created_at
 
+EvidenceExperienceLink
+- user_id
+- experience_id
+- document_id
+
 EmbeddingRecord
 - id
 - target_type
@@ -225,6 +235,10 @@ EmbeddingRecord
 - index_version
 - indexed_at
 ```
+
+경험 생성·수정·원본 연결·연결 해제 경로는 `source_refs`를 위 구조로 동기화한다.
+문서와 청크 ID는 source와 content hash로 결정되므로 같은 입력을 반복해도 중복되지
+않는다. 원본이 바뀌면 이전 문서·청크·EmbeddingRecord를 stale로 표시한다.
 
 ### 6.2 추적 경로
 
@@ -260,12 +274,17 @@ Experience fact
 
 ```text
 원본 또는 확정 경험 저장
-  -> 검색 문서·청크 생성
+  -> Evidence 문서·청크와 경험 link 동기화
   -> content_hash 비교
-  -> 신규·변경 대상만 임베딩
+  -> 다음 검색 또는 관리 명령에서 신규·변경 대상만 임베딩
   -> stale vector 삭제
   -> EmbeddingRecord 갱신
 ```
+
+검색 요청 전 동기화는 DB의 현재 Evidence projection과 Chroma를 비교하므로 서버가
+중단되거나 벡터 저장소가 삭제돼도 자동 복구할 수 있다. 즉시 재구축이 필요하면
+`python -m AI_Engine.rebuild_evidence_index --apply`를 사용한다. 기본 실행은
+dry-run이며 vector를 변경하지 않는다.
 
 다음 중 하나가 바뀌면 새 인덱스 버전을 사용한다.
 
@@ -287,22 +306,55 @@ Experience fact
 - 전역 ontology concept은 사용자 소유 데이터와 분리한다.
 - 사용자별 unresolved 표현을 전역 개념으로 자동 승격하지 않는다.
 
-## 9. 마이그레이션 순서
+## 9. 마이그레이션·rollback
 
-1. 온톨로지·Evidence 스키마 추가
-2. 기존 `SKILL_REGISTRY`를 seed 데이터로 입력
-3. 현재 정규화 함수를 ontology repository 뒤로 이동
-4. 기존 `source_refs`를 EvidenceDocument·Chunk로 dry-run 변환
-5. 해시와 source ID 충돌 보고
-6. 사용자 승인 또는 명시적 `--apply`로 백필
-7. 기존 JSON 필드는 호환 기간 동안 유지
-8. 인덱스 전체 재구축 및 결과 검증
+적용 순서:
+
+1. `create_all`로 신규 온톨로지·Evidence 테이블만 추가한다.
+2. stable ID의 curated registry를 멱등 seed한다.
+3. `python -m AI_Engine.knowledge_layer_backfill`로 예상 건수와 충돌을 확인한다.
+4. 검토 후에만 `--apply`로 ontology와 기존 `source_refs` projection을 저장한다.
+5. `python -m AI_Engine.rebuild_evidence_index`로 사용자별 예상 청크를 확인한다.
+6. 검토 후에만 `--apply`로 Chroma를 전체 재구축한다.
+7. API·lineage·사용자 격리·검색 회귀 테스트를 실행한다.
+
+재실행 기준:
+
+- seed, Evidence ID와 chunk ID는 결정적이므로 같은 버전의 재실행은 멱등이다.
+- parser/chunker/ontology/index 버전이 바뀌면 이전 projection을 stale로 남기고 새
+  버전으로 재생성한다.
+- dry-run은 사용자 원문·경험·projection·vector를 쓰지 않는다. 단, 앱 초기화는
+  누락된 신규 테이블을 생성할 수 있다.
+
+rollback 기준:
+
+- 공개 API와 기존 `skills`, `facts`, `metrics`, `source_refs` JSON은 변경하지 않았으므로
+  신규 projection 읽기를 끄고 기존 경로로 즉시 되돌릴 수 있다.
+- Chroma는 source of truth가 아니므로 해당 index-version collection을 폐기하고 이전
+  인덱스를 사용하거나 DB에서 다시 구축한다.
+- 신규 테이블은 기존 레코드를 덮어쓰지 않으므로 장애 중에는 보존한 채 읽기만 중단한다.
+  자동 destructive down migration은 제공하지 않는다.
 
 마이그레이션은 원문, `skills`, `facts`, `metrics`, `source_refs`를 덮어쓰지 않는다.
 
-## 10. 단기 구현 범위
+## 10. 내부 저장과 공개 API 경계
 
-현재 우선순위는 다음과 같다.
+| 구분 | 내부 저장 | 공개 API |
+|---|---|---|
+| 원문 표현 | raw skill, source text, exact quote | 기존 필드를 그대로 반환 |
+| 정규화 결과 | concept ID, match type, ontology version | 기존 `skill_mentions`·매칭 설명에 필요한 값만 반환 |
+| ontology 관리 | alias normalization key, provenance, relation edge·policy | 직접 노출하지 않음 |
+| Evidence | document/chunk/link ID, original text, offset, hash, stale 상태 | 기존 source ref와 검증된 citation을 유지 |
+| embedding | provider/model/hash/index version/collection/vector ID | 노출하지 않음 |
+| 저장 경로 | LocalBlobStore storage key | 노출하지 않고 attachment API로 접근 |
+
+프론트가 내부 ID를 저장하거나 해석하지 않아도 기존 화면이 동작하는 것이 호환성
+기준이다. 향후 원본 상세 화면이 필요할 때만 권한 검사된 Evidence locator DTO를 별도
+추가하며, DB 모델을 그대로 직렬화하지 않는다.
+
+## 11. 구현 범위와 남은 항목
+
+구현된 범위는 다음과 같다.
 
 1. ontology concept·alias·relation DB 모델
 2. 기존 기술 레지스트리 seed와 repository
@@ -311,6 +363,9 @@ Experience fact
 5. 온톨로지 기반 매칭 정책 분리
 6. dry-run 백필
 7. 정답 세트와 lineage 회귀 테스트 확장
+
+남은 운영 항목은 실제 익명화 corpus 확대, 관리 UI, 사용자 승인 기반 unresolved 개념
+승격, 운영 규모의 별도 비동기 embedding queue다.
 
 다음은 단기 범위에서 제외한다.
 
@@ -322,7 +377,7 @@ Experience fact
 - generic triple store
 - 미등록 표현의 자동 전역 개념 승격
 
-## 11. 완료 기준
+## 12. 완료 기준
 
 - 모든 원문과 규격 외 표현이 보존된다.
 - 기존 별칭·수치·인용 테스트가 유지된다.

@@ -58,13 +58,26 @@ SessionLocal = sessionmaker(
 
 # 6. 테이블 초기화
 # 서버 시작 시 아직 없는 테이블만 생성한다. 기존 데이터와 테이블은 삭제하지 않는다.
-def initialize_database() -> None:
+def initialize_database(*, seed_ontology_data: bool = True) -> None:
     """등록된 SQLAlchemy 모델을 기준으로 누락된 테이블을 생성한다."""
 
     # 모델 모듈을 불러와야 Base가 생성할 테이블 목록을 알 수 있다.
     from AI_Engine.database import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+
+    # 전역 ontology seed는 사용자 데이터가 아니며, 기존 코드 레지스트리를 같은
+    # stable ID로 재현한다. 실패 시 정규화 계층은 curated fallback을 유지한다.
+    from AI_Engine.ontology_repository import (
+        configure_default_ontology_repository,
+        seed_ontology,
+    )
+
+    if seed_ontology_data:
+        with SessionLocal() as ontology_database:
+            seed_ontology(ontology_database)
+            ontology_database.commit()
+    configure_default_ontology_repository(SessionLocal)
 
     # create_all은 기존 SQLite 테이블에 새 컬럼을 추가하지 않는다.
     # 인증 기능 도입 전에 만들어진 로컬 DB에는 user_id를 안전하게 한 번 추가한다.

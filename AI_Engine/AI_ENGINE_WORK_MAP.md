@@ -66,15 +66,18 @@ content routing
 | AI-570 | `[x]` | LocalBlobStore·additive migration | `blob_store.py`, `migrate_attachment_blobs.py` | 신규 DB BLOB 0, SHA-256 검증, 기본 dry-run 이관 |
 | AI-580 | `[x]` | 재시작 가능한 DB 파일 큐 | `file_processing_worker.py`, `FileProcessingJob` | lease 만료 복구, 최대 시도 제한, 수동 재처리 |
 | AI-590 | `[!]` | DOC/PPT/HWP 격리 변환 | `file_extraction/external_tools.py` | 코드는 완료, 개발 PC의 LibreOffice·한컴 변환기 설치 필요 |
-| AI-600 | `[?]` | 음성·영상 FFmpeg·STT | `file_extraction/media.py`, `TranscriptionSegment` | FFmpeg 9.0 탐지·mock STT·timestamp 저장 통과, 실제 음성 API smoke 미실행 |
+| AI-600 | `[?]` | 음성·영상 FFmpeg·STT | `file_extraction/media.py`, `TranscriptionSegment` | mock STT·timestamp 저장 통과, 현재 FFmpeg 미탐지·실제 음성 API smoke 미실행 |
 | AI-610 | `[x]` | 첨부 파이프라인 benchmark | `evaluate_attachment_pipeline.py` | 10개 원본 해시·DB BLOB 0·작업 완료·stale 복구 측정 |
+| AI-620 | `[x]` | 요청·스트림 운영 안정화 | `operational_metrics.py`, `api/conversations.py` | 원문 없는 route P50/P95·오류율, request ID, SSE snapshot 재접속·중복 호출 방지 |
+| AI-630 | `[x]` | `/chat` 브라우저 E2E 자동화 | `e2e/`, `playwright.config.js` | 격리 DB·파일·vector, 로그인·SSE·첨부·붙여넣기·드롭·복원, 실행 후 자동 정리 |
 
 현재 측정값과 테스트 결과는 `benchmarks/RESULTS.md`를 기준으로 한다.
 
-개발 PC에는 Tesseract 5.4.0과 `kor+eng+osd`, FFmpeg/FFprobe 9.0이 준비돼 있다.
-LibreOffice와 한컴 HWP→HWPX 변환기는 설치되지 않아 해당 형식은 원본을 보존하고
-capability 오류를 반환한다. STT는 타임스탬프 계약과 mock 통합 테스트까지 검증했으며
-실제 사용자 음성에 대한 유료 API smoke test는 아직 실행하지 않았다.
+개발 PC에는 Tesseract 5.4.0과 `kor+eng+osd`가 준비돼 있다. 2026-10-08 현재
+capability 검사에서는 FFmpeg/FFprobe, LibreOffice, 한컴 HWP→HWPX 변환기를 찾지
+못했으므로 해당 형식은 원본을 보존하고 정확한 capability 오류를 반환한다. STT는
+타임스탬프 계약과 mock 통합 테스트까지 검증했으며 실제 사용자 음성에 대한 유료 API
+smoke test는 아직 실행하지 않았다.
 
 ## 4. 현재 우선 작업 — 온톨로지와 계층형 데이터
 
@@ -83,50 +86,50 @@ capability 오류를 반환한다. STT는 타임스탬프 계약과 mock 통합 
 | ID | 상태 | 작업 | 산출물·완료 조건 |
 |---|---|---|---|
 | ARCH-100 | `[x]` | 문서 체계 통합 | 문서 인덱스, 단일 데이터 아키텍처, 중복 문서 제거 |
-| ARCH-110 | `[ ]` | ontology·Evidence API 노출 범위 확정 | 내부 전용 ID와 공개 필드 구분, 계약 변경 목록 |
-| ARCH-120 | `[ ]` | migration·rollback 설계 | additive migration, dry-run, 재실행 기준 |
+| ARCH-110 | `[x]` | ontology·Evidence API 노출 범위 확정 | 내부 전용 ID와 공개 필드 구분, 계약 변경 목록 |
+| ARCH-120 | `[x]` | migration·rollback 설계 | additive migration, dry-run, 재실행 기준 |
 
 ### Phase B. 경량 온톨로지
 
 | ID | 상태 | 작업 | 주요 위치 | 완료 조건 |
 |---|---|---|---|---|
-| ONT-100 | `[ ]` | ontology DB 모델 | `database/models.py`, `connection.py` | concept·alias·relation 테이블과 제약조건 |
-| ONT-110 | `[ ]` | 기존 기술 seed | 신규 seed/backfill 모듈 | 현재 registry와 같은 ID·별칭·관계를 재현 |
-| ONT-120 | `[ ]` | ontology repository | 신규 repository/service | 조회, 캐시, 버전, 장애 fallback |
-| ONT-130 | `[ ]` | 정규화 연결 | `skill_normalization.py` | raw 보존, DB concept projection, unresolved 유지 |
-| ONT-140 | `[ ]` | 매칭 정책 분리 | `job_analysis_ai.py` 또는 policy service | alias 충족, related 후보 전용, 관계 설명 반환 |
-| ONT-150 | `[ ]` | ontology version 기록 | schemas, persistence | 분석·매칭 결과에서 사용 버전 추적 |
+| ONT-100 | `[x]` | ontology DB 모델 | `database/models.py`, `connection.py` | concept·alias·relation 테이블과 제약조건 |
+| ONT-110 | `[x]` | 기존 기술 seed | `ontology_seed.py`, `ontology_repository.py` | 현재 registry와 같은 stable ID·별칭·관계를 멱등 재현 |
+| ONT-120 | `[x]` | ontology repository | `ontology_repository.py` | DB 우선 조회, 버전, curated 장애 fallback |
+| ONT-130 | `[x]` | 정규화 연결 | `skill_normalization.py` | raw 보존, DB concept projection, unresolved 유지 |
+| ONT-140 | `[x]` | 매칭 정책 분리 | `ontology_repository.py`, `job_analysis_ai.py` | alias 충족, related 후보 전용, 관계 설명 반환 |
+| ONT-150 | `[x]` | ontology version 기록 | schemas, job persistence | 분석·매칭 결과에서 사용 버전 추적 |
 
 ### Phase C. Evidence 영속화
 
 | ID | 상태 | 작업 | 주요 위치 | 완료 조건 |
 |---|---|---|---|---|
-| EVD-100 | `[ ]` | EvidenceDocument 모델 | `database/models.py` | 원본 종류·레코드·해시·파서 버전 저장 |
-| EVD-110 | `[ ]` | EvidenceChunk 모델 | `database/models.py`, `chat_context.py` | offset·해시·청커 버전과 문서 관계 저장 |
-| EVD-120 | `[ ]` | EmbeddingRecord 모델 | `database/models.py` | 대상·모델·해시·index version 추적 |
-| EVD-130 | `[ ]` | 기존 source ref 호환 | API adapters, schemas | 기존 ID와 신규 Evidence ID가 손실 없이 연결 |
-| EVD-140 | `[ ]` | stale 판정 | evidence/index service | 원본 변경 시 파생 데이터 갱신 필요 상태 확인 |
+| EVD-100 | `[x]` | EvidenceDocument 모델 | `database/models.py` | 원본 종류·레코드·해시·파서 버전 저장 |
+| EVD-110 | `[x]` | EvidenceChunk 모델 | `database/models.py`, `evidence_repository.py` | offset·해시·청커 버전과 문서 관계 저장 |
+| EVD-120 | `[x]` | EmbeddingRecord 모델 | `database/models.py` | 대상·모델·해시·index version 추적 |
+| EVD-130 | `[x]` | 기존 source ref 호환 | `evidence_repository.py`, experience APIs | 기존 ID와 신규 Evidence ID가 손실 없이 연결 |
+| EVD-140 | `[x]` | stale 판정 | `evidence_repository.py`, `evidence_index.py` | 원본 변경·연결 해제 시 파생 데이터 stale 처리 |
 
 ### Phase D. 증분 인덱싱
 
 | ID | 상태 | 작업 | 주요 위치 | 완료 조건 |
 |---|---|---|---|---|
-| IDX-100 | `[ ]` | 저장 이벤트 기반 동기화 | `chat_retrieval.py`, API 저장 경로 | 저장·수정·삭제 후 관련 인덱스만 갱신 |
-| IDX-110 | `[ ]` | hash 기반 임베딩 생략 | retrieval/index service | 같은 content hash는 다시 임베딩하지 않음 |
-| IDX-120 | `[ ]` | stale vector 제거 | retrieval/index service | 삭제·변경된 문서의 이전 벡터 제거 |
-| IDX-130 | `[ ]` | 전체 인덱스 재구축 명령 | 신규 maintenance command | DB에서 사용자별 인덱스 재생성 |
-| IDX-140 | `[ ]` | index version migration | `llm_provider.py`, index service | 모델·문서 구성 변경 시 안전한 버전 전환 |
+| IDX-100 | `[x]` | 저장 projection·검색 전 동기화 | `chat_retrieval.py`, experience APIs | 저장·수정·삭제 시 Evidence 갱신, 검색 전 vector reconcile |
+| IDX-110 | `[x]` | hash 기반 임베딩 생략 | `evidence_index.py` | 같은 content hash는 다시 임베딩하지 않음 |
+| IDX-120 | `[x]` | stale vector 제거 | `evidence_index.py` | 삭제·변경된 문서의 이전 벡터 제거 |
+| IDX-130 | `[x]` | 전체 인덱스 재구축 명령 | `rebuild_evidence_index.py` | DB에서 사용자별 인덱스 dry-run·재생성 |
+| IDX-140 | `[x]` | index version migration | `evidence_index.py` | 모델·문서 구성 변경 시 버전별 collection 분리 |
 
 ### Phase E. 백필과 검증
 
 | ID | 상태 | 작업 | 완료 조건 |
 |---|---|---|---|
-| MIG-100 | `[ ]` | ontology dry-run 백필 | 기존 raw field 불변, 변경 예정 값 보고 |
-| MIG-110 | `[ ]` | Evidence dry-run 백필 | source 충돌·누락·중복 보고 |
-| QA-520 | `[ ]` | ontology 정답 세트 확장 | alias·related·상하위·unresolved 사례 |
-| QA-530 | `[ ]` | Evidence lineage 테스트 | fact에서 원본까지 추적, invalid quote 거부 |
-| QA-540 | `[ ]` | 증분 인덱스 테스트 | 동일·수정·삭제·재구축 시나리오 |
-| QA-550 | `[ ]` | 실제 모델 benchmark 재실행 | 품질·비용·시간·DB write 전후 비교 |
+| MIG-100 | `[x]` | ontology dry-run 백필 | 기존 raw field 불변, 변경 예정 값 보고 |
+| MIG-110 | `[x]` | Evidence dry-run 백필 | source 누락·중복과 생성·stale 예정 건수 보고 |
+| QA-520 | `[x]` | ontology 정답 세트 확장 | alias·related·상하위·unresolved 판정 100% |
+| QA-530 | `[x]` | Evidence lineage 테스트 | fact에서 원본까지 추적, invalid quote 거부 |
+| QA-540 | `[x]` | 증분 인덱스 테스트 | 동일·수정·삭제·재구축 시나리오 |
+| QA-550 | `[x]` | 실제 모델 benchmark 재실행 | gpt-4o-mini 4/4 성공, 품질·usage 비용·시간·DB write 기록 |
 
 ## 5. 이후 백로그
 
@@ -140,7 +143,7 @@ capability 오류를 반환한다. STT는 타임스탬프 계약과 mock 통합 
 | FUT-150 | `[ ]` | 비동기 AI 작업 큐 | 장시간 분석과 운영 규모 증가 시 도입 |
 | FUT-160 | `[!]` | 레거시 DOC/PPT/HWP 실환경 변환 검증 | LibreOffice·한컴 변환기 설치 후 실제 fixture 통과 필요 |
 | FUT-170 | `[?]` | 실제 음성·영상 STT 품질 평가 | 익명화 음성 corpus, WER·숫자 재현율·비용 측정 |
-| FUT-180 | `[ ]` | 다중 worker 원자적 claim | 현재 단일 worker lease 큐를 운영 규모에서 확장할 때 구현 |
+| FUT-180 | `[x]` | 다중 worker 원자적 claim | UPDATE RETURNING 기반 claim·lease·worker 소유권 테스트 완료 |
 
 ## 6. 구현 순서
 

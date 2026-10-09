@@ -103,6 +103,19 @@ class RecoveryQuestionSetupRequest(BaseModel):
     recovery_answer: str = Field(min_length=2, max_length=100)
 
 
+class RecoveryQuestionLookupRequest(EmailInput):
+    username: str = Field(min_length=4, max_length=30)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        return RegisterRequest.normalize_username(value)
+
+
+class RecoveryQuestionResponse(BaseModel):
+    recovery_question: RecoveryQuestion
+
+
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=6, max_length=128)
@@ -117,7 +130,6 @@ class PasswordChangeRequest(BaseModel):
 
 class PasswordResetRequest(EmailInput):
     username: str = Field(min_length=4, max_length=30)
-    recovery_question: RecoveryQuestion
     recovery_answer: str = Field(min_length=2, max_length=100)
     password: str = Field(min_length=6, max_length=128)
     password_confirm: str = Field(min_length=6, max_length=128)
@@ -140,6 +152,7 @@ class UserResponse(BaseModel):
     email: str
     display_name: str
     has_recovery_question: bool
+    recovery_question: RecoveryQuestion | None = None
     created_at: datetime
 
 
@@ -160,6 +173,9 @@ __all__ = [
     "PasswordChangeRequest",
     "PasswordResetRequest",
     "ProfileUpdateRequest",
+    "RecoveryQuestion",
+    "RecoveryQuestionLookupRequest",
+    "RecoveryQuestionResponse",
     "RecoveryQuestionSetupRequest",
     "RegisterRequest",
     "UsernameFindResponse",

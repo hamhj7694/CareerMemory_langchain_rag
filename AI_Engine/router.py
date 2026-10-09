@@ -34,6 +34,7 @@ from AI_Engine.file_extraction.external_tools import (
     get_libreoffice_capability,
 )
 from AI_Engine.file_extraction.media import get_media_capability
+from AI_Engine.operational_metrics import register_operational_metrics
 
 
 # 3. 로컬 개발 주소
@@ -88,6 +89,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+register_operational_metrics(app)
 
 # 공개 API 오류를 프론트엔드 AppError 형식으로 통일한다.
 register_error_handlers(app)
