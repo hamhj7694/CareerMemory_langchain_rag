@@ -40,7 +40,9 @@ class E2EChatbot:
         yield SimpleNamespace(type="started")
         yield SimpleNamespace(type="token", text_delta=answer[:midpoint])
         if "안녕 나는 함" in request.content and "형준이야." not in request.content:
-            time.sleep(1)
+            # Keep the first response in-flight long enough for Playwright to
+            # deterministically submit the follow-up and exercise cancellation.
+            time.sleep(3)
         yield SimpleNamespace(type="token", text_delta=answer[midpoint:])
         yield SimpleNamespace(type="completed")
 

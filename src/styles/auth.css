@@ -42,9 +42,83 @@
 .auth-id-guide { margin: -8px 0 0; color: var(--color-text-subtle); text-align: center; font-size: var(--text-label); }
 .auth-links a, .auth-switch a { color: var(--color-primary); font-weight: 650; }
 .auth-switch { margin: 0; color: var(--color-text-muted); text-align: center; font-size: var(--text-body-sm); }
+.auth-primary-link { display: grid; place-items: center; text-decoration: none; }
 .auth-loading { min-height: 100dvh; display: grid; place-items: center; color: var(--color-text-muted); }
+
+.auth-page--start {
+  padding: 32px;
+  background:
+    radial-gradient(circle at 12% 8%, var(--color-primary-subtle), transparent 36%),
+    radial-gradient(circle at 88% 90%, var(--color-ai-subtle), transparent 30%),
+    var(--color-bg);
+}
+
+.start-card {
+  width: min(100%, 1060px);
+  min-height: 620px;
+  border: 1px solid var(--color-border);
+  border-radius: 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr);
+  overflow: hidden;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-modal);
+}
+
+.start-intro,
+.start-actions {
+  padding: clamp(32px, 5vw, 64px);
+  display: grid;
+  align-content: center;
+  gap: 28px;
+}
+
+.start-intro {
+  color: white;
+  background:
+    linear-gradient(145deg, rgb(33 55 105 / 96%), rgb(64 85 148 / 94%)),
+    var(--color-primary);
+}
+
+.start-intro .auth-brand,
+.start-intro .auth-eyebrow { color: white; }
+.start-intro .auth-brand span { color: var(--color-primary); background: white; }
+.start-intro h1 { max-width: 620px; margin: 0; font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1.12; letter-spacing: -.04em; }
+.start-description { max-width: 620px; margin: 14px 0 0; color: rgb(255 255 255 / 78%); font-size: 1.05rem; line-height: 1.75; }
+.start-features { margin: 0; padding: 0; display: grid; gap: 14px; list-style: none; }
+.start-features li { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: baseline; }
+.start-features strong { color: white; }
+.start-features span { color: rgb(255 255 255 / 72%); font-size: var(--text-body-sm); }
+.start-privacy { margin: 0; padding: 14px 16px; border: 1px solid rgb(255 255 255 / 18%); border-radius: var(--radius-sm); color: rgb(255 255 255 / 72%); background: rgb(255 255 255 / 7%); font-size: var(--text-label); line-height: 1.6; }
+
+.start-actions { gap: 22px; }
+.start-actions h2 { margin: 0; font-size: 1.65rem; }
+.start-actions h2 + p { margin: 8px 0 0; color: var(--color-text-muted); line-height: 1.6; }
+.start-guest-button { min-height: 52px; font-size: var(--text-body); }
+.start-divider { display: flex; align-items: center; gap: 12px; color: var(--color-text-subtle); font-size: var(--text-label); }
+.start-divider::before, .start-divider::after { content: ''; height: 1px; flex: 1; background: var(--color-border); }
+.start-profile-guide { margin-top: -6px; color: var(--color-text-muted); line-height: 1.55; }
+.start-nickname-step { padding: 16px; border: 1px solid var(--color-primary); border-radius: var(--radius-sm); display: grid; gap: 16px; background: var(--color-primary-subtle); }
+.start-nickname-step h3 { margin: 2px 0 0; font-size: 1.2rem; }
+.start-nickname-step p { margin: 6px 0 0; color: var(--color-text-muted); font-size: var(--text-body-sm); }
+.start-back-button { min-height: 36px; border: 0; color: var(--color-text-muted); background: transparent; font-weight: 650; }
+.start-back-button:hover { color: var(--color-primary); text-decoration: underline; }
+.start-recovery-link { justify-self: center; color: var(--color-primary); font-size: var(--text-body-sm); font-weight: 700; text-decoration: none; }
+.start-recovery-link:hover { text-decoration: underline; }
+.start-pin-notice { margin: 0; color: var(--color-text-subtle); font-size: var(--text-label); line-height: 1.55; }
+.account-card--highlight { border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-subtle); }
+.account-card--notice { background: var(--color-surface-subtle); }
 
 @media (max-width: 520px) {
   .auth-page { padding: 0; }
   .auth-card { min-height: 100dvh; padding: 28px 20px; border: 0; border-radius: 0; align-content: center; box-shadow: none; }
+  .start-card { min-height: 100dvh; border: 0; border-radius: 0; grid-template-columns: 1fr; }
+  .start-intro, .start-actions { padding: 32px 22px; }
+  .start-intro h1 { font-size: 2.15rem; }
+  .start-features li { grid-template-columns: 1fr; gap: 2px; }
+}
+
+@media (min-width: 521px) and (max-width: 840px) {
+  .start-card { grid-template-columns: 1fr; }
+  .start-intro { min-height: 500px; }
 }

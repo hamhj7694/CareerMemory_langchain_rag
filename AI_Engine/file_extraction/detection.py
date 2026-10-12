@@ -32,6 +32,8 @@ EXTENSION_MIME_TYPES = {
     ".txt": "text/plain",
     ".md": "text/markdown",
     ".markdown": "text/markdown",
+    ".html": "text/html",
+    ".htm": "text/html",
     ".pdf": "application/pdf",
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -61,7 +63,7 @@ EXTENSION_MIME_TYPES = {
 }
 
 ALLOWED_FILE_TYPES = frozenset(EXTENSION_MIME_TYPES.values())
-TEXT_MIME_TYPES = frozenset({"text/plain", "text/markdown"})
+TEXT_MIME_TYPES = frozenset({"text/plain", "text/markdown", "text/html"})
 IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp", "image/tiff"}
 )

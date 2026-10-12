@@ -9,6 +9,7 @@ const PAGE_TITLES = [
   { pattern: /^\/jobs\/[^/]+$/, title: '공고 분석 결과' },
   { pattern: /^\/jobs$/, title: '채용공고 분석' },
   { pattern: /^\/documents\/[^/]+$/, title: '문서 편집' },
+  { pattern: /^\/account$/, title: '내 기록' },
 ];
 
 function getPageTitle(pathname) {
@@ -22,7 +23,7 @@ export function AppLayout() {
 
   const signOut = async () => {
     await logout();
-    navigate('/login', { replace: true });
+    navigate('/start', { replace: true });
   };
 
   return (
@@ -44,9 +45,9 @@ export function AppLayout() {
         </div>
         <div className="app-account">
           <strong>{user?.display_name}</strong>
-          <span>{user?.username ? `@${user.username}` : user?.email}</span>
-          <NavLink to="/account">계정 설정</NavLink>
-          <button type="button" onClick={signOut}>로그아웃</button>
+          <span>{user?.account_type === 'guest' ? '가입 없는 체험 중' : `@${user?.username}`}</span>
+          <NavLink to="/account">{user?.account_type === 'guest' ? '이 기록 저장하기' : '내 기록'}</NavLink>
+          <button type="button" onClick={signOut}>{user?.account_type === 'guest' ? '체험 종료' : '나가기'}</button>
         </div>
       </aside>
       <section className="app-workspace">

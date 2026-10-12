@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -64,6 +64,8 @@ class OntologyEvidenceTests(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+        with self.engine.begin() as connection:
+            connection.execute(text("PRAGMA foreign_keys=ON"))
         Base.metadata.create_all(bind=self.engine)
         # 실제 SessionLocal과 같은 autoflush=False에서도 seed가 중복 alias를
         # 한 번에 INSERT하지 않는지 검증한다.

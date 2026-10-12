@@ -9,20 +9,20 @@ import { MemoryManagerPage } from './pages/MemoryManagerPage.jsx';
 import { ExperienceTrashPage } from './pages/ExperienceTrashPage.jsx';
 import { NotFoundPage } from './pages/NotFoundPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
-import { RegisterPage } from './pages/RegisterPage.jsx';
-import { AccountRecoveryPage } from './pages/AccountRecoveryPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
-import { FindUsernamePage } from './pages/FindUsernamePage.jsx';
+import { PinRecoveryPage } from './pages/PinRecoveryPage.jsx';
 import { ProtectedRoute, PublicOnlyRoute } from './auth/AuthRoutes.jsx';
 
 export const router = createBrowserRouter([
   {
     element: <PublicOnlyRoute />,
     children: [
-      { path: '/login', element: <LoginPage /> },
-      { path: '/register', element: <RegisterPage /> },
-      { path: '/find-username', element: <FindUsernamePage /> },
-      { path: '/forgot-password', element: <AccountRecoveryPage /> },
+      { path: '/start', element: <LoginPage /> },
+      { path: '/pin-recovery', element: <PinRecoveryPage /> },
+      { path: '/login', element: <Navigate to="/start" replace /> },
+      { path: '/register', element: <Navigate to="/start" replace /> },
+      { path: '/find-username', element: <Navigate to="/start" replace /> },
+      { path: '/forgot-password', element: <Navigate to="/pin-recovery" replace /> },
     ],
   },
   {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { sourceApi } from '../../api/sourceApi.js';
+import { v2ChatApi } from '../../api/v2ChatApi.js';
 import { EvidenceWorkspace } from '../evidence/components/EvidenceWorkspace.jsx';
 import { downloadEvidenceFile, openEvidenceFile } from '../evidence/model/evidenceFileAccess.js';
 import { splitProposalSources } from './proposalMapper.js';
@@ -15,12 +15,12 @@ export function ProposalEvidenceDialog({ sources, onClose }) {
   }, [onClose]);
   const openFile = async (source) => {
     setError('');
-    try { await openEvidenceFile(source, sourceApi.download); }
+    try { await openEvidenceFile(source, (selected) => v2ChatApi.downloadAttachment(selected.attachment_id || selected.attachmentId || selected.id.replace(/^source-/, ''))); }
     catch (reason) { setError(reason.message || '파일을 열지 못했습니다.'); }
   };
   const downloadFile = async (source) => {
     setError('');
-    try { await downloadEvidenceFile(source, sourceApi.download); }
+    try { await downloadEvidenceFile(source, (selected) => v2ChatApi.downloadAttachment(selected.attachment_id || selected.attachmentId || selected.id.replace(/^source-/, ''))); }
     catch (reason) { setError(reason.message || '파일을 다운로드하지 못했습니다.'); }
   };
 

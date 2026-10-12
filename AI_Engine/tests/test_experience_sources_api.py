@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import unittest
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -12,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from AI_Engine.api.experience_extractions import get_experience_ai
+from AI_Engine.blob_store import clear_blob_store_cache
 from AI_Engine.database import models  # noqa: F401
 from AI_Engine.database.connection import Base, get_database_session
 from AI_Engine.router import app
@@ -20,6 +23,13 @@ from AI_Engine.router import app
 class ExperienceSourcesApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls.attachment_storage = TemporaryDirectory()
+        cls.storage_environment = patch.dict(
+            "os.environ",
+            {"ATTACHMENT_STORAGE_ROOT": cls.attachment_storage.name},
+        )
+        cls.storage_environment.start()
+        clear_blob_store_cache()
         cls.engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -45,6 +55,9 @@ class ExperienceSourcesApiTests(unittest.TestCase):
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=cls.engine)
         cls.engine.dispose()
+        clear_blob_store_cache()
+        cls.storage_environment.stop()
+        cls.attachment_storage.cleanup()
 
     def setUp(self) -> None:
         with self.session_factory() as database:
@@ -113,6 +126,17 @@ class ExperienceSourcesApiTests(unittest.TestCase):
         )
         self.assertEqual(added_file.status_code, 200)
         self.assertEqual(len(added_file.json()["sources"]), 2)
+
+        downloaded = self.client.get(
+            f"/api/v2/attachments/{attachment_id}/download"
+        )
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertIn("22%", downloaded.content.decode("utf-8"))
+        protected_delete = self.client.delete(
+            f"/api/v2/attachments/{attachment_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(protected_delete.status_code, 409)
 
         updated_text = self.client.patch(
             (
@@ -194,6 +218,67 @@ class ExperienceSourcesApiTests(unittest.TestCase):
             f"/api/v2/experiences/{copy['id']}",
         ).json()
         self.assertEqual(len(saved_copy["source_ids"]), 2)
+
+    def test_editing_and_unlinking_source_invalidates_dependent_fact(self) -> None:
+        source_id = "source-manual-fact"
+        fact = "Checkout completion increased by 14%."
+        created = self.client.post(
+            "/api/v2/experiences",
+            headers=self.headers,
+            json={
+                "domain": {"name": "Work"},
+                "project": {"name": "Evidence lifecycle"},
+                "title": "Checkout improvement",
+                "facts": [fact],
+                "source_ids": [source_id],
+                "source_refs": [{
+                    "id": source_id,
+                    "type": "manual_text",
+                    "title": "Original note",
+                    "text": fact,
+                }],
+                "field_citations": {
+                    "facts.0": [{"source_ref_id": source_id, "quote": fact}],
+                },
+            },
+        )
+        self.assertEqual(created.status_code, 201)
+        experience = created.json()
+        self.assertEqual(experience["fact_evidence_status"][fact], "supported")
+        fact_block = next(
+            block for block in experience["content_blocks"]
+            if block["type"] == "facts"
+        )
+        self.assertEqual(fact_block["citations"][0]["quote"], fact)
+
+        edited = self.client.patch(
+            f"/api/v2/experiences/{experience['id']}/sources/{source_id}",
+            headers=self.headers,
+            json={
+                "changes": {"text": "The source note was corrected."},
+                "client_request_id": str(uuid4()),
+            },
+        )
+        self.assertEqual(edited.status_code, 200)
+        self.assertEqual(edited.json()["unsupported_facts"], [fact])
+        self.assertEqual(
+            edited.json()["experiences"][0]["fact_evidence_status"][fact],
+            "stale",
+        )
+
+        unlinked = self.client.request(
+            "DELETE",
+            f"/api/v2/experiences/{experience['id']}/sources/{source_id}",
+            headers=self.headers,
+            json={"client_request_id": str(uuid4())},
+        )
+        self.assertEqual(unlinked.status_code, 200)
+        self.assertEqual(unlinked.json()["unsupported_facts"], [fact])
+        self.assertEqual(
+            unlinked.json()["experience"]["fact_evidence_status"][fact],
+            "needs_evidence",
+        )
+        self.assertEqual(unlinked.json()["experience"]["field_citations"], {})
 
 
 if __name__ == "__main__":

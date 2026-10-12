@@ -41,6 +41,17 @@ export function AuthProvider({ children }) {
   const value = useMemo(() => ({
     status,
     user,
+    async startGuest() {
+      return applyAuthResponse(await authApi.startGuest());
+    },
+    async startSimple(input) {
+      const response = await authApi.startSimple(input);
+      if (response.profile_required) return response;
+      return applyAuthResponse(response);
+    },
+    async claimGuest(input) {
+      return applyAuthResponse(await authApi.claimGuest(input));
+    },
     async login(input) {
       return applyAuthResponse(await authApi.login(input));
     },

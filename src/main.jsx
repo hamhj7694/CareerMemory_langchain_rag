@@ -14,7 +14,7 @@ const canonicalUrl = import.meta.env.DEV
   : null;
 
 if (canonicalUrl) {
-  // 로그인 쿠키가 저장된 localhost로 경로와 검색 조건을 유지해 이동한다.
+  // 사용자 공간의 세션 쿠키가 저장된 localhost로 경로와 검색 조건을 유지해 이동한다.
   window.location.replace(canonicalUrl);
 } else {
   createRoot(document.getElementById('root')).render(

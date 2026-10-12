@@ -11,7 +11,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from AI_Engine.api.experience_extractions import get_experience_ai
+from AI_Engine.api.experience_extractions import (
+    _json_payload,
+    _persist_extraction_result,
+    get_experience_ai,
+)
 from AI_Engine.api.experiences import experience_dict, owned_experience
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.blob_store import read_attachment_bytes
@@ -25,6 +29,13 @@ from AI_Engine.database.models import (
     utc_now,
 )
 from AI_Engine.evidence_repository import sync_experience_evidence
+from AI_Engine.knowledge_documents import (
+    begin_analysis_run,
+    content_document_dict,
+    experience_content_blocks,
+    fail_analysis_run,
+    upsert_content_document,
+)
 from AI_Engine.experience_ai import (
     ExperienceAI,
     ExperienceAIInputError,
@@ -154,6 +165,90 @@ def _touch_sources(experience: Experience, refs: list[dict]) -> None:
     experience.updated_at = utc_now()
 
 
+def _invalidate_source_claims(
+    experience: Experience,
+    source_id: str,
+    *,
+    remove_citations: bool,
+) -> list[str]:
+    """원문 변경·연결 해제가 영향을 준 사실을 stale/needs_evidence로 표시한다."""
+
+    field_citations = deepcopy(experience.field_citations or {})
+    statuses = dict(experience.fact_evidence_status or {})
+    unsupported: list[str] = []
+    for index, fact in enumerate(experience.facts or []):
+        key = f"facts.{index}"
+        citations = [
+            citation for citation in field_citations.get(key, [])
+            if isinstance(citation, dict)
+        ]
+        references_source = any(
+            str(citation.get("source_ref_id") or citation.get("sourceRefId") or "")
+            == source_id
+            for citation in citations
+        )
+        if not references_source:
+            statuses.setdefault(fact, "supported" if citations else "needs_evidence")
+            continue
+        if remove_citations:
+            citations = [
+                citation for citation in citations
+                if str(citation.get("source_ref_id") or citation.get("sourceRefId") or "")
+                != source_id
+            ]
+            if citations:
+                field_citations[key] = citations
+            else:
+                field_citations.pop(key, None)
+            statuses[fact] = "supported" if citations else "needs_evidence"
+            if not citations:
+                unsupported.append(fact)
+        else:
+            statuses[fact] = "stale"
+            unsupported.append(fact)
+    experience.field_citations = field_citations
+    experience.fact_evidence_status = statuses
+    return unsupported
+
+
+def _sync_content_document(database: Session, experience: Experience) -> None:
+    existing = (
+        content_document_dict(experience.content_document) or {"blocks": []}
+    )["blocks"]
+    custom = [
+        block for block in existing
+        if block.get("origin") != "system_projection"
+    ]
+    document = upsert_content_document(
+        database,
+        user_id=experience.user_id,
+        owner_type="experience",
+        owner_id=experience.id,
+        title=experience.title,
+        blocks=experience_content_blocks({
+            "summary": experience.summary,
+            "situation": experience.situation,
+            "actions": experience.actions,
+            "results": experience.results,
+            "role": experience.role,
+            "skills": experience.skills,
+            "skill_mentions": experience.skill_mentions,
+            "skill_groups": experience.skill_groups,
+            "facts": experience.facts,
+            "fact_evidence_status": experience.fact_evidence_status,
+            "metrics": experience.metrics,
+            "period": experience.period,
+            "missing_information": experience.missing_information,
+            "field_citations": experience.field_citations,
+            "confidence": experience.confidence,
+            "extensions": experience.extensions,
+        }) + custom,
+        extensions=experience.extensions,
+        document_id=experience.content_document_id,
+    )
+    experience.content_document_id = document.id
+
+
 def _ai_source(
     source: dict,
     *,
@@ -274,6 +369,7 @@ def add_text_source(
     refs = _source_refs(experience)
     refs.append(source)
     _touch_sources(experience, refs)
+    _sync_content_document(database, experience)
     sync_experience_evidence(database, experience)
     database.commit()
     return {
@@ -351,12 +447,17 @@ def update_text_source(
         raise HTTPException(status_code=422, detail="원본 텍스트를 입력해 주세요.")
     source["text"] = text
     source["updated_at"] = utc_now().isoformat()
+    unsupported_facts = _invalidate_source_claims(
+        experience, source_id, remove_citations=False
+    )
     _touch_sources(experience, refs)
+    _sync_content_document(database, experience)
     sync_experience_evidence(database, experience)
     database.commit()
     return {
         **source,
         "experiences": [experience_dict(experience)],
+        "unsupported_facts": unsupported_facts,
     }
 
 
@@ -378,7 +479,11 @@ def unlink_source(
             status_code=404,
             detail="현재 경험에 연결된 원본 근거가 아닙니다.",
         )
+    unsupported_facts = _invalidate_source_claims(
+        experience, source_id, remove_citations=True
+    )
     _touch_sources(experience, remaining)
+    _sync_content_document(database, experience)
     sync_experience_evidence(database, experience)
     database.commit()
     return {
@@ -386,7 +491,7 @@ def unlink_source(
         "experience": experience_dict(experience),
         "unlinked_source_id": source_id,
         "source_deleted": False,
-        "unsupported_facts": [],
+        "unsupported_facts": unsupported_facts,
     }
 
 
@@ -435,25 +540,35 @@ def reorganize_from_sources(
         _ai_source(source, user_id=current_user.id, database=database)
         for source in refs
     ]
+    extraction_request = ExperienceExtractionRequest(
+        client_request_id=request.client_request_id,
+        input_type=ExperienceExtractionInputType.EVIDENCE_REORGANIZATION,
+        source_ref_ids=[source.id for source in sources],
+        attachment_ids=[
+            source.attachment_id for source in sources if source.attachment_id
+        ],
+    )
+    analysis_record = begin_analysis_run(
+        database,
+        user_id=current_user.id,
+        client_request_id=request.client_request_id,
+        target_type="experience_reorganization",
+        input_type=str(ExperienceExtractionInputType.EVIDENCE_REORGANIZATION.value),
+        input_payload={
+            **extraction_request.model_dump(mode="json"),
+            "source_experience_id": source_experience.id,
+            "sources": refs,
+        },
+        source_ids=[source.id for source in sources],
+    )
     try:
-        result = experience_ai.organize(
-            ExperienceExtractionRequest(
-                client_request_id=request.client_request_id,
-                input_type=(
-                    ExperienceExtractionInputType.EVIDENCE_REORGANIZATION
-                ),
-                source_ref_ids=[source.id for source in sources],
-                attachment_ids=[
-                    source.attachment_id
-                    for source in sources
-                    if source.attachment_id
-                ],
-            ),
-            sources=sources,
-        )
+        result = experience_ai.organize(extraction_request, sources=sources)
+        result = _persist_extraction_result(database, analysis_record, result)
     except ExperienceAIInputError as error:
+        fail_analysis_run(database, analysis_record, code="invalid_input", message=str(error))
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ExperienceAIOutputError as error:
+        fail_analysis_run(database, analysis_record, code="invalid_ai_output", message=str(error))
         raise HTTPException(
             status_code=502,
             detail="현재 근거로 경험 상세내용을 다시 정리하지 못했습니다.",
@@ -464,52 +579,89 @@ def reorganize_from_sources(
             detail="현재 근거에서 정리할 경험 내용을 찾지 못했습니다.",
         )
 
-    draft = result.experience_drafts[0]
     title_base = source_experience.title.strip() or "제목 없는 경험"
     while title_base.endswith(" - 새 정리본"):
         title_base = title_base.removesuffix(" - 새 정리본").rstrip()
-    project_period = (
-        draft.project.period.model_dump(mode="json")
-        if draft.project.period is not None
-        else deepcopy(source_experience.period)
-    )
-    created = Experience(
-        id=f"EXP-{uuid4()}",
-        user_id=current_user.id,
-        project_id=source_experience.project_id,
-        title=f"{title_base} - 새 정리본",
-        summary=draft.summary,
-        situation=draft.situation,
-        actions=list(draft.actions),
-        results=list(draft.results),
-        role=draft.role,
-        skills=list(draft.skills),
-        skill_mentions=[
-            item.model_dump(mode="json")
-            for item in getattr(draft, "skill_mentions", [])
-        ],
-        facts=list(draft.facts),
-        metrics=[
-            item.model_dump(mode="json")
-            for item in getattr(draft, "metrics", [])
-        ],
-        period=project_period or {},
-        missing_information=list(draft.missing_information),
-        source_ids=[_source_id(source) for source in refs],
-        source_refs=refs,
-        status="confirmed",
-    )
-    created.project = source_experience.project
-    database.add(created)
-    database.flush()
-    sync_experience_evidence(database, created)
+    created_items: list[Experience] = []
+    for index, draft in enumerate(result.experience_drafts):
+        draft_payload = _json_payload(draft)
+        project_payload = draft_payload.get("project") or {}
+        project_period = project_payload.get("period") or deepcopy(source_experience.period)
+        field_citations = dict(draft_payload.get("field_citations") or {})
+        facts = list(draft_payload.get("facts") or [])
+        draft_title = str(draft_payload.get("title") or "").strip()
+        title = (
+            f"{title_base} - 새 정리본"
+            if len(result.experience_drafts) == 1
+            else draft_title or f"{title_base} - 새 정리본 {index + 1}"
+        )
+        extensions = {
+            "reorganized_from_experience_id": source_experience.id,
+            "ai_domain": draft_payload.get("domain") or {},
+            "ai_project": project_payload,
+        }
+        created = Experience(
+            id=f"EXP-{uuid4()}",
+            user_id=current_user.id,
+            project_id=source_experience.project_id,
+            title=title,
+            summary=str(draft_payload.get("summary") or ""),
+            situation=str(draft_payload.get("situation") or ""),
+            actions=list(draft_payload.get("actions") or []),
+            results=list(draft_payload.get("results") or []),
+            role=str(draft_payload.get("role") or ""),
+            skills=list(draft_payload.get("skills") or []),
+            skill_mentions=list(draft_payload.get("skill_mentions") or []),
+            skill_groups=list(draft_payload.get("skill_groups") or []),
+            facts=facts,
+            fact_evidence_status={
+                fact: (
+                    "supported" if field_citations.get(f"facts.{fact_index}")
+                    else "needs_evidence"
+                )
+                for fact_index, fact in enumerate(facts)
+            },
+            metrics=list(draft_payload.get("metrics") or []),
+            period=project_period or {},
+            missing_information=list(draft_payload.get("missing_information") or []),
+            source_ids=[_source_id(source) for source in refs],
+            source_refs=refs,
+            draft_id=draft_payload.get("draft_id"),
+            field_citations=field_citations,
+            confidence=draft_payload.get("confidence"),
+            extensions=extensions,
+            analysis_run_id=analysis_record.id,
+            status="confirmed",
+        )
+        created.project = source_experience.project
+        database.add(created)
+        database.flush()
+        document = upsert_content_document(
+            database,
+            user_id=current_user.id,
+            owner_type="experience",
+            owner_id=created.id,
+            title=created.title,
+            blocks=experience_content_blocks({
+                **draft_payload,
+                "fact_evidence_status": created.fact_evidence_status,
+                "extensions": extensions,
+            }),
+            extensions=extensions,
+        )
+        created.content_document_id = document.id
+        sync_experience_evidence(database, created)
+        created_items.append(created)
+    analysis_record.target_id = created_items[0].id
     database.commit()
-    database.refresh(created)
+    for created in created_items:
+        database.refresh(created)
     return {
-        "experience": experience_dict(created),
+        "experience": experience_dict(created_items[0]),
+        "experiences": [experience_dict(item) for item in created_items],
         "source_experience_id": source_experience.id,
         "sources": refs,
-        "extraction_run": result.run.model_dump(mode="json"),
+        "extraction_run": _json_payload(result.run),
     }
 
 

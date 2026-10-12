@@ -42,12 +42,25 @@ export function toUiMessage(message) {
     status: message.status,
     error: message.error,
     attachments: attachmentRefs.length
-      ? attachmentRefs.map((attachment) => attachment.filename || attachment.id)
-      : attachmentIds.length ? attachmentIds : inputFiles,
+      ? attachmentRefs.map((attachment) => ({
+          id: attachment.id,
+          filename: attachment.filename || attachment.id,
+          downloadUrl: `/api/v2/attachments/${encodeURIComponent(attachment.id)}/download`,
+        }))
+      : attachmentIds.length ? attachmentIds.map((id) => ({
+          id,
+          filename: id,
+          downloadUrl: `/api/v2/attachments/${encodeURIComponent(id)}/download`,
+        })) : inputFiles.map((filename) => ({ filename })),
     evidence: message.citations?.map((citation, index) => ({
       id: citation.source_ref_id ?? citation.source_id ?? `${message.id}-${index}`,
       label: citation.label || citation.title || String(index + 1),
+      quote: citation.quote || citation.excerpt || '',
+      sourceType: citation.source_type || citation.sourceType || '',
+      locator: citation.source_locator || citation.sourceLocator || null,
+      raw: citation,
     })) ?? [],
+    analysisMetadata: message.analysis_metadata || message.analysisMetadata || {},
     // 메시지 안에 제안 본문이 있으면 그 상태가 authoritative source다.
     // 거절된 제안의 proposal_ids가 서버 감사 이력에 남아 있더라도 화면에서
     // 다시 별도 제안 API로 조회하지 않도록 활성 제안만 노출한다.

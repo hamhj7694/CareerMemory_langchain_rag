@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from AI_Engine.api.experience_extractions import get_experience_ai
-from AI_Engine.auth.dependencies import require_csrf_user
+from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.blob_store import clear_blob_store_cache
 from AI_Engine.database import models  # noqa: F401
 from AI_Engine.database.connection import Base, get_database_session
@@ -31,6 +31,7 @@ from AI_Engine.schemas import (
     ExtractionRun,
     ProjectActivityDraft,
 )
+from AI_Engine.web_content import WebIngestionResult
 
 
 class FakeExperienceAI:
@@ -117,12 +118,16 @@ class ExperienceExtractionApiTests(unittest.TestCase):
         app.dependency_overrides[require_csrf_user] = lambda: SimpleNamespace(
             id="USER-test"
         )
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+            id="USER-test"
+        )
         cls.client = TestClient(app)
 
     @classmethod
     def tearDownClass(cls) -> None:
         app.dependency_overrides.pop(get_experience_ai, None)
         app.dependency_overrides.pop(require_csrf_user, None)
+        app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_database_session, None)
         Base.metadata.drop_all(bind=cls.engine)
         cls.engine.dispose()
@@ -155,6 +160,30 @@ class ExperienceExtractionApiTests(unittest.TestCase):
             "전환율 개선",
         )
         self.assertEqual(len(self.fake_ai.requests), 1)
+
+        analysis_record_id = response.json()["analysis_record_id"]
+        recoverable = self.client.get(
+            "/api/v2/analysis-runs",
+            params={"target_type": "experience_extraction", "unclaimed_only": True},
+        )
+        self.assertEqual(recoverable.status_code, 200)
+        self.assertEqual(recoverable.json()["items"][0]["id"], analysis_record_id)
+        self.assertEqual(
+            recoverable.json()["items"][0]["input_payload"]["text"],
+            "사용자 전환율을 개선했습니다.",
+        )
+        self.assertEqual(
+            recoverable.json()["items"][0]["output_payload"]["experience_drafts"][0]["title"],
+            "전환율 개선",
+        )
+
+        discarded = self.client.post(f"/api/v2/analysis-runs/{analysis_record_id}/discard")
+        self.assertEqual(discarded.status_code, 200)
+        after_discard = self.client.get(
+            "/api/v2/analysis-runs",
+            params={"target_type": "experience_extraction", "unclaimed_only": True},
+        )
+        self.assertEqual(after_discard.json()["items"], [])
 
     def test_saved_attachment_is_used_as_experience_evidence(self) -> None:
         content = "파일 근거로 전환율을 50% 개선했습니다."
@@ -189,6 +218,54 @@ class ExperienceExtractionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["sources"][0]["attachment_id"], "ATT-test")
         self.assertIn("50%", response.json()["sources"][0]["text"])
+
+    def test_public_url_is_added_as_experience_evidence(self) -> None:
+        content = "FastAPI 응답 시간을 40% 단축한 프로젝트 경험"
+        with self.session_factory() as database:
+            database.add(Attachment(
+                id="ATT-web-experience",
+                user_id="USER-test",
+                filename="career-page.html",
+                normalized_filename="career-page.html",
+                mime_type="text/html",
+                size_bytes=len(content.encode()),
+                content_hash="c" * 64,
+                content=b"",
+                storage_backend="database",
+                extracted_text=content,
+                parse_status="ready",
+                parser_version="career-file-parser-v2",
+                extraction_metadata={"source_type": "web_url"},
+            ))
+            database.commit()
+        web_result = WebIngestionResult(
+            attachment_ids=("ATT-web-experience",),
+            urls=("https://example.com/experience",),
+        )
+
+        with patch(
+            "AI_Engine.api.experience_extractions.web_content_service.ingest",
+            return_value=web_result,
+        ):
+            response = self.client.post(
+                "/api/v2/experience-extractions/direct-input",
+                json={
+                    "client_request_id": str(uuid4()),
+                    "input_type": "direct_input",
+                    "text": "https://example.com/experience",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        file_source = next(
+            item for item in response.json()["sources"]
+            if item.get("attachment_id") == "ATT-web-experience"
+        )
+        self.assertIn("40%", file_source["text"])
+        self.assertEqual(
+            self.fake_ai.requests[0].attachment_ids,
+            ["ATT-web-experience"],
+        )
 
     def test_text_and_txt_file_are_analyzed_together(self) -> None:
         response = self.client.post(

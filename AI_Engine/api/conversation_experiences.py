@@ -11,12 +11,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from AI_Engine.api.conversations import create_resource_id, get_conversation_or_404
-from AI_Engine.api.experience_extractions import _attachment_sources, get_experience_ai
+from AI_Engine.api.experience_extractions import (
+    _attachment_sources,
+    _persist_extraction_result,
+    get_experience_ai,
+)
 from AI_Engine.api.experiences import ExperienceCreate, resolve_project
 from AI_Engine.attachment_service import attachment_service
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.database.connection import get_database_session
 from AI_Engine.database.models import (
+    AnalysisRunRecord,
     Attachment,
     Experience,
     JobAnalysisRecord,
@@ -25,6 +30,13 @@ from AI_Engine.database.models import (
     utc_now,
 )
 from AI_Engine.evidence_repository import sync_experience_evidence
+from AI_Engine.knowledge_documents import (
+    begin_analysis_run,
+    experience_content_blocks,
+    fail_analysis_run,
+    merge_projected_blocks,
+    upsert_content_document,
+)
 from AI_Engine.normalization_backfill import structured_fields_for_experience
 from AI_Engine.experience_ai import ExperienceAI, ExperienceAIInputError, ExperienceAIOutputError
 from AI_Engine.file_extraction import FileInputError, run_file_extraction
@@ -74,6 +86,7 @@ def _proposal_from_result(result) -> dict:
         source.id: source.model_dump(mode="json") for source in result.sources
     }
     for experience in experiences:
+        experience["analysis_run_id"] = getattr(result, "analysis_record_id", None)
         experience["source_refs"] = [
             source_by_id[source_id]
             for source_id in experience.get("source_ref_ids", [])
@@ -227,24 +240,40 @@ def extract_recent_chat_experiences(
     if not sources:
         raise HTTPException(status_code=422, detail="분석 가능한 대화내용이 없습니다.")
 
+    extraction_request = ExperienceExtractionRequest(
+        client_request_id=request.client_request_id,
+        input_type=ExperienceExtractionInputType.CONVERSATION,
+        conversation_id=conversation.id,
+        from_sequence=messages[0].sequence,
+        to_sequence=messages[-1].sequence,
+        # 파일만 첨부한 빈 메시지는 attachment_ids가 원본 근거 계약을 맡는다.
+        # 대화 텍스트 근거가 실제로 만들어진 메시지만 message_ids에 기록한다.
+        message_ids=[message.id for message in text_messages],
+        attachment_ids=attachment_ids,
+    )
+    analysis_record = begin_analysis_run(
+        database,
+        user_id=current_user.id,
+        client_request_id=request.client_request_id,
+        target_type="conversation_experience_extraction",
+        input_type=str(ExperienceExtractionInputType.CONVERSATION.value),
+        input_payload={
+            **extraction_request.model_dump(mode="json"),
+            "messages": [
+                {"id": message.id, "sequence": message.sequence, "content": message.content}
+                for message in text_messages
+            ],
+        },
+        source_ids=[source.id for source in sources],
+    )
     try:
-        result = experience_ai.organize(
-            ExperienceExtractionRequest(
-                client_request_id=request.client_request_id,
-                input_type=ExperienceExtractionInputType.CONVERSATION,
-                conversation_id=conversation.id,
-                from_sequence=messages[0].sequence,
-                to_sequence=messages[-1].sequence,
-                # 파일만 첨부한 빈 메시지는 attachment_ids가 원본 근거 계약을 맡는다.
-                # 대화 텍스트 근거가 실제로 만들어진 메시지만 message_ids에 기록한다.
-                message_ids=[message.id for message in text_messages],
-                attachment_ids=attachment_ids,
-            ),
-            sources=sources,
-        )
+        result = experience_ai.organize(extraction_request, sources=sources)
+        result = _persist_extraction_result(database, analysis_record, result)
     except ExperienceAIInputError as error:
+        fail_analysis_run(database, analysis_record, code="invalid_input", message=str(error))
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ExperienceAIOutputError as error:
+        fail_analysis_run(database, analysis_record, code="invalid_ai_output", message=str(error))
         raise HTTPException(status_code=502, detail="대화내용을 경험 초안으로 정리하지 못했습니다.") from error
 
     proposal = _proposal_from_result(result)
@@ -363,18 +392,30 @@ async def analyze_chat_experience(
             user_id=current_user.id,
             attachment_ids=attachment_ids,
         )
-        result = experience_ai.organize(
-            ExperienceExtractionRequest(
-                client_request_id=client_request_id,
-                input_type=ExperienceExtractionInputType.DIRECT_INPUT,
-                text=text.strip() or None,
-                attachment_ids=attachment_ids,
-            ),
-            sources=sources,
+        extraction_request = ExperienceExtractionRequest(
+            client_request_id=client_request_id,
+            input_type=ExperienceExtractionInputType.DIRECT_INPUT,
+            text=text.strip() or None,
+            attachment_ids=attachment_ids,
         )
+        analysis_record = begin_analysis_run(
+            database,
+            user_id=current_user.id,
+            client_request_id=client_request_id,
+            target_type="conversation_experience_extraction",
+            input_type=str(ExperienceExtractionInputType.DIRECT_INPUT.value),
+            input_payload=extraction_request.model_dump(mode="json"),
+            source_ids=[source.id for source in sources],
+        )
+        result = experience_ai.organize(extraction_request, sources=sources)
+        result = _persist_extraction_result(database, analysis_record, result)
     except (FileInputError, ValueError, ExperienceAIInputError) as error:
+        if "analysis_record" in locals():
+            fail_analysis_run(database, analysis_record, code="invalid_input", message=str(error))
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ExperienceAIOutputError as error:
+        if "analysis_record" in locals():
+            fail_analysis_run(database, analysis_record, code="invalid_ai_output", message=str(error))
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     proposal = _proposal_from_result(result)
@@ -546,7 +587,22 @@ def approve_chat_experience_proposal(
         missing_information=list(draft.get("missing_information") or []),
         source_ids=list(draft.get("source_ref_ids") or draft.get("source_ids") or []),
         source_refs=list(draft.get("source_refs") or []),
+        draft_id=draft.get("draft_id"),
+        field_citations=dict(draft.get("field_citations") or {}),
+        skill_groups=list(draft.get("skill_groups") or []),
+        confidence=draft.get("confidence"),
+        extensions=dict(draft.get("extensions") or {}),
+        analysis_run_id=draft.get("analysis_run_id"),
+        content_blocks=list(draft.get("content_blocks") or []),
     )
+    analysis_run = None
+    if create_request.analysis_run_id:
+        analysis_run = database.scalar(select(AnalysisRunRecord).where(
+            AnalysisRunRecord.id == create_request.analysis_run_id,
+            AnalysisRunRecord.user_id == current_user.id,
+        ))
+        if analysis_run is None:
+            raise HTTPException(status_code=422, detail="연결할 수 없는 AI 분석 기록입니다.")
     project = resolve_project(create_request, current_user, database)
     period = create_request.period if isinstance(create_request.period, dict) else {}
     skill_mentions, metrics = structured_fields_for_experience(
@@ -569,16 +625,47 @@ def approve_chat_experience_proposal(
         skills=create_request.skills,
         skill_mentions=skill_mentions,
         facts=create_request.facts,
+        fact_evidence_status={
+            fact: (
+                "supported"
+                if create_request.field_citations.get(f"facts.{index}")
+                else "needs_evidence"
+            )
+            for index, fact in enumerate(create_request.facts)
+        },
         metrics=metrics,
         period=period,
         missing_information=create_request.missing_information,
         source_ids=create_request.source_ids,
         source_refs=create_request.source_refs,
+        draft_id=create_request.draft_id,
+        field_citations=create_request.field_citations,
+        skill_groups=create_request.skill_groups,
+        confidence=create_request.confidence,
+        extensions=create_request.extensions,
+        analysis_run_id=analysis_run.id if analysis_run else None,
         status="confirmed",
     )
     experience.project = project
     database.add(experience)
     database.flush()
+    document = upsert_content_document(
+        database,
+        user_id=current_user.id,
+        owner_type="experience",
+        owner_id=experience.id,
+        title=experience.title,
+        blocks=merge_projected_blocks(experience_content_blocks({
+            **create_request.model_dump(mode="json"),
+            "skill_mentions": skill_mentions,
+            "metrics": metrics,
+            "fact_evidence_status": experience.fact_evidence_status,
+        }), create_request.content_blocks),
+        extensions=create_request.extensions,
+    )
+    experience.content_document_id = document.id
+    if analysis_run is not None:
+        analysis_run.target_id = experience.id
     sync_experience_evidence(database, experience)
 
     saved_at = utc_now()

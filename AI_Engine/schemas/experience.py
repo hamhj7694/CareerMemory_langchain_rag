@@ -395,6 +395,10 @@ class ExperienceExtractionResult(SchemaModel):
     """Complete structured result returned by the experience extraction AI."""
 
     run: ExtractionRun
+    analysis_record_id: Identifier | None = Field(
+        default=None,
+        description="Durable server-side analysis snapshot ID",
+    )
     experience_drafts: list[ExperienceDraft] = Field(
         default_factory=list,
         description="Experience drafts found in the input, 0..N",

@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(320) NOT NULL UNIQUE,
     display_name VARCHAR(100) NOT NULL,
     password_hash VARCHAR(500) NOT NULL,
+    account_type VARCHAR(20) NOT NULL DEFAULT 'legacy',
+    login_failed_attempts INTEGER NOT NULL DEFAULT 0,
+    login_locked_until DATETIME,
+    guest_expires_at DATETIME,
     recovery_question VARCHAR(50),
     recovery_answer_hash VARCHAR(500),
     recovery_failed_attempts INTEGER NOT NULL DEFAULT 0,
@@ -75,6 +79,7 @@ CREATE TABLE IF NOT EXISTS messages (
     proposal_ids JSON NOT NULL,
     actions JSON NOT NULL,
     error JSON,
+    analysis_metadata JSON NOT NULL DEFAULT '{}',
     created_at DATETIME NOT NULL,
     completed_at DATETIME,
     CONSTRAINT fk_messages_conversation
@@ -100,6 +105,80 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS ix_messages_conversation_created
     ON messages (conversation_id, created_at);
+
+-- AI 호출 전 원문과 호출 후 전체 결과를 보존하는 불변 분석 실행 기록.
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    id VARCHAR(50) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    client_request_id VARCHAR(100) NOT NULL,
+    external_run_id VARCHAR(100),
+    target_type VARCHAR(40) NOT NULL,
+    target_id VARCHAR(100),
+    input_type VARCHAR(50) NOT NULL,
+    input_payload JSON NOT NULL DEFAULT '{}',
+    output_payload JSON NOT NULL DEFAULT '{}',
+    source_ids JSON NOT NULL DEFAULT '[]',
+    status VARCHAR(30) NOT NULL DEFAULT 'processing',
+    versions JSON NOT NULL DEFAULT '{}',
+    token_usage JSON NOT NULL DEFAULT '{}',
+    coverage_report JSON NOT NULL DEFAULT '{}',
+    omitted_source_ids JSON NOT NULL DEFAULT '[]',
+    error JSON,
+    started_at DATETIME NOT NULL,
+    completed_at DATETIME,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    CONSTRAINT uq_analysis_runs_user_request_target
+        UNIQUE (user_id, client_request_id, target_type),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_analysis_runs_target
+    ON analysis_runs (target_type, target_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_runs_user_id
+    ON analysis_runs (user_id);
+
+-- 화면 템플릿과 분리된 노션형 콘텐츠 문서와 타입 블록.
+CREATE TABLE IF NOT EXISTS content_documents (
+    id VARCHAR(50) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    owner_type VARCHAR(40) NOT NULL,
+    owner_id VARCHAR(100) NOT NULL,
+    title VARCHAR(300) NOT NULL DEFAULT '',
+    schema_version VARCHAR(50) NOT NULL DEFAULT 'content-blocks-v1',
+    extensions JSON NOT NULL DEFAULT '{}',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    CONSTRAINT uq_content_documents_owner UNIQUE (user_id, owner_type, owner_id),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS content_blocks (
+    id VARCHAR(160) PRIMARY KEY,
+    document_id VARCHAR(50) NOT NULL,
+    block_type VARCHAR(50) NOT NULL,
+    position INTEGER NOT NULL,
+    data JSON NOT NULL DEFAULT '{}',
+    source_refs JSON NOT NULL DEFAULT '[]',
+    citations JSON NOT NULL DEFAULT '[]',
+    origin VARCHAR(30) NOT NULL DEFAULT 'system',
+    review_status VARCHAR(30) NOT NULL DEFAULT 'confirmed',
+    confidence FLOAT,
+    visibility VARCHAR(20) NOT NULL DEFAULT 'visible',
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    CONSTRAINT uq_content_blocks_position UNIQUE (document_id, position),
+    FOREIGN KEY (document_id) REFERENCES content_documents (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_content_documents_user_id
+    ON content_documents (user_id);
+CREATE INDEX IF NOT EXISTS ix_content_documents_owner_id
+    ON content_documents (owner_id);
+CREATE INDEX IF NOT EXISTS ix_content_blocks_document_id
+    ON content_blocks (document_id);
 
 -- 5. 대화 요약 메모리
 -- 오래된 원문 메시지를 삭제하지 않고 모델 입력에 사용할 파생 요약만 저장한다.

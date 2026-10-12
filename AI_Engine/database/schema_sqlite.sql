@@ -11,6 +11,10 @@ CREATE TABLE users (
     email VARCHAR(320) NOT NULL,
     display_name VARCHAR(100) NOT NULL,
     password_hash VARCHAR(500) NOT NULL,
+    account_type VARCHAR(20) NOT NULL,
+    login_failed_attempts INTEGER NOT NULL,
+    login_locked_until DATETIME,
+    guest_expires_at DATETIME,
     recovery_question VARCHAR(50),
     recovery_answer_hash VARCHAR(500),
     recovery_failed_attempts INTEGER NOT NULL,
@@ -130,6 +134,7 @@ CREATE TABLE messages (
     proposal_ids JSON NOT NULL,
     actions JSON NOT NULL,
     error JSON,
+    analysis_metadata JSON NOT NULL DEFAULT '{}',
     created_at DATETIME NOT NULL,
     completed_at DATETIME,
     PRIMARY KEY (id),
@@ -177,6 +182,69 @@ CREATE TABLE experience_projects (
         REFERENCES experience_domains (id) ON DELETE CASCADE
 );
 
+CREATE TABLE analysis_runs (
+    id VARCHAR(50) NOT NULL,
+    user_id VARCHAR(50) NOT NULL,
+    client_request_id VARCHAR(100) NOT NULL,
+    external_run_id VARCHAR(100),
+    target_type VARCHAR(40) NOT NULL,
+    target_id VARCHAR(100),
+    input_type VARCHAR(50) NOT NULL,
+    input_payload JSON NOT NULL DEFAULT '{}',
+    output_payload JSON NOT NULL DEFAULT '{}',
+    source_ids JSON NOT NULL DEFAULT '[]',
+    status VARCHAR(30) NOT NULL DEFAULT 'processing',
+    versions JSON NOT NULL DEFAULT '{}',
+    token_usage JSON NOT NULL DEFAULT '{}',
+    coverage_report JSON NOT NULL DEFAULT '{}',
+    omitted_source_ids JSON NOT NULL DEFAULT '[]',
+    error JSON,
+    started_at DATETIME NOT NULL,
+    completed_at DATETIME,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_analysis_runs_user_request_target
+        UNIQUE (user_id, client_request_id, target_type),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE TABLE content_documents (
+    id VARCHAR(50) NOT NULL,
+    user_id VARCHAR(50) NOT NULL,
+    owner_type VARCHAR(40) NOT NULL,
+    owner_id VARCHAR(100) NOT NULL,
+    title VARCHAR(300) NOT NULL DEFAULT '',
+    schema_version VARCHAR(50) NOT NULL DEFAULT 'content-blocks-v1',
+    extensions JSON NOT NULL DEFAULT '{}',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_content_documents_owner UNIQUE (user_id, owner_type, owner_id),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE TABLE content_blocks (
+    id VARCHAR(160) NOT NULL,
+    document_id VARCHAR(50) NOT NULL,
+    block_type VARCHAR(50) NOT NULL,
+    position INTEGER NOT NULL,
+    data JSON NOT NULL DEFAULT '{}',
+    source_refs JSON NOT NULL DEFAULT '[]',
+    citations JSON NOT NULL DEFAULT '[]',
+    origin VARCHAR(30) NOT NULL DEFAULT 'system',
+    review_status VARCHAR(30) NOT NULL DEFAULT 'confirmed',
+    confidence FLOAT,
+    visibility VARCHAR(20) NOT NULL DEFAULT 'visible',
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_content_blocks_position UNIQUE (document_id, position),
+    FOREIGN KEY (document_id) REFERENCES content_documents (id) ON DELETE CASCADE
+);
+
 CREATE TABLE experiences (
     id VARCHAR(50) NOT NULL,
     user_id VARCHAR(50) NOT NULL,
@@ -189,6 +257,7 @@ CREATE TABLE experiences (
     role VARCHAR(200) NOT NULL,
     skills JSON NOT NULL,
     facts JSON NOT NULL,
+    fact_evidence_status JSON NOT NULL DEFAULT '{}',
     period JSON NOT NULL,
     missing_information JSON NOT NULL,
     source_ids JSON NOT NULL,
@@ -200,10 +269,19 @@ CREATE TABLE experiences (
     version INTEGER NOT NULL,
     skill_mentions JSON NOT NULL DEFAULT '[]',
     metrics JSON NOT NULL DEFAULT '[]',
+    draft_id VARCHAR(100),
+    field_citations JSON NOT NULL DEFAULT '{}',
+    skill_groups JSON NOT NULL DEFAULT '[]',
+    confidence FLOAT,
+    extensions JSON NOT NULL DEFAULT '{}',
+    analysis_run_id VARCHAR(50),
+    content_document_id VARCHAR(50),
     PRIMARY KEY (id),
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     FOREIGN KEY (project_id)
-        REFERENCES experience_projects (id) ON DELETE CASCADE
+        REFERENCES experience_projects (id) ON DELETE CASCADE,
+    FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs (id) ON DELETE SET NULL,
+    FOREIGN KEY (content_document_id) REFERENCES content_documents (id) ON DELETE SET NULL
 );
 
 CREATE TABLE experience_draft_trash (
@@ -242,15 +320,21 @@ CREATE TABLE job_analyses (
     posting_title VARCHAR(300) NOT NULL,
     source_url TEXT,
     posting_content TEXT NOT NULL,
+    source_attachment_ids JSON NOT NULL DEFAULT '[]',
     requirements JSON NOT NULL,
     experience_links JSON NOT NULL,
     warnings JSON NOT NULL,
     versions JSON NOT NULL,
+    extensions JSON NOT NULL DEFAULT '{}',
+    analysis_run_id VARCHAR(50),
+    content_document_id VARCHAR(50),
     analyzed_at DATETIME NOT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     PRIMARY KEY (id),
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs (id) ON DELETE SET NULL,
+    FOREIGN KEY (content_document_id) REFERENCES content_documents (id) ON DELETE SET NULL
 );
 
 CREATE TABLE file_processing_jobs (
@@ -420,6 +504,8 @@ CREATE TABLE embedding_records (
 
 CREATE INDEX ix_attachments_user_filename
     ON attachments (user_id, normalized_filename);
+CREATE INDEX ix_analysis_runs_user_id ON analysis_runs (user_id);
+CREATE INDEX ix_analysis_runs_target ON analysis_runs (target_type, target_id);
 CREATE INDEX ix_attachments_user_id ON attachments (user_id);
 CREATE INDEX ix_auth_sessions_expires_at ON auth_sessions (expires_at);
 CREATE UNIQUE INDEX ix_auth_sessions_token_hash
@@ -469,6 +555,8 @@ CREATE INDEX ix_experience_projects_user_id
     ON experience_projects (user_id);
 CREATE INDEX ix_experiences_project_id ON experiences (project_id);
 CREATE INDEX ix_experiences_user_id ON experiences (user_id);
+CREATE INDEX ix_experiences_analysis_run_id ON experiences (analysis_run_id);
+CREATE INDEX ix_experiences_content_document_id ON experiences (content_document_id);
 CREATE INDEX ix_file_processing_jobs_attachment_id
     ON file_processing_jobs (attachment_id);
 CREATE INDEX ix_file_processing_jobs_status_available
@@ -476,6 +564,11 @@ CREATE INDEX ix_file_processing_jobs_status_available
 CREATE INDEX ix_job_analyses_client_request_id
     ON job_analyses (client_request_id);
 CREATE INDEX ix_job_analyses_user_id ON job_analyses (user_id);
+CREATE INDEX ix_job_analyses_analysis_run_id ON job_analyses (analysis_run_id);
+CREATE INDEX ix_job_analyses_content_document_id ON job_analyses (content_document_id);
+CREATE INDEX ix_content_documents_user_id ON content_documents (user_id);
+CREATE INDEX ix_content_documents_owner_id ON content_documents (owner_id);
+CREATE INDEX ix_content_blocks_document_id ON content_blocks (document_id);
 CREATE INDEX ix_messages_conversation_created
     ON messages (conversation_id, created_at);
 CREATE INDEX ix_ontology_aliases_concept_id
@@ -495,5 +588,7 @@ CREATE INDEX ix_transcription_segments_attachment_id
     ON transcription_segments (attachment_id);
 CREATE UNIQUE INDEX ix_users_email ON users (email);
 CREATE UNIQUE INDEX ix_users_username ON users (username);
+CREATE INDEX ix_users_account_type ON users (account_type);
+CREATE INDEX ix_users_guest_expires_at ON users (guest_expires_at);
 
 COMMIT;

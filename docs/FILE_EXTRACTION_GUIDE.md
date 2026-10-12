@@ -8,6 +8,7 @@
 | 종류 | 확장자 | 추출 방식 | 위치 정보 |
 |---|---|---|---|
 | 일반 텍스트 | `.txt`, `.md`, `.markdown` | 인코딩 판별 후 직접 읽기 | 줄 |
+| 공개 웹페이지 | URL, `.html`, `.htm` | 가시 HTML·구조화 데이터, 필요 시 격리 브라우저 렌더링 | HTML block |
 | PDF | `.pdf` | 페이지별 native text, 필요한 페이지만 OCR | 페이지·block |
 | 이미지 | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.tif`, `.tiff` | Tesseract OCR | 단어 box |
 | Word Open XML | `.docx` | 문단·표 XML, 희소 문서의 이미지 OCR | 문단·표 |
@@ -24,6 +25,13 @@ API 키가 없는 환경에서는 임의로 내용을 추정하지 않고 `faile
 
 클라이언트가 보낸 MIME만 신뢰하지 않는다. 서버는 확장자, 파일 시그니처,
 ZIP 기반 문서의 내부 구조를 함께 확인하며 암호화·비정상 압축 문서를 거부한다.
+
+채팅·경험 분석·공고 분석에 입력한 공개 `http(s)` URL은 같은 AttachmentService로
+수집한다. HTTP 원본 또는 렌더링된 DOM을 BlobStore에 보존하고 추출 본문은 Evidence로
+사용한다. 본문이 희소한 페이지의 이미지 후보는 기존 OCR 파이프라인으로 보낸다.
+공개 Notion처럼 JavaScript 렌더링이 필요한 페이지는 Node·Playwright가 준비된 환경에서만
+격리 브라우저 fallback을 사용한다. 사설 IP, localhost, 비표준 포트, 로그인·유료벽·CAPTCHA
+우회는 허용하지 않으며 401/403 응답은 사용자에게 접근 제한으로 안내한다.
 
 ## 2. 원본 보존과 처리 상태
 

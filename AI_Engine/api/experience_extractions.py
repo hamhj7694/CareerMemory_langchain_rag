@@ -25,12 +25,22 @@ from AI_Engine.job_file_text import (
     MAX_JOB_FILE_COUNT,
     MAX_JOB_FILES_TOTAL_BYTES,
 )
+from AI_Engine.knowledge_documents import (
+    begin_analysis_run,
+    complete_analysis_run,
+    fail_analysis_run,
+)
 from AI_Engine.schemas import (
     EvidenceSource,
     EvidenceSourceType,
     ExperienceExtractionInputType,
     ExperienceExtractionRequest,
     ExperienceExtractionResult,
+)
+from AI_Engine.web_content import (
+    WebContentError,
+    merge_attachment_ids,
+    web_content_service,
 )
 
 
@@ -39,6 +49,66 @@ router = APIRouter(
     tags=["experience-extractions"],
 )
 logger = logging.getLogger(__name__)
+
+
+def _json_payload(value):
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {key: _json_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_payload(item) for item in value]
+    if hasattr(value, "__dict__"):
+        return {
+            key: _json_payload(item)
+            for key, item in vars(value).items()
+            if not callable(item)
+        }
+    return value
+
+
+def _run_value(run, key: str, default=""):
+    if isinstance(run, dict):
+        return run.get(key, default)
+    return getattr(run, key, default)
+
+
+def _persist_extraction_result(database: Session, analysis_record, result):
+    result_payload = _json_payload(result)
+    run = result.run
+    sources = list(getattr(result, "sources", []) or [])
+    drafts = list(getattr(result, "experience_drafts", []) or [])
+    source_ids = [
+        source.get("id") if isinstance(source, dict) else source.id
+        for source in sources
+    ]
+    analyzed_ids = list(getattr(result, "analyzed_source_ids", source_ids) or [])
+    complete_analysis_run(
+        database,
+        analysis_record,
+        output_payload=result_payload,
+        external_run_id=_run_value(run, "id") or None,
+        versions={
+            "model": _run_value(run, "model_version"),
+            "prompt": _run_value(run, "prompt_version"),
+            "schema": _run_value(run, "schema_version"),
+        },
+        coverage_report={
+            "source_count": len(source_ids),
+            "analyzed_source_count": len(analyzed_ids),
+            "draft_count": len(drafts),
+            "unprocessed_source_ids": [
+                source_id for source_id in source_ids if source_id not in analyzed_ids
+            ],
+        },
+        omitted_source_ids=[
+            source_id for source_id in source_ids if source_id not in analyzed_ids
+        ],
+    )
+    if hasattr(result, "model_copy"):
+        return result.model_copy(update={"analysis_record_id": analysis_record.id})
+    setattr(result, "analysis_record_id", analysis_record.id)
+    return result
 
 
 def _attachment_sources(
@@ -100,19 +170,50 @@ def extract_direct_input(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="직접 입력 경험정리는 input_type이 direct_input이어야 합니다.",
         )
+    analysis_record = begin_analysis_run(
+        database,
+        user_id=current_user.id,
+        client_request_id=request.client_request_id,
+        target_type="experience_extraction",
+        input_type=str(request.input_type),
+        input_payload=request.model_dump(mode="json"),
+        source_ids=request.attachment_ids,
+    )
     try:
+        web_sources = web_content_service.ingest(
+            database,
+            user_id=current_user.id,
+            texts=(request.text,),
+            existing_attachment_ids=request.attachment_ids,
+        )
+        resolved_request = request.model_copy(update={
+            "attachment_ids": merge_attachment_ids(
+                request.attachment_ids,
+                web_sources.attachment_ids,
+            ),
+        })
+        analysis_record.input_payload = resolved_request.model_dump(mode="json")
+        analysis_record.source_ids = resolved_request.attachment_ids
+        database.commit()
         sources = _attachment_sources(
             database,
             user_id=current_user.id,
-            attachment_ids=request.attachment_ids,
+            attachment_ids=resolved_request.attachment_ids,
         )
-        return experience_ai.organize(request, sources=sources)
-    except (FileInputError, ExperienceAIInputError) as error:
+        result = experience_ai.organize(resolved_request, sources=sources)
+        return _persist_extraction_result(database, analysis_record, result)
+    except (FileInputError, WebContentError, ExperienceAIInputError) as error:
+        fail_analysis_run(
+            database, analysis_record, code="invalid_input", message=str(error)
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(error),
         ) from error
     except ExperienceAIOutputError as error:
+        fail_analysis_run(
+            database, analysis_record, code="invalid_ai_output", message=str(error)
+        )
         # 사용자에게는 내부 스키마를 노출하지 않되, 개발 중에는 어떤 필드가
         # 잘못되었는지 서버 로그에서 바로 확인할 수 있게 원인을 남긴다.
         logger.exception("경험정리 AI 구조화 출력 검증 실패")
@@ -152,6 +253,22 @@ async def extract_direct_input_files(
     if total_bytes > MAX_JOB_FILES_TOTAL_BYTES:
         raise HTTPException(status_code=413, detail="첨부 파일 전체 크기가 허용 범위를 초과합니다.")
 
+    analysis_record = begin_analysis_run(
+        database,
+        user_id=current_user.id,
+        client_request_id=client_request_id,
+        target_type="experience_extraction",
+        input_type=str(ExperienceExtractionInputType.DIRECT_INPUT.value),
+        input_payload={
+            "client_request_id": client_request_id,
+            "input_type": ExperienceExtractionInputType.DIRECT_INPUT.value,
+            "text": text,
+            "files": [
+                {"filename": filename, "mime_type": mime_type, "size_bytes": len(content)}
+                for filename, mime_type, content in uploaded_files
+            ],
+        },
+    )
     try:
         attachment_ids: list[str] = []
         for filename, mime_type, content in uploaded_files:
@@ -175,6 +292,16 @@ async def extract_direct_input_files(
                     or f"{filename}: 파일 처리에 실패했습니다."
                 )
             attachment_ids.append(ingested.attachment.id)
+        web_sources = web_content_service.ingest(
+            database,
+            user_id=current_user.id,
+            texts=(text,),
+            existing_attachment_ids=attachment_ids,
+        )
+        attachment_ids = merge_attachment_ids(
+            attachment_ids,
+            web_sources.attachment_ids,
+        )
         sources = _attachment_sources(
             database,
             user_id=current_user.id,
@@ -186,10 +313,28 @@ async def extract_direct_input_files(
             text=text.strip() or None,
             attachment_ids=attachment_ids,
         )
-        return experience_ai.organize(request, sources=sources)
-    except (FileInputError, BlobStoreError, ValueError, ExperienceAIInputError) as error:
+        analysis_record.input_payload = request.model_dump(mode="json")
+        analysis_record.source_ids = attachment_ids
+        database.commit()
+        result = experience_ai.organize(request, sources=sources)
+        return _persist_extraction_result(database, analysis_record, result)
+    except (
+        FileInputError,
+        BlobStoreError,
+        WebContentError,
+        ValueError,
+        ExperienceAIInputError,
+    ) as error:
+        if "analysis_record" in locals():
+            fail_analysis_run(
+                database, analysis_record, code="invalid_input", message=str(error)
+            )
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ExperienceAIOutputError as error:
+        if "analysis_record" in locals():
+            fail_analysis_run(
+                database, analysis_record, code="invalid_ai_output", message=str(error)
+            )
         logger.exception("파일 포함 경험정리 AI 구조화 출력 검증 실패")
         raise HTTPException(
             status_code=502,

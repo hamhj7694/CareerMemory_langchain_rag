@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -17,6 +17,7 @@ from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.blob_store import BlobStoreError
 from AI_Engine.database.connection import PROJECT_ROOT, get_database_session
 from AI_Engine.database.models import (
+    Attachment,
     Experience,
     ExperienceProject,
     JobAnalysisRecord,
@@ -38,7 +39,24 @@ from AI_Engine.job_file_text import (
     MAX_JOB_FILES_TOTAL_BYTES,
 )
 from AI_Engine.ontology_seed import ONTOLOGY_VERSION
+from AI_Engine.knowledge_documents import (
+    analysis_run_dict,
+    begin_analysis_run,
+    complete_analysis_run,
+    content_document_dict,
+    fail_analysis_run,
+    job_content_blocks,
+    merge_projected_blocks,
+    upsert_content_document,
+)
 from AI_Engine.schemas import JobAnalysisRequest, JobRequirement
+from AI_Engine.schemas.common import normalize_http_url
+from AI_Engine.web_content import (
+    WebContentError,
+    extract_http_urls,
+    merge_attachment_ids,
+    web_content_service,
+)
 
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -46,12 +64,28 @@ VECTOR_ROOT = PROJECT_ROOT / "data" / "vector_store" / "jobs"
 
 
 class JobAnalyzeBody(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     client_request_id: str = Field(min_length=1, max_length=100)
     company_name: str = ""
     role_name: str = ""
     posting_title: str = ""
     source_url: str | None = None
-    posting_content: str = Field(min_length=1)
+    posting_content: str = ""
+    attachment_ids: list[str] = Field(default_factory=list, max_length=10)
+    extensions: dict[str, Any] = Field(default_factory=dict)
+    content_blocks: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("source_url")
+    @classmethod
+    def normalize_source_url(cls, value: str | None) -> str | None:
+        return normalize_http_url(value)
+
+    @model_validator(mode="after")
+    def require_source(self) -> "JobAnalyzeBody":
+        if not self.posting_content.strip() and not self.source_url and not self.attachment_ids:
+            raise ValueError("채용공고 원문, 링크 또는 첨부 파일 중 하나가 필요합니다.")
+        return self
 
 
 class MatchBody(BaseModel):
@@ -181,11 +215,20 @@ def _job_to_frontend(item: JobAnalysisRecord) -> dict[str, Any]:
         "postingTitle": item.posting_title,
         "sourceUrl": item.source_url,
         "postingContent": item.posting_content,
+        "sourceAttachmentIds": item.source_attachment_ids,
         "requirements": [
             _requirement_to_frontend(requirement)
             for requirement in item.requirements
         ],
         "warnings": item.warnings,
+        "versions": item.versions,
+        "extensions": item.extensions,
+        "analysisRunId": item.analysis_run_id,
+        "analysisRun": analysis_run_dict(item.analysis_run),
+        "contentDocument": content_document_dict(item.content_document),
+        "contentBlocks": (
+            content_document_dict(item.content_document) or {"blocks": []}
+        )["blocks"],
         "analyzedAt": item.analyzed_at,
     }
 
@@ -332,6 +375,68 @@ def analyze_job(
     if existing is not None:
         return _job_to_frontend(existing)
 
+    source_url_candidates = extract_http_urls(body.posting_content)
+    if body.source_url and (
+        not body.posting_content.strip()
+        or len(body.posting_content.strip()) < 120
+    ):
+        source_url_candidates = list(dict.fromkeys([
+            body.source_url,
+            *source_url_candidates,
+        ]))
+    try:
+        web_sources = web_content_service.ingest(
+            database,
+            user_id=current_user.id,
+            urls=source_url_candidates,
+            existing_attachment_ids=body.attachment_ids,
+        )
+    except WebContentError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"채용공고 링크를 읽지 못했습니다. {error}",
+        ) from error
+    resolved_attachment_ids = merge_attachment_ids(
+        body.attachment_ids,
+        web_sources.attachment_ids,
+    )
+    resolved_source_url = body.source_url or (
+        web_sources.urls[0] if web_sources.urls else None
+    )
+
+    attachments = []
+    if resolved_attachment_ids:
+        attachments = list(database.scalars(select(Attachment).where(
+            Attachment.user_id == current_user.id,
+            Attachment.id.in_(resolved_attachment_ids),
+        )))
+        if {item.id for item in attachments} != set(resolved_attachment_ids):
+            raise HTTPException(status_code=422, detail="열 수 없는 공고 첨부 파일이 포함되어 있습니다.")
+        unready = [
+            item.filename for item in attachments
+            if item.parse_status not in {"ready", "partial"}
+        ]
+        if unready:
+            raise HTTPException(
+                status_code=422,
+                detail=f"아직 내용을 읽지 못한 공고 자료가 있습니다: {', '.join(unready)}",
+            )
+
+    analysis_record = begin_analysis_run(
+        database,
+        user_id=current_user.id,
+        client_request_id=body.client_request_id,
+        target_type="job_analysis",
+        input_type="job_posting",
+        input_payload={
+            **body.model_dump(mode="json"),
+            "source_url": resolved_source_url,
+            "attachment_ids": resolved_attachment_ids,
+            "web_urls": list(web_sources.urls),
+        },
+        source_ids=resolved_attachment_ids,
+    )
+
     experiences = _load_rag_experiences(current_user.id, database)
     searchable = [item for item in experiences if item.source_ids]
     retriever = None
@@ -354,21 +459,32 @@ def analyze_job(
         company_name=body.company_name,
         role_name=body.role_name,
         posting_title=body.posting_title,
-        source_url=body.source_url,
+        source_url=resolved_source_url,
         posting_content=body.posting_content,
+        attachment_ids=resolved_attachment_ids,
     )
     try:
         result = create_job_analysis_ai(
             experience_retriever=retriever
-        ).invoke(request)
+        ).invoke(
+            request,
+            attachment_texts={
+                attachment.id: attachment.extracted_text
+                for attachment in attachments
+                if attachment.extracted_text.strip()
+            },
+        )
     except JobAnalysisAIInputError as error:
+        fail_analysis_run(database, analysis_record, code="invalid_input", message=str(error))
         raise HTTPException(status_code=422, detail=str(error)) from error
     except (JobAnalysisAIOutputError, JobAnalysisAIRetrievalError) as error:
+        fail_analysis_run(database, analysis_record, code="invalid_ai_output", message=str(error))
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="채용공고 분석 결과를 정리하지 못했습니다. 다시 시도해 주세요.",
         ) from error
     except Exception as error:
+        fail_analysis_run(database, analysis_record, code="model_error", message=str(error))
         message = str(error).lower()
         if "quota" in message or "resource_exhausted" in message or "429" in message:
             raise HTTPException(
@@ -388,7 +504,35 @@ def analyze_job(
         warnings = [
             "근거가 있는 저장 경험이 없어 이번 분석에서는 요구사항만 정리했습니다."
         ]
+    warnings.extend(web_sources.warnings)
 
+    versions = {
+        "model": result.model_version,
+        "prompt": result.prompt_version,
+        "schema": result.schema_version,
+        "index": result.index_version,
+        "ontology": getattr(result, "ontology_version", ONTOLOGY_VERSION),
+    }
+    complete_analysis_run(
+        database,
+        analysis_record,
+        output_payload=result_data,
+        external_run_id=result.analysis_id,
+        target_id=result.analysis_id,
+        versions=versions,
+        coverage_report={
+            "requirement_count": len(result_data["requirements"]),
+            "source_attachment_count": len(resolved_attachment_ids),
+            "posting_content_preserved": True,
+            "web_source_count": len(web_sources.urls),
+        },
+    )
+    extensions = {**body.extensions, **dict(body.model_extra or {})}
+    if web_sources.urls or web_sources.warnings:
+        extensions["web_ingestion"] = {
+            "urls": list(web_sources.urls),
+            "warnings": list(web_sources.warnings),
+        }
     item = JobAnalysisRecord(
         id=result.analysis_id,
         user_id=current_user.id,
@@ -396,25 +540,33 @@ def analyze_job(
         company_name=body.company_name,
         role_name=body.role_name,
         posting_title=body.posting_title,
-        source_url=body.source_url,
+        source_url=resolved_source_url,
         posting_content=body.posting_content,
+        source_attachment_ids=resolved_attachment_ids,
         requirements=result_data["requirements"],
         experience_links=result_data["experience_links"],
         warnings=warnings,
-        versions={
-            "model": result.model_version,
-            "prompt": result.prompt_version,
-            "schema": result.schema_version,
-            "index": result.index_version,
-                "ontology": getattr(
-                    result,
-                    "ontology_version",
-                    ONTOLOGY_VERSION,
-                ),
-        },
+        versions=versions,
+        extensions=extensions,
+        analysis_run_id=analysis_record.id,
         analyzed_at=result.analyzed_at,
     )
     database.add(item)
+    database.flush()
+    document = upsert_content_document(
+        database,
+        user_id=current_user.id,
+        owner_type="job_analysis",
+        owner_id=item.id,
+        title=item.posting_title or item.role_name or "채용공고 분석",
+        blocks=merge_projected_blocks(job_content_blocks({
+            "posting_content": item.posting_content,
+            "source_attachment_ids": item.source_attachment_ids,
+            "requirements": item.requirements,
+        }), body.content_blocks),
+        extensions=extensions,
+    )
+    item.content_document_id = document.id
     database.commit()
     return _job_to_frontend(item)
 
