@@ -15,6 +15,7 @@ export function JobsPage() {
   const [history, setHistory] = useState([]);
   const [historyQuery, setHistoryQuery] = useState('');
   const [postingFiles, setPostingFiles] = useState([]);
+  const [postingAttachmentIds, setPostingAttachmentIds] = useState([]);
   const [extractingFiles, setExtractingFiles] = useState(false);
   const [fileInputKey, setFileInputKey] = useState(0);
   const analysisAttemptRef = useRef(null);
@@ -59,6 +60,12 @@ export function JobsPage() {
           .filter(Boolean)
           .join('\n\n'),
       }));
+      setPostingAttachmentIds((current) => [
+        ...new Set([
+          ...current,
+          ...(result.files || []).map((file) => file.attachment_id).filter(Boolean),
+        ]),
+      ]);
       setPostingFiles([]);
       setFileInputKey((current) => current + 1);
     } catch (reason) {
@@ -69,7 +76,7 @@ export function JobsPage() {
   };
   const submit = async (event) => {
     event.preventDefault();
-    if (!form.postingContent.trim()) { setError('채용공고 원문을 입력해 주세요.'); return; }
+    if (!form.postingContent.trim() && !form.sourceUrl.trim() && !postingAttachmentIds.length) { setError('채용공고 원문, 공개 링크 또는 파일 중 하나를 입력해 주세요.'); return; }
     if (form.sourceUrl.trim() && !/^https?:\/\/\S+$/i.test(form.sourceUrl.trim())) { setError('공고 링크는 http:// 또는 https://로 시작하는 주소를 입력해 주세요.'); return; }
     setPending(true); setError('');
     try {
@@ -79,6 +86,7 @@ export function JobsPage() {
         postingTitle: form.postingTitle.trim() || undefined,
         sourceUrl: form.sourceUrl.trim() || undefined,
         postingContent: form.postingContent.trim(),
+        attachmentIds: postingAttachmentIds,
         coverLetterQuestions: [],
       };
       const attempt = resolveJobAnalysisAttempt(
@@ -116,7 +124,7 @@ export function JobsPage() {
         <label className="is-wide"><span>공고 제목 <small>선택</small></span><input name="postingTitle" value={form.postingTitle} onChange={update} placeholder="예: 2026년 서비스 기획자 경력 채용" /></label>
         <label><span>회사명 <small>선택</small></span><input name="companyName" value={form.companyName} onChange={update} placeholder="예: 넥스트랩" /></label>
         <label><span>직무명 <small>선택</small></span><input name="roleName" value={form.roleName} onChange={update} placeholder="예: 서비스 기획자" /></label>
-        <label className="is-wide job-form__posting"><span>채용공고 원문 <b aria-hidden="true">*</b></span><textarea name="postingContent" value={form.postingContent} onChange={update} rows="12" placeholder="주요 업무, 자격 요건, 우대 사항을 포함한 공고 원문을 붙여 넣으세요." aria-invalid={Boolean(error)} required /></label>
+        <label className="is-wide job-form__posting"><span>채용공고 원문 <small>링크·파일로 대신할 수 있음</small></span><textarea name="postingContent" value={form.postingContent} onChange={update} rows="12" placeholder="주요 업무, 자격 요건, 우대 사항을 포함한 공고 원문 또는 공개 링크를 붙여 넣으세요." aria-invalid={Boolean(error)} /></label>
         <div className="is-wide job-file-input">
           <div className="job-file-input__heading">
             <span>공고 파일 또는 화면 캡처 <small>선택</small></span>
@@ -142,7 +150,7 @@ export function JobsPage() {
           </div>}
           <p>이미지나 PDF의 글자를 읽은 뒤 위 원문 칸에 넣어 드립니다. 내용을 확인하고 수정한 다음 분석해 주세요.</p>
         </div>
-        <label className="is-wide job-form__link"><span>공고 링크 <small>선택</small></span><input type="url" name="sourceUrl" value={form.sourceUrl} onChange={update} placeholder="https://example.com/jobs/123" /></label>
+        <label className="is-wide job-form__link"><span>공고 링크 <small>선택</small></span><input type="url" name="sourceUrl" value={form.sourceUrl} onChange={update} placeholder="https://example.com/jobs/123" /><small>공개 링크만 입력해도 페이지 본문을 읽습니다. 이미지형 공고는 OCR을 시도합니다.</small></label>
       </div>
       {error && <div className="inline-error" role="alert">{error}</div>}
       <AnalysisProgress

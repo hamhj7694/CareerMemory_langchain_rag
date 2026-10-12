@@ -14,6 +14,17 @@ function createRequestId() {
 }
 
 export const experienceExtractionApi = {
+  listRecoverable() {
+    return http.request({
+      path: '/api/v2/analysis-runs?target_type=experience_extraction&unclaimed_only=true&limit=1',
+    });
+  },
+  discard(runId) {
+    return http.request({
+      path: `/api/v2/analysis-runs/${encodeURIComponent(runId)}/discard`,
+      method: 'POST',
+    });
+  },
   analyzeDirectInput({ text, files = [], clientRequestId } = {}) {
     if (files.length) {
       const body = new FormData();

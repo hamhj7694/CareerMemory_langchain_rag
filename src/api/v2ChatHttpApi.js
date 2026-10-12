@@ -272,6 +272,15 @@ export function getAttachment(attachmentId) {
   });
 }
 
+export async function downloadAttachment(attachmentId) {
+  const response = await fetch(
+    `${apiConfig.baseUrl}/api/v2/attachments/${encodeURIComponent(attachmentId)}/download`,
+    { credentials: 'include' },
+  );
+  if (!response.ok) throw new Error('첨부 파일을 다운로드하지 못했습니다.');
+  return response.blob();
+}
+
 export function processAttachment(attachmentId) {
   return http.request({
     path: `/api/v2/attachments/${encodeURIComponent(attachmentId)}/process`,
@@ -347,6 +356,7 @@ export const v2ChatHttpApi = {
   streamMessage,
   preflightAttachments,
   getAttachment,
+  downloadAttachment,
   processAttachment,
   uploadAttachments,
   deleteAttachment,

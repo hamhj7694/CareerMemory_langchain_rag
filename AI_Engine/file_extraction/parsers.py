@@ -38,6 +38,7 @@ from AI_Engine.file_extraction.models import (
     SourceFile,
 )
 from AI_Engine.file_extraction.ocr import run_ocr
+from AI_Engine.html_extraction import extract_html
 
 
 PARSER_VERSION = "career-file-parser-v2"
@@ -110,6 +111,43 @@ def parse_text(file: SourceFile) -> FileExtractionResult:
     )
 
 
+def parse_html(file: SourceFile) -> FileExtractionResult:
+    extracted = extract_html(file.content)
+    image_only = not extracted.text and bool(extracted.image_sources)
+    text = extracted.text
+    if image_only:
+        text = "[이미지 중심 웹페이지 — 연결된 이미지 OCR 근거를 확인하세요.]"
+    if not text:
+        raise FileExtractionError(
+            f"{file.filename}: HTML 페이지에서 읽을 수 있는 내용을 찾지 못했습니다."
+        )
+    segments = tuple(
+        ExtractionSegment(
+            text=paragraph,
+            locator={"block": index, "block_type": "html_text"},
+        )
+        for index, paragraph in enumerate(
+            (item.strip() for item in re.split(r"\n{2,}", text)),
+            start=1,
+        )
+        if paragraph
+    )
+    return FileExtractionResult(
+        filename=file.filename,
+        mime_type=file.mime_type,
+        text=text,
+        segments=segments,
+        quality_score=0.4 if image_only else 1.0,
+        warnings=("HTML 본문이 이미지 중심이어서 이미지 OCR이 필요합니다.",) if image_only else (),
+        parser_name="html-visible-text",
+        parser_version=PARSER_VERSION,
+        metadata={
+            "page_title": extracted.title,
+            "image_sources": list(extracted.image_sources),
+            "structured_text_count": extracted.structured_text_count,
+            "image_only": image_only,
+        },
+    )
 def parse_image(file: SourceFile) -> FileExtractionResult:
     try:
         with Image.open(BytesIO(file.content)) as image:
@@ -566,6 +604,7 @@ def parse_media_file(file: SourceFile) -> FileExtractionResult:
 PARSERS: dict[str, Parser] = {
     "text/plain": parse_text,
     "text/markdown": parse_text,
+    "text/html": parse_html,
     "application/pdf": parse_pdf,
     DOCX_MIME: parse_docx,
     PPTX_MIME: parse_pptx,
@@ -607,6 +646,7 @@ __all__ = [
     "extract_files",
     "parse_docx",
     "parse_hwpx",
+    "parse_html",
     "parse_image",
     "parse_legacy_document",
     "parse_media_file",

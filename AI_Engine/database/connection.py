@@ -11,7 +11,7 @@ from pathlib import Path
 # 2. SQLAlchemy 연결 기능
 # Engine은 DB 연결 방법을 보관하고 Session은 한 API 요청의 DB 작업 범위를 관리한다.
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -48,6 +48,14 @@ engine = create_engine(
     connect_args=connect_args,
     pool_pre_ping=True,
 )
+
+
+if DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -123,6 +131,10 @@ def initialize_database(*, seed_ontology_data: bool = True) -> None:
         }
         missing_user_columns = {
             "username": "VARCHAR(30)",
+            "account_type": "VARCHAR(20) NOT NULL DEFAULT 'legacy'",
+            "login_failed_attempts": "INTEGER NOT NULL DEFAULT 0",
+            "login_locked_until": "DATETIME",
+            "guest_expires_at": "DATETIME",
             "recovery_question": "VARCHAR(50)",
             "recovery_answer_hash": "VARCHAR(500)",
             "recovery_failed_attempts": "INTEGER NOT NULL DEFAULT 0",
@@ -143,6 +155,18 @@ def initialize_database(*, seed_ontology_data: bool = True) -> None:
                     "ix_users_username ON users (username)"
                 )
             )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS "
+                    "ix_users_account_type ON users (account_type)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS "
+                    "ix_users_guest_expires_at ON users (guest_expires_at)"
+                )
+            )
 
         experience_columns = {
             column["name"]
@@ -151,6 +175,14 @@ def initialize_database(*, seed_ontology_data: bool = True) -> None:
         missing_experience_columns = {
             "skill_mentions": "JSON NOT NULL DEFAULT '[]'",
             "metrics": "JSON NOT NULL DEFAULT '[]'",
+            "fact_evidence_status": "JSON NOT NULL DEFAULT '{}'",
+            "draft_id": "VARCHAR(100)",
+            "field_citations": "JSON NOT NULL DEFAULT '{}'",
+            "skill_groups": "JSON NOT NULL DEFAULT '[]'",
+            "confidence": "FLOAT",
+            "extensions": "JSON NOT NULL DEFAULT '{}'",
+            "analysis_run_id": "VARCHAR(50)",
+            "content_document_id": "VARCHAR(50)",
         }
         with engine.begin() as connection:
             for column_name, column_type in missing_experience_columns.items():
@@ -158,6 +190,50 @@ def initialize_database(*, seed_ontology_data: bool = True) -> None:
                     connection.execute(text(
                         f"ALTER TABLE experiences ADD COLUMN {column_name} {column_type}"
                     ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_experiences_analysis_run_id "
+                "ON experiences (analysis_run_id)"
+            ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_experiences_content_document_id "
+                "ON experiences (content_document_id)"
+            ))
+
+        message_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("messages")
+        }
+        if "analysis_metadata" not in message_columns:
+            with engine.begin() as connection:
+                connection.execute(text(
+                    "ALTER TABLE messages ADD COLUMN "
+                    "analysis_metadata JSON NOT NULL DEFAULT '{}'"
+                ))
+
+        job_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("job_analyses")
+        }
+        missing_job_columns = {
+            "source_attachment_ids": "JSON NOT NULL DEFAULT '[]'",
+            "extensions": "JSON NOT NULL DEFAULT '{}'",
+            "analysis_run_id": "VARCHAR(50)",
+            "content_document_id": "VARCHAR(50)",
+        }
+        with engine.begin() as connection:
+            for column_name, column_type in missing_job_columns.items():
+                if column_name not in job_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE job_analyses ADD COLUMN {column_name} {column_type}"
+                    ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_job_analyses_analysis_run_id "
+                "ON job_analyses (analysis_run_id)"
+            ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_job_analyses_content_document_id "
+                "ON job_analyses (content_document_id)"
+            ))
 
         attachment_columns = {
             column["name"]

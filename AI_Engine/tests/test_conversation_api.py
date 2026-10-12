@@ -29,6 +29,7 @@ from AI_Engine.api.conversations import (
 from AI_Engine.api.experience_extractions import get_experience_ai
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.router import app
+from AI_Engine.web_content import WebIngestionResult
 
 
 class FakeChatbot:
@@ -380,6 +381,56 @@ class ConversationApiTests(unittest.TestCase):
         self.assertEqual(
             user_message["attachment_refs"],
             [{"id": attachment["id"], "filename": "career.txt"}],
+        )
+
+    def test_public_url_snapshot_reaches_chatbot_as_attachment_context(self) -> None:
+        with self.session_factory() as database:
+            database.add(Attachment(
+                id="ATT-web-chat",
+                user_id=self.current_user.id,
+                filename="public-career-page.html",
+                normalized_filename="public-career-page.html",
+                mime_type="text/html",
+                size_bytes=120,
+                content_hash="b" * 64,
+                content=b"",
+                extracted_text="FastAPI API 응답 시간을 40% 단축했습니다.",
+                parse_status="ready",
+                parser_version="career-file-parser-v2",
+                extraction_metadata={"source_type": "web_url"},
+            ))
+            database.commit()
+        conversation = self.create_conversation().json()
+        web_result = WebIngestionResult(
+            attachment_ids=("ATT-web-chat",),
+            urls=("https://example.com/career",),
+        )
+
+        with patch(
+            "AI_Engine.api.conversations.web_content_service.ingest",
+            return_value=web_result,
+        ):
+            response = self.client.post(
+                f"/api/v2/conversations/{conversation['id']}/messages",
+                json={
+                    "content": "https://example.com/career 내용을 요약해 줘.",
+                    "intent": "auto",
+                    "attachment_ids": [],
+                    "client_request_id": str(uuid4()),
+                },
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        context = self.chatbot.requests[0].context
+        self.assertEqual(context.attachments[0].source_id, "ATT-web-chat")
+        self.assertIn("40%", context.attachments[0].content)
+        history = self.client.get(
+            f"/api/v2/conversations/{conversation['id']}/messages"
+        ).json()["items"]
+        user_message = next(item for item in history if item["role"] == "user")
+        self.assertEqual(
+            user_message["analysis_metadata"]["web_urls"],
+            ["https://example.com/career"],
         )
 
     def test_failed_parser_keeps_original_attachment_and_error_status(self) -> None:
@@ -799,6 +850,7 @@ class ConversationApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
         self.assertIn("event: message.accepted", stream_text)
         self.assertIn("event: intent.resolved", stream_text)
         self.assertEqual(stream_text.count("event: assistant.delta"), 2)

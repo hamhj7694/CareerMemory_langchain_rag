@@ -178,6 +178,7 @@ class MessageResponse(DatabaseResponse):
     proposal_ids: list[str]
     actions: list[dict[str, object]]
     error: dict[str, object] | None = None
+    analysis_metadata: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
     completed_at: datetime | None = None
     request_message_id: str | None = None

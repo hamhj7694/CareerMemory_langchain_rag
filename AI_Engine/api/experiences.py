@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session, selectinload
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.database.connection import get_database_session
 from AI_Engine.database.models import (
+    AnalysisRunRecord,
+    ContentDocument,
     Experience,
     ExperienceDomain,
     ExperienceDraftTrash,
@@ -22,6 +24,13 @@ from AI_Engine.database.models import (
     utc_now,
 )
 from AI_Engine.evidence_repository import sync_experience_evidence
+from AI_Engine.knowledge_documents import (
+    analysis_run_dict,
+    content_document_dict,
+    experience_content_blocks,
+    merge_projected_blocks,
+    upsert_content_document,
+)
 from AI_Engine.normalization_backfill import structured_fields_for_experience
 
 router = APIRouter(prefix="/api/v2", tags=["experiences"])
@@ -48,6 +57,8 @@ class BulkMoveRequest(BaseModel):
 
 
 class ExperienceCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     project_id: str | None = None
     domain: dict[str, Any] | None = None
     project: dict[str, Any] | None = None
@@ -65,6 +76,13 @@ class ExperienceCreate(BaseModel):
     missing_information: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
     source_refs: list[dict[str, Any]] = Field(default_factory=list)
+    draft_id: str | None = None
+    field_citations: dict[str, Any] = Field(default_factory=dict)
+    skill_groups: list[dict[str, Any]] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    extensions: dict[str, Any] = Field(default_factory=dict)
+    analysis_run_id: str | None = None
+    content_blocks: list[dict[str, Any]] = Field(default_factory=list)
     status: str = "confirmed"
 
 
@@ -105,9 +123,21 @@ def experience_dict(item: Experience) -> dict[str, Any]:
         "situation": item.situation, "actions": item.actions,
         "results": item.results, "role": item.role, "skills": item.skills,
         "skill_mentions": item.skill_mentions,
-        "facts": item.facts, "metrics": item.metrics, "period": item.period,
+        "facts": item.facts, "fact_evidence_status": item.fact_evidence_status,
+        "metrics": item.metrics, "period": item.period,
         "missing_information": item.missing_information,
         "source_ids": item.source_ids, "source_refs": item.source_refs,
+        "draft_id": item.draft_id,
+        "field_citations": item.field_citations,
+        "skill_groups": item.skill_groups,
+        "confidence": item.confidence,
+        "extensions": item.extensions,
+        "analysis_run_id": item.analysis_run_id,
+        "analysis_run": analysis_run_dict(item.analysis_run),
+        "content_document": content_document_dict(item.content_document),
+        "content_blocks": (
+            content_document_dict(item.content_document) or {"blocks": []}
+        )["blocks"],
         "status": item.status,
         "domain": {"id": domain.id, "name": domain.name},
         "domain_id": domain.id,
@@ -145,11 +175,20 @@ def experience_trash_draft(item: Experience) -> dict[str, Any]:
         "skills": list(item.skills or []),
         "skill_mentions": list(item.skill_mentions or []),
         "facts": list(item.facts or []),
+        "fact_evidence_status": dict(item.fact_evidence_status or {}),
         "metrics": list(item.metrics or []),
         "period": dict(item.period) if isinstance(item.period, dict) else item.period,
         "missing_information": list(item.missing_information or []),
         "source_ref_ids": list(item.source_ids or []),
         "source_refs": list(item.source_refs or []),
+        "field_citations": dict(item.field_citations or {}),
+        "skill_groups": list(item.skill_groups or []),
+        "confidence": item.confidence,
+        "extensions": dict(item.extensions or {}),
+        "analysis_run_id": item.analysis_run_id,
+        "content_blocks": (
+            content_document_dict(item.content_document) or {"blocks": []}
+        )["blocks"],
         "status": "draft",
     }
 
@@ -205,7 +244,11 @@ def owned_domain(domain_id: str, user_id: str, database: Session) -> ExperienceD
 def owned_experience(experience_id: str, user_id: str, database: Session) -> Experience:
     item = database.scalar(
         select(Experience)
-        .options(selectinload(Experience.project).selectinload(ExperienceProject.domain))
+        .options(
+            selectinload(Experience.project).selectinload(ExperienceProject.domain),
+            selectinload(Experience.content_document).selectinload(ContentDocument.blocks),
+            selectinload(Experience.analysis_run),
+        )
         .where(
             Experience.id == experience_id,
             Experience.user_id == user_id,
@@ -456,7 +499,11 @@ def list_experiences(
 ):
     items = list(database.scalars(
         select(Experience)
-        .options(selectinload(Experience.project).selectinload(ExperienceProject.domain))
+        .options(
+            selectinload(Experience.project).selectinload(ExperienceProject.domain),
+            selectinload(Experience.content_document).selectinload(ContentDocument.blocks),
+            selectinload(Experience.analysis_run),
+        )
         .where(Experience.user_id == current_user.id, Experience.deleted_at.is_(None))
         .order_by(Experience.updated_at.desc())
     ))
@@ -478,20 +525,62 @@ def create_experience(
         metrics=request.metrics,
         source_refs=request.source_refs,
     )
+    extra_fields = dict(request.model_extra or {})
+    extensions = {**request.extensions, **extra_fields}
+    analysis_run = None
+    if request.analysis_run_id:
+        analysis_run = database.scalar(select(AnalysisRunRecord).where(
+            AnalysisRunRecord.id == request.analysis_run_id,
+            AnalysisRunRecord.user_id == current_user.id,
+        ))
+        if analysis_run is None:
+            raise HTTPException(status_code=422, detail="연결할 수 없는 AI 분석 기록입니다.")
     item = Experience(
         id=resource_id("EXP"), user_id=current_user.id, project_id=project.id,
         title=request.title.strip(), summary=request.summary,
         situation=request.situation, actions=request.actions, results=request.results,
         role=request.role, skills=request.skills,
         skill_mentions=skill_mentions, facts=request.facts,
+        fact_evidence_status={
+            fact: (
+                "supported"
+                if request.field_citations.get(f"facts.{index}")
+                else "needs_evidence"
+            )
+            for index, fact in enumerate(request.facts)
+        },
         metrics=metrics,
         period=period, missing_information=request.missing_information,
         source_ids=request.source_ids, source_refs=request.source_refs,
+        draft_id=request.draft_id,
+        field_citations=request.field_citations,
+        skill_groups=request.skill_groups,
+        confidence=request.confidence,
+        extensions=extensions,
+        analysis_run_id=analysis_run.id if analysis_run else None,
         status="confirmed",
     )
     item.project = project
     database.add(item)
     database.flush()
+    document = upsert_content_document(
+        database,
+        user_id=current_user.id,
+        owner_type="experience",
+        owner_id=item.id,
+        title=item.title,
+        blocks=merge_projected_blocks(experience_content_blocks({
+            **request.model_dump(mode="json"),
+            "skill_mentions": skill_mentions,
+            "metrics": metrics,
+            "fact_evidence_status": item.fact_evidence_status,
+            "extensions": extensions,
+        }), request.content_blocks),
+        extensions=extensions,
+    )
+    item.content_document_id = document.id
+    if analysis_run is not None:
+        analysis_run.target_id = item.id
     sync_experience_evidence(database, item)
     database.commit()
     database.refresh(item)
@@ -517,14 +606,32 @@ def update_experience(
     item = owned_experience(experience_id, current_user.id, database)
     if item.version != request.base_version:
         raise HTTPException(status_code=409, detail="경험이 다른 곳에서 수정되었습니다.")
+    if "analysis_run_id" in request.changes:
+        analysis_run_id = request.changes.get("analysis_run_id")
+        if analysis_run_id is not None:
+            analysis_run = database.scalar(select(AnalysisRunRecord).where(
+                AnalysisRunRecord.id == analysis_run_id,
+                AnalysisRunRecord.user_id == current_user.id,
+            ))
+            if analysis_run is None:
+                raise HTTPException(status_code=422, detail="연결할 수 없는 AI 분석 기록입니다.")
+
     allowed = {
         "title", "summary", "situation", "actions", "results", "role", "skills",
         "skill_mentions", "facts", "metrics", "period", "missing_information",
+        "fact_evidence_status",
         "source_ids", "source_refs", "status",
+        "draft_id", "field_citations", "skill_groups", "confidence",
+        "extensions", "analysis_run_id",
     }
+    unknown_changes: dict[str, Any] = {}
     for key, value in request.changes.items():
         if key in allowed:
             setattr(item, key, value)
+        elif key != "content_blocks":
+            unknown_changes[key] = value
+    if unknown_changes:
+        item.extensions = {**(item.extensions or {}), **unknown_changes}
     if any(
         key in request.changes
         for key in ("skills", "facts", "skill_mentions", "metrics")
@@ -538,6 +645,62 @@ def update_experience(
         )
     item.version += 1
     item.updated_at = utc_now()
+    existing_blocks = (
+        content_document_dict(item.content_document) or {"blocks": []}
+    )["blocks"]
+    if "content_blocks" in request.changes:
+        blocks = merge_projected_blocks(experience_content_blocks({
+            "summary": item.summary,
+            "situation": item.situation,
+            "actions": item.actions,
+            "results": item.results,
+            "role": item.role,
+            "skills": item.skills,
+            "skill_mentions": item.skill_mentions,
+            "skill_groups": item.skill_groups,
+            "facts": item.facts,
+            "fact_evidence_status": item.fact_evidence_status,
+            "metrics": item.metrics,
+            "period": item.period,
+            "missing_information": item.missing_information,
+            "field_citations": item.field_citations,
+            "confidence": item.confidence,
+            "extensions": item.extensions,
+        }), list(request.changes.get("content_blocks") or []))
+    else:
+        custom_blocks = [
+            block for block in existing_blocks
+            if block.get("origin") != "system_projection"
+        ]
+        blocks = experience_content_blocks({
+            "summary": item.summary,
+            "situation": item.situation,
+            "actions": item.actions,
+            "results": item.results,
+            "role": item.role,
+            "skills": item.skills,
+            "skill_mentions": item.skill_mentions,
+            "skill_groups": item.skill_groups,
+            "facts": item.facts,
+            "fact_evidence_status": item.fact_evidence_status,
+            "metrics": item.metrics,
+            "period": item.period,
+            "missing_information": item.missing_information,
+            "field_citations": item.field_citations,
+            "confidence": item.confidence,
+            "extensions": item.extensions,
+        }) + custom_blocks
+    document = upsert_content_document(
+        database,
+        user_id=current_user.id,
+        owner_type="experience",
+        owner_id=item.id,
+        title=item.title,
+        blocks=blocks,
+        extensions=item.extensions,
+        document_id=item.content_document_id,
+    )
+    item.content_document_id = document.id
     sync_experience_evidence(database, item)
     database.commit()
     return experience_dict(owned_experience(item.id, current_user.id, database))

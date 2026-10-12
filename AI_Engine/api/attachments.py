@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 from typing import Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -14,9 +15,18 @@ from sqlalchemy.orm import Session
 
 from AI_Engine.attachment_service import attachment_service, normalized_filename
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
-from AI_Engine.blob_store import BlobStoreError
+from AI_Engine.blob_store import BlobStoreError, read_attachment_bytes
 from AI_Engine.database.connection import get_database_session
-from AI_Engine.database.models import Attachment, FileProcessingJob, TranscriptionSegment, User
+from AI_Engine.database.models import (
+    Attachment,
+    Conversation,
+    Experience,
+    FileProcessingJob,
+    JobAnalysisRecord,
+    Message,
+    TranscriptionSegment,
+    User,
+)
 from AI_Engine.file_extraction import FileInputError, run_file_extraction
 from AI_Engine.job_file_text import (
     MAX_JOB_FILE_BYTES,
@@ -284,6 +294,53 @@ def get_attachment(
     )
 
 
+@router.get("/{attachment_id}/download")
+def download_attachment(
+    attachment_id: str,
+    current_user: User = Depends(get_current_user),
+    database: Session = Depends(get_database_session),
+) -> Response:
+    attachment = _owned_attachment(attachment_id, current_user.id, database)
+    encoded_filename = quote(attachment.filename)
+    return Response(
+        content=read_attachment_bytes(attachment),
+        media_type=attachment.mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+        },
+    )
+
+
+def _attachment_reference_count(
+    database: Session,
+    *,
+    user_id: str,
+    attachment_id: str,
+) -> int:
+    count = 0
+    messages = database.scalars(
+        select(Message).join(Conversation).where(Conversation.user_id == user_id)
+    )
+    count += sum(attachment_id in (message.attachment_ids or []) for message in messages)
+    experiences = database.scalars(select(Experience).where(Experience.user_id == user_id))
+    for experience in experiences:
+        refs = experience.source_refs or []
+        if any(
+            isinstance(source, dict)
+            and (
+                str(source.get("attachment_id") or source.get("attachmentId") or "")
+                == attachment_id
+                or str(source.get("id") or source.get("source_id") or "")
+                in {attachment_id, f"source-{attachment_id}"}
+            )
+            for source in refs
+        ):
+            count += 1
+    jobs = database.scalars(select(JobAnalysisRecord).where(JobAnalysisRecord.user_id == user_id))
+    count += sum(attachment_id in (job.source_attachment_ids or []) for job in jobs)
+    return count
+
+
 @router.delete("/{attachment_id}")
 def delete_attachment(
     attachment_id: str,
@@ -291,6 +348,13 @@ def delete_attachment(
     database: Session = Depends(get_database_session),
 ) -> dict[str, str]:
     attachment = _owned_attachment(attachment_id, current_user.id, database)
+    if _attachment_reference_count(
+        database, user_id=current_user.id, attachment_id=attachment.id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="대화·경험·채용공고에서 사용 중인 파일은 연결을 먼저 해제해 주세요.",
+        )
     storage_backend = attachment.storage_backend
     storage_key = attachment.storage_key
     database.execute(delete(TranscriptionSegment).where(

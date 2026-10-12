@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyExperience, toExperience, toExperienceChanges } from './experienceMapper.js';
+import {
+  createEmptyExperience,
+  toExperience,
+  toExperienceChanges,
+  toExperienceCreateInput,
+} from './experienceMapper.js';
 import { selectExperienceCard, selectExperiencePreview } from './experienceSelectors.js';
 
 describe('experience model', () => {
@@ -31,5 +36,41 @@ describe('experience model', () => {
     const draft = createEmptyExperience();
     expect(draft.status).toBe('draft');
     expect(toExperienceChanges(draft)).toMatchObject({ actions: [], results: [], facts: [], skills: [] });
+  });
+
+  it('근거와 확장 블록을 API 왕복 과정에서 보존한다', () => {
+    const raw = {
+      id: 'EXP-lossless',
+      title: '무손실 경험',
+      facts: ['응답시간 50% 단축'],
+      skill_mentions: [{ raw_text: '페스트API', canonical_skill_id: 'skill-fastapi' }],
+      skill_groups: [{ name: '백엔드', skill_names: ['FastAPI'] }],
+      field_citations: { 'facts.0': [{ source_ref_id: 'SRC-1', quote: '응답시간 50% 단축' }] },
+      fact_evidence_status: { '응답시간 50% 단축': 'supported' },
+      content_blocks: [
+        { id: 'BLOCK-1', type: 'custom', data: { value: '스키마 밖 정보' }, origin: 'user' },
+        { id: 'BLOCK-core', type: 'summary', data: { text: 'projection' }, origin: 'system_projection' },
+      ],
+      extensions: { future_field: '보존됨' },
+      confidence: 0.91,
+      analysis_run_id: 'ANALYSIS-1',
+    };
+
+    const experience = toExperience(raw);
+    expect(experience).toMatchObject({
+      confidence: 0.91,
+      analysisRunId: 'ANALYSIS-1',
+      factEvidenceStatus: { '응답시간 50% 단축': 'supported' },
+      extensions: { future_field: '보존됨' },
+    });
+    expect(experience.contentBlocks[0].data.value).toBe('스키마 밖 정보');
+
+    const createInput = toExperienceCreateInput(experience);
+    expect(createInput.field_citations['facts.0'][0].source_ref_id).toBe('SRC-1');
+    expect(createInput.content_blocks[0].type).toBe('custom');
+    expect(createInput.extensions.future_field).toBe('보존됨');
+    expect(toExperienceChanges(experience).content_blocks).toEqual([
+      expect.objectContaining({ id: 'BLOCK-1', origin: 'user' }),
+    ]);
   });
 });

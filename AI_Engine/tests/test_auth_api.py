@@ -64,6 +64,311 @@ class AuthApiTests(unittest.TestCase):
             },
         )
 
+    def test_guest_starts_without_signup_fields_and_receives_isolated_session(
+        self,
+    ) -> None:
+        response = self.client.post("/api/v2/auth/guest")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["user"]["account_type"], "guest")
+        self.assertIsNone(response.json()["user"]["email"])
+        self.assertIsNone(response.json()["user"]["username"])
+        self.assertTrue(response.json()["csrf_token"])
+        self.assertIn("HttpOnly", response.headers["set-cookie"])
+        with self.session_factory() as database:
+            user = database.query(models.User).one()
+        self.assertEqual(user.account_type, "guest")
+        self.assertIsNotNone(user.guest_expires_at)
+
+    def test_simple_identifier_creates_then_reopens_same_space(self) -> None:
+        profile_required = self.client.post(
+            "/api/v2/auth/simple",
+            json={"identifier": "함형준", "pin": "123456"},
+        )
+        with self.session_factory() as database:
+            user_count_before_profile = database.query(models.User).count()
+
+        created = self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "함형준",
+                "pin": "123456",
+                "display_name": "형준님",
+                "recovery_question": "recovery_keyword",
+                "recovery_answer": "나만의 복구 단어",
+            },
+        )
+        user_id = created.json()["user"]["id"]
+        self.client.cookies.clear()
+
+        reopened = self.client.post(
+            "/api/v2/auth/simple",
+            json={"identifier": "함형준", "pin": "123456"},
+        )
+
+        self.assertEqual(profile_required.status_code, 200)
+        self.assertTrue(profile_required.json()["profile_required"])
+        self.assertEqual(profile_required.json()["identifier"], "함형준")
+        self.assertEqual(user_count_before_profile, 0)
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()["user"]["account_type"], "simple")
+        self.assertEqual(created.json()["user"]["username"], "함형준")
+        self.assertEqual(created.json()["user"]["display_name"], "형준님")
+        self.assertIsNone(created.json()["user"]["email"])
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.json()["user"]["id"], user_id)
+        with self.session_factory() as database:
+            user = database.get(models.User, user_id)
+        self.assertNotEqual(user.password_hash, "123456")
+        self.assertTrue(user.password_hash.startswith("$argon2"))
+        self.assertEqual(user.recovery_question, "recovery_keyword")
+        self.assertNotEqual(user.recovery_answer_hash, "나만의 복구 단어")
+        self.assertTrue(user.recovery_answer_hash.startswith("$argon2"))
+
+    def test_simple_identifier_requires_six_digit_pin(self) -> None:
+        response = self.client.post(
+            "/api/v2/auth/simple",
+            json={"identifier": "easy_user", "pin": "1234"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_wrong_simple_pin_returns_login_specific_error(self) -> None:
+        self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "easy_user",
+                "pin": "123456",
+                "display_name": "쉬운 사용자",
+                "recovery_question": "favorite_work",
+                "recovery_answer": "어린 왕자",
+            },
+        )
+        self.client.cookies.clear()
+
+        response = self.client.post(
+            "/api/v2/auth/simple",
+            json={"identifier": "easy_user", "pin": "000000"},
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["error"]["code"], "SIMPLE_LOGIN_FAILED")
+        self.assertEqual(
+            response.json()["error"]["message"],
+            "간단 아이디 또는 PIN이 올바르지 않습니다.",
+        )
+
+    def test_guest_can_keep_current_records_with_simple_identifier(self) -> None:
+        guest = self.client.post("/api/v2/auth/guest")
+        guest_id = guest.json()["user"]["id"]
+
+        claimed = self.client.put(
+            "/api/v2/auth/simple/claim",
+            headers={"X-CSRF-Token": guest.json()["csrf_token"]},
+            json={
+                "identifier": "my_memory",
+                "pin": "654321",
+                "display_name": "나의 커리어",
+                "recovery_question": "memorable_place",
+                "recovery_answer": "부산 바닷가",
+            },
+        )
+
+        self.assertEqual(claimed.status_code, 200)
+        self.assertEqual(claimed.json()["user"]["id"], guest_id)
+        self.assertEqual(claimed.json()["user"]["account_type"], "simple")
+        self.assertEqual(claimed.json()["user"]["username"], "my_memory")
+        self.assertEqual(claimed.json()["user"]["display_name"], "나의 커리어")
+        with self.session_factory() as database:
+            user = database.get(models.User, guest_id)
+        self.assertIsNone(user.guest_expires_at)
+
+    def test_simple_login_temporarily_locks_after_five_wrong_pins(self) -> None:
+        self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "locked_user",
+                "pin": "123456",
+                "display_name": "잠금 테스트",
+                "recovery_question": "private_nickname",
+                "recovery_answer": "잠금 별명",
+            },
+        )
+        self.client.cookies.clear()
+
+        responses = [
+            self.client.post(
+                "/api/v2/auth/simple",
+                json={"identifier": "locked_user", "pin": "000000"},
+            )
+            for _ in range(5)
+        ]
+        locked = self.client.post(
+            "/api/v2/auth/simple",
+            json={"identifier": "locked_user", "pin": "123456"},
+        )
+
+        self.assertTrue(all(response.status_code == 401 for response in responses))
+        self.assertEqual(locked.status_code, 429)
+        self.assertEqual(
+            locked.json()["error"]["code"],
+            "SIMPLE_LOGIN_LOCKED",
+        )
+
+    def test_simple_nickname_can_be_shared_by_different_identifiers(self) -> None:
+        first = self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "first_user",
+                "pin": "123456",
+                "display_name": "같은 호칭",
+                "recovery_question": "first_skill",
+                "recovery_answer": "파이썬",
+            },
+        )
+        self.client.cookies.clear()
+        second = self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "second_user",
+                "pin": "654321",
+                "display_name": "같은 호칭",
+                "recovery_question": "childhood_dream",
+                "recovery_answer": "개발자",
+            },
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertNotEqual(
+            first.json()["user"]["username"],
+            second.json()["user"]["username"],
+        )
+        self.assertEqual(first.json()["user"]["display_name"], "같은 호칭")
+        self.assertEqual(second.json()["user"]["display_name"], "같은 호칭")
+
+    def test_existing_simple_identifier_cannot_be_created_again(self) -> None:
+        created = self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "unique_user",
+                "pin": "123456",
+                "display_name": "첫 번째 사용자",
+                "recovery_question": "recovery_keyword",
+                "recovery_answer": "첫 번째 답변",
+            },
+        )
+        self.client.cookies.clear()
+
+        duplicate = self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "unique_user",
+                "pin": "654321",
+                "display_name": "두 번째 사용자",
+                "recovery_question": "favorite_work",
+                "recovery_answer": "두 번째 답변",
+            },
+        )
+
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(
+            duplicate.json()["error"]["code"],
+            "SIMPLE_IDENTIFIER_TAKEN",
+        )
+        with self.session_factory() as database:
+            self.assertEqual(database.query(models.User).count(), 1)
+
+    def test_simple_pin_can_be_reset_with_saved_recovery_answer(self) -> None:
+        created = self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "recover_user",
+                "pin": "123456",
+                "display_name": "복구 사용자",
+                "recovery_question": "favorite_work",
+                "recovery_answer": "어린 왕자",
+            },
+        )
+        question = self.client.post(
+            "/api/v2/auth/simple/pin/recovery-question",
+            json={"identifier": "recover_user"},
+        )
+        wrong = self.client.post(
+            "/api/v2/auth/simple/pin/reset",
+            json={
+                "identifier": "recover_user",
+                "recovery_answer": "틀린 답변",
+                "pin": "654321",
+                "pin_confirm": "654321",
+            },
+        )
+        reset = self.client.post(
+            "/api/v2/auth/simple/pin/reset",
+            json={
+                "identifier": "recover_user",
+                "recovery_answer": "  어린   왕자  ",
+                "pin": "654321",
+                "pin_confirm": "654321",
+            },
+        )
+        revoked_session = self.client.get("/api/v2/auth/me")
+        self.client.cookies.clear()
+        old_pin = self.client.post(
+            "/api/v2/auth/simple",
+            json={"identifier": "recover_user", "pin": "123456"},
+        )
+        new_pin = self.client.post(
+            "/api/v2/auth/simple",
+            json={"identifier": "recover_user", "pin": "654321"},
+        )
+
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(question.status_code, 200)
+        self.assertEqual(question.json()["recovery_question"], "favorite_work")
+        self.assertEqual(wrong.status_code, 400)
+        self.assertEqual(
+            wrong.json()["error"]["code"],
+            "SIMPLE_PIN_RECOVERY_FAILED",
+        )
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual(revoked_session.status_code, 401)
+        self.assertEqual(old_pin.status_code, 401)
+        self.assertEqual(new_pin.status_code, 200)
+
+    def test_simple_pin_recovery_locks_after_five_wrong_answers(self) -> None:
+        self.client.post(
+            "/api/v2/auth/simple",
+            json={
+                "identifier": "recovery_locked",
+                "pin": "123456",
+                "display_name": "복구 잠금",
+                "recovery_question": "recovery_keyword",
+                "recovery_answer": "정답 단어",
+            },
+        )
+
+        responses = [
+            self.client.post(
+                "/api/v2/auth/simple/pin/reset",
+                json={
+                    "identifier": "recovery_locked",
+                    "recovery_answer": "틀린 답변",
+                    "pin": "654321",
+                    "pin_confirm": "654321",
+                },
+            )
+            for _ in range(5)
+        ]
+
+        self.assertTrue(all(response.status_code == 400 for response in responses[:4]))
+        self.assertEqual(responses[4].status_code, 429)
+        self.assertEqual(
+            responses[4].json()["error"]["code"],
+            "SIMPLE_PIN_RECOVERY_LOCKED",
+        )
+
     def test_register_hashes_password_and_sets_httponly_cookie(self) -> None:
         response = self.register()
 
@@ -238,6 +543,12 @@ class AuthApiTests(unittest.TestCase):
                 "childhood_nickname",
                 "elementary_school",
                 "first_company",
+                "favorite_work",
+                "memorable_place",
+                "private_nickname",
+                "first_skill",
+                "childhood_dream",
+                "recovery_keyword",
             },
         )
 

@@ -1,7 +1,19 @@
 import { listToText, textToMarkdownLines } from '../model/experienceContent.js';
 import { ExperienceRichList, ExperienceRichText } from './ExperienceRichText.jsx';
+import { ContentDocumentRenderer } from './ContentBlockRenderer.jsx';
 
 const emptyText = '저장된 내용이 없습니다.';
+const editableBlockTypes = new Set(['paragraph', 'list', 'callout']);
+
+const newEditableBlock = () => ({
+  id: `custom-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`,
+  type: 'paragraph',
+  data: { title: '추가 정보', text: '' },
+  origin: 'user',
+  review_status: 'confirmed',
+  visibility: 'visible',
+  schema_version: 1,
+});
 
 function DetailCard({ title, children, tone, className = '' }) {
   return (
@@ -59,6 +71,17 @@ export function ExperienceDetailContent({
   openSources,
 }) {
   if (!editing) {
+    if (item.contentBlocks?.length) {
+      return (
+        <div className="detail-grid detail-grid--blocks">
+          <main><ContentDocumentRenderer blocks={item.contentBlocks} /></main>
+          <aside>
+            {item.analysisRun && <DetailCard title="AI 분석 기록"><p>{item.analysisRun.status === 'succeeded' ? '분석 결과가 원문과 함께 보존되어 있습니다.' : '분석 상태를 확인해 주세요.'}</p><small>스키마 {item.analysisRun.versions?.schema || '기록 없음'}</small></DetailCard>}
+            <EvidenceCard count={item.evidenceIds.length} isNew={isNew} openSources={openSources} manage />
+          </aside>
+        </div>
+      );
+    }
     return (
       <div className="detail-grid">
         <main>
@@ -79,6 +102,18 @@ export function ExperienceDetailContent({
     );
   }
 
+  const systemBlocks = (form.contentBlocks || []).filter((block) => block.origin === 'system_projection');
+  const editableBlocks = (form.contentBlocks || []).filter((block) => block.origin !== 'system_projection');
+  const setEditableBlocks = (blocks) => onFormChange('contentBlocks', [...systemBlocks, ...blocks]);
+  const updateEditableBlock = (index, updater) => setEditableBlocks(editableBlocks.map((block, blockIndex) => blockIndex === index ? updater(block) : block));
+  const moveEditableBlock = (index, offset) => {
+    const target = index + offset;
+    if (target < 0 || target >= editableBlocks.length) return;
+    const next = [...editableBlocks];
+    [next[index], next[target]] = [next[target], next[index]];
+    setEditableBlocks(next);
+  };
+
   return (
     <div className="detail-grid detail-grid--edit">
       <main>
@@ -93,6 +128,23 @@ export function ExperienceDetailContent({
         </DetailCard>
         <DetailCard title="결과">
           <textarea rows="6" value={listToText(form.results)} placeholder="마크업 문법으로 입력할 수 있습니다. 예: 1. 내용 / - 내용" onChange={(event) => onFormChange('results', textToMarkdownLines(event.target.value))} />
+        </DetailCard>
+        <DetailCard title="추가 정보 블록" className="detail-block-editor">
+          <p className="detail-block-editor__guide">정해진 항목에 들어가지 않는 맥락도 블록으로 추가해 그대로 보존할 수 있습니다.</p>
+          {editableBlocks.map((block, index) => {
+            const type = block.type || block.block_type || 'custom';
+            const supported = editableBlockTypes.has(type);
+            const data = block.data || {};
+            return <article className="detail-block-editor__item" key={block.id || `custom-block-${index}`}>
+              <header><strong>블록 {index + 1}</strong><span><button type="button" disabled={index === 0} onClick={() => moveEditableBlock(index, -1)} aria-label={`블록 ${index + 1} 위로 이동`}>↑</button><button type="button" disabled={index === editableBlocks.length - 1} onClick={() => moveEditableBlock(index, 1)} aria-label={`블록 ${index + 1} 아래로 이동`}>↓</button><button type="button" className="is-danger" onClick={() => setEditableBlocks(editableBlocks.filter((_, blockIndex) => blockIndex !== index))}>삭제</button></span></header>
+              <label>형식<select value={supported ? type : 'custom'} onChange={(event) => updateEditableBlock(index, (current) => ({ ...current, type: event.target.value, data: { title: current.data?.title || '추가 정보', ...(event.target.value === 'paragraph' ? { text: current.data?.text || '' } : { items: current.data?.items || [] }) } }))}><option value="paragraph">문단</option><option value="list">목록</option><option value="callout">강조 메모</option>{!supported && <option value="custom">사용자 정의(읽기 전용)</option>}</select></label>
+              <label>제목<input value={data.title || ''} onChange={(event) => updateEditableBlock(index, (current) => ({ ...current, data: { ...(current.data || {}), title: event.target.value } }))} /></label>
+              {supported && type === 'paragraph' && <label>내용<textarea rows="4" value={data.text || ''} onChange={(event) => updateEditableBlock(index, (current) => ({ ...current, data: { ...(current.data || {}), text: event.target.value } }))} /></label>}
+              {supported && ['list', 'callout'].includes(type) && <label>내용<textarea rows="4" value={listToText(data.items || [])} placeholder="한 줄에 하나씩 입력해 주세요." onChange={(event) => updateEditableBlock(index, (current) => ({ ...current, data: { ...(current.data || {}), items: textToMarkdownLines(event.target.value) } }))} /></label>}
+              {!supported && <pre>{JSON.stringify(data, null, 2)}</pre>}
+            </article>;
+          })}
+          <button type="button" className="ui-button ui-button--secondary" onClick={() => setEditableBlocks([...editableBlocks, newEditableBlock()])}>+ 정보 블록 추가</button>
         </DetailCard>
       </main>
       <aside>

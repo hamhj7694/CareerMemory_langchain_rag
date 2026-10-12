@@ -15,7 +15,7 @@
 ## 2. 변경 불가능한 핵심 원칙
 
 1. 사용자 원문은 정규화 결과와 무관하게 보존한다.
-2. AI 출력은 원본이 아니라 재생성 가능한 파생 데이터다.
+2. AI 출력은 원본이 아니라 버전이 있는 파생 데이터이며, 재현·감사를 위해 실행 단위 스냅샷을 보존한다.
 3. 미등록 표현은 삭제하지 않고 `unresolved`로 보존한다.
 4. 검증된 경우에만 canonical concept ID를 원문에 투영한다.
 5. 모든 확정 사실은 source ID와 exact quote로 원본까지 추적할 수 있어야 한다.
@@ -31,6 +31,7 @@
 
 - `Conversation`, `Message`
 - `LocalBlobStore`에 저장한 `Attachment` 원본과 DB 메타데이터
+- 사용자가 요청한 공개 URL의 HTTP 원본 또는 렌더링 DOM snapshot
 - 직접 입력한 경험 텍스트
 - 채용공고 원문과 원본 URL
 - 원본 해시, MIME type, 생성 시각
@@ -52,17 +53,24 @@ DB BLOB에 중복 저장하지 않지만 기존 BLOB 레코드는 호환해서 �
 - `SkillMention`, `QuantifiedMetric`
 - ontology concept, alias, relation
 - 분석·파서·청커·스키마 버전
+- `AnalysisRunRecord`의 입력·출력·coverage·token usage 스냅샷
 - `EmbeddingRecord`
 - `FileProcessingJob`, `TranscriptionSegment`
 
 Silver 데이터는 원본과 버전을 이용해 다시 만들 수 있어야 한다.
 
 통합 파일 파서는 확장자·시그니처·Open XML/HWPX 컨테이너를 함께 검증하고,
-TXT/MD·PDF·이미지·DOCX·PPTX·HWPX를 형식별로 처리하고 DOC/PPT/HWP는 설치된
+TXT/MD·HTML·PDF·이미지·DOCX·PPTX·HWPX를 형식별로 처리하고 DOC/PPT/HWP는 설치된
 격리 변환기를 통해 현대 형식으로 바꾼 뒤 같은 파서를 사용한다. PDF는 페이지별 native
 text/OCR hybrid 방식이며 한 페이지 실패를 전체 문서 실패로 확대하지 않는다.
 OCR 실행기는 외부 capability이므로 `GET /capabilities`의 실제 설치·언어팩 상태와
 분리해 판단한다. 상세 운영 기준은 `FILE_EXTRACTION_GUIDE.md`를 따른다.
+
+채팅·경험 분석·공고 분석의 URL은 `WebContentService`가 공인 HTTP(S) 주소인지
+DNS 결과와 redirect마다 검증한 뒤 수집한다. 정적 HTML에서 본문이 부족한 공개
+JavaScript 페이지는 설치된 Chrome/Playwright로 격리 렌더링하고, 이미지 중심 페이지는
+이미지 원본을 자식 Attachment로 저장해 OCR한다. 추출 텍스트를 사용자 입력 원문에
+덮어쓰지 않고 URL snapshot의 파생 데이터로 연결한다.
 
 음성·영상은 FFmpeg로 단일 channel 16kHz audio로 정규화한 뒤 STT한다. 전사
 결과는 본문뿐 아니라 provider, model, 시작·종료 ms를 `TranscriptionSegment`로
@@ -75,6 +83,7 @@ OCR 실행기는 외부 capability이므로 `GET /capabilities`의 실제 설치
 - `JobRequirement`
 - `RequirementExperienceLink`
 - 사용자가 직접 선택하거나 거절한 관계
+- 사용자가 작성하거나 승인한 `ContentDocument` 사용자 정의 블록
 
 AI 초안은 Gold가 아니다. 사용자 승인과 백엔드 트랜잭션이 완료되어야 Gold가 된다.
 
@@ -87,6 +96,11 @@ AI 초안은 Gold가 아니다. 사용자 승인과 백엔드 트랜잭션이 �
 - 챗봇 RAG 문맥
 
 Serving 데이터는 Bronze, Silver, Gold에서 다시 생성할 수 있어야 한다.
+
+`ContentDocument`와 `ContentBlock`은 고정 화면 DTO와 저장 지식을 분리하는 표시 계층이다.
+요약·행동·성과처럼 검색과 검증에 필요한 정형 필드는 계속 유지하고, 규격 밖 정보는
+`extensions`와 타입 블록으로 함께 저장한다. 알 수 없는 블록 타입도 `data` 원문을 버리지
+않으며 프론트엔드는 범용 key/value fallback으로 표시한다.
 
 ## 4. 현재 데이터 흐름
 
@@ -103,20 +117,67 @@ Message / Attachment / Job posting
  Evidence source · exact citation
               │
               ▼
+ AnalysisRun(input/output/version/coverage)
+              │
+              ▼
  ExperienceDraft / JobRequirement
               │
         사용자 검토·승인
               ▼
-       Confirmed Experience
+ Confirmed Experience + ContentDocument
               │
       검색 문서와 벡터 인덱스
               ▼
    Chat RAG / Job–Experience match
 ```
 
-## 5. 경량 도메인 온톨로지
+분석 요청은 LLM 호출 전에 `analysis_runs.input_payload`를 먼저 커밋한다. 성공하면 전체
+구조화 출력을 `output_payload`에 기록하고, 아직 Gold 레코드로 승인되지 않은 성공 결과는
+경험 관리 화면에서 복구하거나 명시적으로 폐기할 수 있다. 실패도 오류 코드와 상태를
+남기므로 브라우저 이탈이나 모델 오류가 곧 입력 유실로 이어지지 않는다.
 
-### 5.1 현재 구현
+## 5. 무손실 저장과 자유 형식 표시 문서
+
+### 5.1 분석 실행 스냅샷
+
+`analysis_runs`는 다음 정보를 실행 단위로 보존한다.
+
+- 사용자와 client request ID
+- 원문 입력 payload와 source ID
+- AI 전체 출력 payload
+- model·prompt·schema·ontology version
+- token usage와 coverage report
+- 누락 source ID, 성공·실패·폐기 상태
+- 승인 후 연결된 Experience 또는 Job ID
+
+### 5.2 ContentDocument와 ContentBlock
+
+```text
+Experience / JobAnalysisRecord
+  -> ContentDocument (schema_version, extensions)
+       -> ContentBlock[]
+            - type / position / data
+            - source_refs / citations
+            - origin / review_status / confidence / visibility
+```
+
+백엔드는 정형 필드를 `system_projection` 블록으로 만들고, 사용자 정의 블록과 미래 버전
+블록은 그대로 덧붙인다. 클라이언트가 아직 모르는 top-level 필드는 `extensions`로,
+모르는 블록 속성은 `block.data.extensions`로 이동해 왕복 저장한다. 원문이 수정되면 그
+원문을 인용한 fact는 `stale`, 연결이 제거되어 남은 인용이 없으면 `needs_evidence`가 된다.
+화면은 이 상태와 실제 quote·source ID·locator를 함께 보여준다.
+
+경험 상세 편집 화면에서는 기존 핵심 필드와 별도로 문단·목록·강조 메모 블록을 추가하고,
+순서를 바꾸거나 삭제할 수 있다. 현재 클라이언트가 알지 못하는 미래 블록은 읽기 전용
+JSON fallback으로 표시해 내용을 숨기거나 변환 중 유실하지 않는다.
+
+이 구조는 Notion과 같은 완전한 범용 문서 편집기를 뜻하지 않는다. Career Memory의
+검증·검색용 정형 스키마를 유지하면서 표시 형식과 규격 밖 데이터를 분리한 typed block
+document 방식이다.
+
+## 6. 경량 도메인 온톨로지
+
+### 6.1 현재 구현
 
 `ontology_concepts`, `ontology_aliases`, `ontology_relations` 테이블과
 `OntologyRepository`가 다음 기능을 제공한다.
@@ -134,7 +195,7 @@ Message / Attachment / Job posting
 fallback으로 사용하고, 미등록 표현을 유사 개념으로 임의 추정하지 않는다. 관리 UI와
 사용자 승인 기반 개념 승격은 아직 범위 밖이다.
 
-### 5.2 구현 엔티티
+### 6.2 구현 엔티티
 
 ```text
 OntologyConcept
@@ -169,7 +230,7 @@ OntologyRelation
 초기 `concept_type`은 `skill`만 사용한다. 실제 요구가 생기면 `role`,
 `organization`, `industry`, `certificate`, `task`로 확장한다.
 
-### 5.3 관계와 판정 정책
+### 6.3 관계와 판정 정책
 
 | 관계 | 의미 | 필수 기술 충족 |
 |---|---|---|
@@ -191,9 +252,9 @@ FastAPI --narrower_than--> Python Web Framework
 
 별칭은 동일 개념이므로 충족으로 인정한다. `related_to`는 검색 후보 확장에만 사용한다.
 
-## 6. Evidence와 lineage
+## 7. Evidence와 lineage
 
-### 6.1 구현 엔티티
+### 7.1 구현 엔티티
 
 ```text
 EvidenceDocument
@@ -240,7 +301,7 @@ EmbeddingRecord
 문서와 청크 ID는 source와 content hash로 결정되므로 같은 입력을 반복해도 중복되지
 않는다. 원본이 바뀌면 이전 문서·청크·EmbeddingRecord를 stale로 표시한다.
 
-### 6.2 추적 경로
+### 7.2 추적 경로
 
 ```text
 Experience fact
@@ -253,15 +314,15 @@ Experience fact
 `source_ref_id`는 마이그레이션 기간에도 유지한다. 신규 Evidence ID를 도입할 때는
 기존 ID를 갑자기 바꾸지 않고 호환 projection 또는 매핑을 제공한다.
 
-### 6.3 검증 규칙
+### 7.3 검증 규칙
 
 - citation의 quote는 원문에 실제로 존재해야 한다.
 - 가능하면 quote와 함께 start/end offset을 기록한다.
 - structured skill과 metric의 source ID는 소유한 Evidence와 일치해야 한다.
 - 같은 내용은 `content_hash`로 중복 처리를 방지한다.
-- 원본이 변경되면 파생 Evidence와 임베딩을 stale로 표시한다.
+- 원본이 변경되면 파생 Evidence와 임베딩뿐 아니라 해당 인용에 의존하는 fact를 stale로 표시한다.
 
-## 7. 임베딩과 인덱스
+## 8. 임베딩과 인덱스
 
 두 인덱스를 분리한다.
 
@@ -295,18 +356,19 @@ dry-run이며 vector를 변경하지 않는다.
 
 같은 컬렉션에 서로 다른 임베딩 모델의 벡터를 섞지 않는다.
 
-## 8. 저장과 삭제 정책
+## 9. 저장과 삭제 정책
 
 - LocalBlobStore가 첨부 원본의 source of truth이고 DB는 해시·경로·처리 상태를 가진다.
 - `file_processing_jobs`는 서버 재시작에도 남으며 만료 lease만 제한 횟수 안에서 복구한다.
 - 기존 DB BLOB은 dry-run과 해시 검증을 거친 `--apply`에서만 로컬 저장소로 옮긴다.
 - 원본 삭제, 경험 연결 해제, 경험 삭제, 초안 삭제는 서로 다른 동작이다.
+- 대화·경험·채용공고에서 참조 중인 첨부는 먼저 연결을 해제하기 전까지 삭제하지 않는다.
 - 대화 삭제가 이미 승인된 경험을 자동 삭제해서는 안 된다.
 - 계정 삭제는 원본, 파생 데이터, ontology mention, 벡터를 사용자 범위에서 제거한다.
 - 전역 ontology concept은 사용자 소유 데이터와 분리한다.
 - 사용자별 unresolved 표현을 전역 개념으로 자동 승격하지 않는다.
 
-## 9. 마이그레이션·rollback
+## 10. 마이그레이션·rollback
 
 적용 순서:
 
@@ -337,7 +399,7 @@ rollback 기준:
 
 마이그레이션은 원문, `skills`, `facts`, `metrics`, `source_refs`를 덮어쓰지 않는다.
 
-## 10. 내부 저장과 공개 API 경계
+## 11. 내부 저장과 공개 API 경계
 
 | 구분 | 내부 저장 | 공개 API |
 |---|---|---|
@@ -345,6 +407,8 @@ rollback 기준:
 | 정규화 결과 | concept ID, match type, ontology version | 기존 `skill_mentions`·매칭 설명에 필요한 값만 반환 |
 | ontology 관리 | alias normalization key, provenance, relation edge·policy | 직접 노출하지 않음 |
 | Evidence | document/chunk/link ID, original text, offset, hash, stale 상태 | 기존 source ref와 검증된 citation을 유지 |
+| AI 실행 | 전체 input/output, version, coverage, token usage | 소유자에게 복구 가능한 분석 기록과 연결 ID 반환 |
+| 자유 형식 문서 | ContentDocument, typed block, extensions | `content_document`, `content_blocks`, 알 수 없는 data fallback |
 | embedding | provider/model/hash/index version/collection/vector ID | 노출하지 않음 |
 | 저장 경로 | LocalBlobStore storage key | 노출하지 않고 attachment API로 접근 |
 
@@ -352,7 +416,7 @@ rollback 기준:
 기준이다. 향후 원본 상세 화면이 필요할 때만 권한 검사된 Evidence locator DTO를 별도
 추가하며, DB 모델을 그대로 직렬화하지 않는다.
 
-## 11. 구현 범위와 남은 항목
+## 12. 구현 범위와 남은 항목
 
 구현된 범위는 다음과 같다.
 
@@ -363,6 +427,10 @@ rollback 기준:
 5. 온톨로지 기반 매칭 정책 분리
 6. dry-run 백필
 7. 정답 세트와 lineage 회귀 테스트 확장
+8. LLM 호출 전 입력과 전체 출력의 `AnalysisRunRecord` 스냅샷
+9. 정형 필드와 사용자 정의 정보를 함께 보존하는 `ContentDocument`·`ContentBlock`
+10. 원문 변경·연결 해제 시 fact 근거 상태 무효화와 화면 경고
+11. 미승인 분석 복구 API와 경험 관리 화면 복구 진입점
 
 남은 운영 항목은 실제 익명화 corpus 확대, 관리 UI, 사용자 승인 기반 unresolved 개념
 승격, 운영 규모의 별도 비동기 embedding queue다.
@@ -377,7 +445,7 @@ rollback 기준:
 - generic triple store
 - 미등록 표현의 자동 전역 개념 승격
 
-## 12. 완료 기준
+## 13. 완료 기준
 
 - 모든 원문과 규격 외 표현이 보존된다.
 - 기존 별칭·수치·인용 테스트가 유지된다.
@@ -388,3 +456,5 @@ rollback 기준:
 - 사용자별 데이터와 벡터가 섞이지 않는다.
 - 백필 dry-run 결과와 실제 적용 결과를 비교할 수 있다.
 - API·프론트엔드 계약을 깨지 않고 additive하게 도입된다.
+- 규격 밖 필드와 알 수 없는 블록도 API→DB→API→화면 왕복에서 보존된다.
+- 저장 전 브라우저 이탈이 발생해도 성공한 분석 결과를 다시 불러올 수 있다.

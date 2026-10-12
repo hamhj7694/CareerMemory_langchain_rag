@@ -53,6 +53,14 @@ export function JobPostingSourcePanel({ job, expanded, onToggle }) {
                     ) : '입력하지 않음'}
                   </dd>
                 </div>
+                <div>
+                  <dt>원본 첨부</dt>
+                  <dd>{job.sourceAttachmentIds?.length ? `${job.sourceAttachmentIds.length}개 연결됨` : '직접 입력 원문'}</dd>
+                </div>
+                <div>
+                  <dt>분석 버전</dt>
+                  <dd>{job.versions?.schema || '기록 없음'}</dd>
+                </div>
               </dl>
               <div className="job-posting-source__body">
                 <h3>채용공고 원문</h3>

@@ -6,7 +6,9 @@ import { EmptyState, ErrorState, LoadingState, Tag } from '../components/common/
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
 import { aiRecommendedExperienceIds } from '../features/jobs/jobMatchViewModel.js';
 import { JobPostingSourcePanel } from '../features/jobs/JobPostingSourcePanel.jsx';
+import { ContentDocumentRenderer } from '../features/experience/components/ContentBlockRenderer.jsx';
 import './jobs.css';
+import './job-structured.css';
 import { failureRequirementIds } from '../utils/contractFields.js';
 
 const normalizeExperience = (item) => ({
@@ -151,6 +153,7 @@ export function JobDetailPage() {
     return [...items.values()];
   }, [allExperiences, matches]);
   const orderedRequirements = useMemo(() => [...(job?.requirements || [])].sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)), [job]);
+  const extraJobBlocks = useMemo(() => (job?.contentBlocks || job?.content_blocks || []).filter((block) => !['source_text', 'job_requirement'].includes(block.type || block.block_type)), [job]);
   const activeRequirement = orderedRequirements.find((item) => item.id === activeRequirementId) || orderedRequirements[0];
   const activeMatch = matches.find((item) => item.requirementId === activeRequirement?.id);
   const recommendedIds = useMemo(() => aiRecommendedExperienceIds(activeMatch), [activeMatch]);
@@ -217,6 +220,8 @@ export function JobDetailPage() {
           const summary = requirementSummary(requirement);
           const importance = requirementImportance(requirement);
           const needsReview = requirementNeedsReview(requirement);
+          const requirementMatch = matches.find((item) => item.requirementId === requirement.id);
+          const sourceExcerpt = requirementSourceExcerpt(requirement);
           const requirementCollapsed = collapsedRequirementIds.has(requirement.id);
           const bodyId = `requirement-card-body-${requirement.id}`;
           return <article className={`requirement-card requirement-card--selectable ${isActive ? 'is-focused' : ''} ${requirementCollapsed ? 'is-collapsed' : ''}`} key={requirement.id}>
@@ -228,6 +233,14 @@ export function JobDetailPage() {
             </div>
             {!requirementCollapsed && <div id={bodyId} className="requirement-card__body">
               {summary && <p className="requirement-card__summary">{summary}</p>}
+              {(requirement.keywords?.length > 0 || requirement.skillMentions?.length > 0 || requirement.metrics?.length > 0) && <div className="requirement-card__structured">
+                {requirement.keywords?.length > 0 && <div><strong>핵심어</strong><span>{requirement.keywords.map((value) => <em key={value}>{value}</em>)}</span></div>}
+                {requirement.skillMentions?.length > 0 && <details><summary>구조화 기술 {requirement.skillMentions.length}개</summary><pre>{JSON.stringify(requirement.skillMentions, null, 2)}</pre></details>}
+                {requirement.metrics?.length > 0 && <details><summary>구조화 수치 {requirement.metrics.length}개</summary><pre>{JSON.stringify(requirement.metrics, null, 2)}</pre></details>}
+                {Number.isFinite(requirement.confidence) && <small>AI 참고 신뢰도 {Math.round(requirement.confidence * 100)}%</small>}
+              </div>}
+              {sourceExcerpt && <div className="requirement-card__source"><span>공고 원문 근거</span><blockquote>{sourceExcerpt}</blockquote>{requirement.sourceLocator && <small>{JSON.stringify(requirement.sourceLocator)}</small>}</div>}
+              {requirementMatch?.reason && <p className="requirement-card__match-reason"><strong>매칭 판단</strong>{requirementMatch.reason}</p>}
               <div className={`requirement-linked-experiences ${connected.length ? '' : 'is-empty'}`}>{connected.length ? connected.map((experience) => {
                 const chipId = `${requirement.id}:${experience.experienceId}`;
                 const isOpen = activeLinkedChip === chipId;
@@ -254,6 +267,7 @@ export function JobDetailPage() {
         onToggle={() => setPostingSourceExpanded((current) => !current)}
       />
     </div>
+    {(extraJobBlocks.length > 0 || Object.keys(job.extensions || {}).length > 0) && <section className="surface job-step-panel job-additional-data"><div className="section-title"><div><h2>추가 분석 정보</h2><p>고정 화면 형식에 포함되지 않은 정보도 원문 형태로 보존해 표시합니다.</p></div></div>{extraJobBlocks.length > 0 && <ContentDocumentRenderer blocks={extraJobBlocks} />}{Object.keys(job.extensions || {}).length > 0 && <details><summary>확장 속성</summary><pre>{JSON.stringify(job.extensions, null, 2)}</pre></details>}</section>}
     {detailExperience && <div className="job-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetailExperience(null); }}><aside className="job-experience-detail" role="dialog" aria-modal="true" aria-labelledby="job-experience-detail-title"><header><div><span className="eyebrow">EXPERIENCE DETAIL</span><h2 id="job-experience-detail-title">{detailExperience.title}</h2><p>{detailExperience.domainName} · {detailExperience.projectName}</p></div><button type="button" onClick={() => setDetailExperience(null)} aria-label="닫기">×</button></header><section><h3>경험 요약</h3><p>{detailExperience.summary || '등록된 경험 요약이 없습니다.'}</p></section>{detailExperience.role && <section><h3>담당 역할</h3><p>{detailExperience.role}</p></section>}<section><h3>역량</h3><div className="job-detail-skills">{detailExperience.skills.length ? detailExperience.skills.map((skill) => <span key={skill}>{skill}</span>) : <p>등록된 역량이 없습니다.</p>}</div></section>{detailExperience.results.length > 0 && <section><h3>성과</h3><ul>{detailExperience.results.map((result, index) => <li key={`${result}-${index}`}>{result}</li>)}</ul></section>}<footer><span>연결된 근거 {detailExperience.evidenceCount}개</span><button type="button" className="ui-button ui-button--secondary" onClick={() => navigate(`/memory/${detailExperience.experienceId}`)}>경험 상세 페이지</button></footer></aside></div>}
   </section>;
 }

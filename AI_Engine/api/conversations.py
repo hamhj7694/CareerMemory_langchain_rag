@@ -38,6 +38,11 @@ from AI_Engine.chatbot_ai import ChatbotAI
 from AI_Engine.AI_langchain import CareerMemoryAI
 from AI_Engine.file_extraction import MAX_FILES_TOTAL_BYTES, MAX_FILES_TOTAL_MIB
 from AI_Engine.schemas import ChatMessage, ChatMode, ChatRequest, ChatRole
+from AI_Engine.web_content import (
+    WebContentError,
+    merge_attachment_ids,
+    web_content_service,
+)
 
 
 # 4. 대화 API 공통 경로
@@ -153,6 +158,36 @@ def convert_intent_to_chat_mode(intent: str) -> ChatMode:
             f"{requested_intent} 기능은 아직 메시지 API에 연결되지 않았습니다. "
             "현재는 자동, 일반 질문, 조언을 사용할 수 있습니다."
         ),
+    )
+
+
+def resolve_message_web_content(
+    database: Session,
+    *,
+    user_id: str,
+    content: str,
+    attachment_ids: list[str],
+) -> tuple[list[str], dict[str, object]]:
+    """메시지의 공개 URL을 읽고 일반 첨부와 같은 근거로 연결한다."""
+
+    try:
+        resolved = web_content_service.ingest(
+            database,
+            user_id=user_id,
+            texts=(content,),
+            existing_attachment_ids=attachment_ids,
+        )
+    except WebContentError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"링크 내용을 읽지 못했습니다. {error}",
+        ) from error
+    return (
+        merge_attachment_ids(attachment_ids, resolved.attachment_ids),
+        {
+            "web_urls": list(resolved.urls),
+            "web_ingestion_warnings": list(resolved.warnings),
+        },
     )
 
 
@@ -556,6 +591,13 @@ def send_message(
             detail="같은 요청의 AI 처리가 아직 완료되지 않았습니다.",
         )
 
+    resolved_attachment_ids, web_metadata = resolve_message_web_content(
+        database,
+        user_id=current_user.id,
+        content=request.content,
+        attachment_ids=request.attachment_ids,
+    )
+
     cancel_active_assistant_messages(database, conversation.id)
     user_sequence = conversation.message_count + 1
     user_message = Message(
@@ -568,7 +610,8 @@ def send_message(
         content=request.content,
         requested_intent=request.intent,
         resolved_intents=[],
-        attachment_ids=request.attachment_ids,
+        attachment_ids=resolved_attachment_ids,
+        analysis_metadata=web_metadata,
         completed_at=utc_now(),
     )
     database.add(user_message)
@@ -653,6 +696,16 @@ def send_message(
             action.model_dump(mode="json")
             for action in ai_response.suggested_actions
         ],
+        analysis_metadata={
+            "model_version": getattr(ai_response, "model_version", ""),
+            "prompt_version": getattr(ai_response, "prompt_version", ""),
+            "schema_version": getattr(ai_response, "schema_version", ""),
+            "routed_intent": getattr(ai_response, "routed_intent", resolved_intent),
+            "token_usage": (
+                ai_response.token_usage.model_dump(mode="json")
+                if getattr(ai_response, "token_usage", None) else {}
+            ),
+        },
         completed_at=ai_response.message.created_at,
     )
     database.add(assistant_message)
@@ -818,8 +871,19 @@ def stream_message(
         return StreamingResponse(
             replay_saved_message(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
+
+    resolved_attachment_ids, web_metadata = resolve_message_web_content(
+        database,
+        user_id=current_user.id,
+        content=request.content,
+        attachment_ids=request.attachment_ids,
+    )
 
     cancel_active_assistant_messages(database, conversation.id)
     user_sequence = conversation.message_count + 1
@@ -833,7 +897,8 @@ def stream_message(
         content=request.content,
         requested_intent=request.intent,
         resolved_intents=[],
-        attachment_ids=request.attachment_ids,
+        attachment_ids=resolved_attachment_ids,
+        analysis_metadata=web_metadata,
         completed_at=utc_now(),
     )
     database.add(user_message)
@@ -981,6 +1046,18 @@ def stream_message(
                         action.model_dump(mode="json")
                         for action in completed_response.suggested_actions
                     ]
+                analysis_metadata = {}
+                if completed_response is not None:
+                    analysis_metadata = {
+                        "model_version": getattr(completed_response, "model_version", ""),
+                        "prompt_version": getattr(completed_response, "prompt_version", ""),
+                        "schema_version": getattr(completed_response, "schema_version", ""),
+                        "routed_intent": getattr(completed_response, "routed_intent", resolved_intent),
+                        "token_usage": (
+                            completed_response.token_usage.model_dump(mode="json")
+                            if getattr(completed_response, "token_usage", None) else {}
+                        ),
+                    }
                 if not update_active_assistant(
                     worker_database,
                     assistant_id,
@@ -989,6 +1066,7 @@ def stream_message(
                     resolved_intents=[resolved_intent],
                     citations=citations,
                     actions=actions,
+                    analysis_metadata=analysis_metadata,
                     completed_at=utc_now(),
                 ):
                     worker_events.put((
@@ -1122,7 +1200,11 @@ def stream_message(
     return StreamingResponse(
         generate_events(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

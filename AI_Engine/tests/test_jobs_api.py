@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -12,14 +13,23 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from AI_Engine.blob_store import clear_blob_store_cache
 from AI_Engine.database import models  # noqa: F401
 from AI_Engine.database.connection import Base, get_database_session
 from AI_Engine.router import app
+from AI_Engine.web_content import WebIngestionResult
 
 
 class JobsApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls.attachment_storage = TemporaryDirectory()
+        cls.storage_environment = patch.dict(
+            "os.environ",
+            {"ATTACHMENT_STORAGE_ROOT": cls.attachment_storage.name},
+        )
+        cls.storage_environment.start()
+        clear_blob_store_cache()
         cls.engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -42,6 +52,9 @@ class JobsApiTests(unittest.TestCase):
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=cls.engine)
         cls.engine.dispose()
+        clear_blob_store_cache()
+        cls.storage_environment.stop()
+        cls.attachment_storage.cleanup()
 
     def setUp(self) -> None:
         with self.session_factory() as database:
@@ -115,15 +128,38 @@ class JobsApiTests(unittest.TestCase):
                     "company_name": "커리어 메모리",
                     "role_name": "서비스 기획자",
                     "posting_content": "고객 데이터 분석 경험",
+                    "extensions": {"employment_type": "full-time"},
+                    "future_job_field": "preserved",
+                    "content_blocks": [{
+                        "id": "custom-note",
+                        "type": "custom",
+                        "data": {"note": "remote interview"},
+                        "origin": "user",
+                    }],
                 },
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["jobId"], "job-analysis-1")
+        payload = response.json()
+        self.assertEqual(payload["jobId"], "job-analysis-1")
+        self.assertEqual(payload["analysisRun"]["status"], "succeeded")
+        self.assertEqual(payload["extensions"]["future_job_field"], "preserved")
+        self.assertTrue(any(
+            block["type"] == "source_text" for block in payload["contentBlocks"]
+        ))
+        self.assertTrue(any(
+            block["type"] == "custom"
+            and block["data"]["note"] == "remote interview"
+            for block in payload["contentBlocks"]
+        ))
         self.assertEqual(len(owner.get("/api/jobs").json()["items"]), 1)
         self.assertEqual(other.get("/api/jobs").json()["items"], [])
         self.assertEqual(
             other.get("/api/jobs/job-analysis-1").status_code,
+            404,
+        )
+        self.assertEqual(
+            other.get(f"/api/v2/analysis-runs/{payload['analysisRunId']}").status_code,
             404,
         )
 
@@ -157,6 +193,65 @@ class JobsApiTests(unittest.TestCase):
                 headers={"X-CSRF-Token": owner_csrf},
             ).status_code,
             204,
+        )
+
+    def test_source_url_only_uses_fetched_attachment_text(self) -> None:
+        client = TestClient(app)
+        csrf = self.register(client, "url_owner")
+        with self.session_factory() as database:
+            user = database.query(models.User).filter_by(
+                username="job_url_owner"
+            ).one()
+            database.add(models.Attachment(
+                id="web-job-attachment",
+                user_id=user.id,
+                filename="공개 채용공고.html",
+                normalized_filename="공개 채용공고.html",
+                mime_type="text/html",
+                size_bytes=100,
+                content_hash="a" * 64,
+                content=b"",
+                storage_backend="database",
+                media_kind="document",
+                extracted_text="고객 데이터 분석 경험",
+                parse_status="ready",
+                parser_version="career-file-parser-v2",
+                extraction_metadata={"source_type": "web_url"},
+            ))
+            database.commit()
+
+        analyzer = MagicMock()
+        analyzer.invoke.return_value = self.fake_result("url-request")
+        fetched = WebIngestionResult(
+            attachment_ids=("web-job-attachment",),
+            urls=("https://example.com/jobs/1",),
+        )
+        with (
+            patch("AI_Engine.api.jobs.web_content_service.ingest", return_value=fetched),
+            patch("AI_Engine.api.jobs.create_job_analysis_ai", return_value=analyzer),
+            patch("AI_Engine.api.jobs.create_experience_retriever"),
+        ):
+            response = client.post(
+                "/api/jobs/analyze",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "client_request_id": "url-request",
+                    "source_url": "https://example.com/jobs/1",
+                    "posting_content": "",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        request = analyzer.invoke.call_args.args[0]
+        attachment_texts = analyzer.invoke.call_args.kwargs["attachment_texts"]
+        self.assertEqual(request.attachment_ids, ["web-job-attachment"])
+        self.assertEqual(
+            attachment_texts["web-job-attachment"],
+            "고객 데이터 분석 경험",
+        )
+        self.assertEqual(
+            response.json()["sourceAttachmentIds"],
+            ["web-job-attachment"],
         )
 
     def test_job_text_file_requires_login_and_returns_extracted_text(self) -> None:

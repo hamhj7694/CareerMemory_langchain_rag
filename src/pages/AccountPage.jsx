@@ -1,166 +1,106 @@
 import { useState } from 'react';
-import { authApi } from '../api/authApi.js';
-import { RECOVERY_QUESTIONS } from '../auth/recoveryQuestions.js';
+import { RECOVERY_QUESTIONS, recoveryQuestionLabel } from '../auth/recoveryQuestions.js';
 import { useAuth } from '../auth/useAuth.js';
 import '../styles/auth.css';
 
 export function AccountPage() {
-  const { user, setUsername, updateProfile } = useAuth();
-  const [profileForm, setProfileForm] = useState({
-    display_name: user?.display_name || '',
+  const { user, claimGuest, updateProfile } = useAuth();
+  const [claimForm, setClaimForm] = useState({
+    identifier: '',
+    pin: '',
+    displayName: '',
+    recoveryQuestion: RECOVERY_QUESTIONS[0].value,
+    recoveryAnswer: '',
   });
-  const [profileMessage, setProfileMessage] = useState('');
-  const [profileError, setProfileError] = useState('');
-  const [profileBusy, setProfileBusy] = useState(false);
-  const [usernameForm, setUsernameForm] = useState({
-    username: user?.username || '',
-    current_password: '',
-  });
-  const [usernameMessage, setUsernameMessage] = useState('');
-  const [usernameError, setUsernameError] = useState('');
-  const [usernameBusy, setUsernameBusy] = useState(false);
-  const [passwordForm, setPasswordForm] = useState({
-    current_password: '',
-    password: '',
-    password_confirm: '',
-  });
-  const [passwordMessage, setPasswordMessage] = useState('');
-  const [passwordError, setPasswordError] = useState('');
-  const [passwordBusy, setPasswordBusy] = useState(false);
-  const [form, setForm] = useState({
-    current_password: '',
-    recovery_question: user?.recovery_question || RECOVERY_QUESTIONS[0].value,
-    recovery_answer: '',
-  });
+  const [profileForm, setProfileForm] = useState({ display_name: user?.display_name || '' });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const submit = async (event) => {
+  const saveGuestRecord = async (event) => {
     event.preventDefault();
     setBusy(true);
-    setError('');
     setMessage('');
+    setError('');
     try {
-      const response = await authApi.setRecoveryQuestion(form);
-      setMessage(response.message);
-      setForm((current) => ({
-        ...current,
-        current_password: '',
-        recovery_answer: '',
-      }));
+      await claimGuest({
+        identifier: claimForm.identifier,
+        pin: claimForm.pin,
+        display_name: claimForm.displayName,
+        recovery_question: claimForm.recoveryQuestion,
+        recovery_answer: claimForm.recoveryAnswer,
+      });
+      setMessage('이제 이 아이디와 PIN으로 어디서든 기록을 이어볼 수 있어요.');
     } catch (requestError) {
-      setError(requestError.message || '복구 질문을 저장하지 못했습니다.');
+      setError(requestError.message || '체험 기록을 저장하지 못했어요.');
     } finally {
       setBusy(false);
     }
   };
 
-  const submitUsername = async (event) => {
+  const saveDisplayName = async (event) => {
     event.preventDefault();
-    setUsernameBusy(true);
-    setUsernameError('');
-    setUsernameMessage('');
-    try {
-      await setUsername(usernameForm);
-      setUsernameMessage('로그인 아이디가 저장되었습니다.');
-      setUsernameForm((current) => ({
-        ...current,
-        current_password: '',
-      }));
-    } catch (requestError) {
-      setUsernameError(requestError.message || '아이디를 저장하지 못했습니다.');
-    } finally {
-      setUsernameBusy(false);
-    }
-  };
-
-  const submitProfile = async (event) => {
-    event.preventDefault();
-    setProfileBusy(true);
-    setProfileError('');
-    setProfileMessage('');
+    setBusy(true);
+    setMessage('');
+    setError('');
     try {
       await updateProfile(profileForm);
-      setProfileMessage('이름이 변경되었습니다.');
+      setMessage('화면에 표시할 이름을 저장했어요.');
     } catch (requestError) {
-      setProfileError(requestError.message || '이름을 변경하지 못했습니다.');
+      setError(requestError.message || '이름을 저장하지 못했어요.');
     } finally {
-      setProfileBusy(false);
+      setBusy(false);
     }
   };
 
-  const submitPassword = async (event) => {
-    event.preventDefault();
-    setPasswordBusy(true);
-    setPasswordError('');
-    setPasswordMessage('');
-    try {
-      const response = await authApi.changePassword(passwordForm);
-      setPasswordMessage(response.message);
-      setPasswordForm({
-        current_password: '',
-        password: '',
-        password_confirm: '',
-      });
-    } catch (requestError) {
-      setPasswordError(requestError.message || '비밀번호를 변경하지 못했습니다.');
-    } finally {
-      setPasswordBusy(false);
-    }
-  };
+  if (user?.account_type === 'guest') {
+    return (
+      <section className="account-page">
+        <div className="account-card account-card--highlight">
+          <p className="auth-eyebrow">SAVE YOUR MEMORY</p>
+          <h2>이 체험 기록을 계속 사용하시겠어요?</h2>
+          <p>간단 아이디와 PIN, 닉네임, PIN 복구 질문을 정하면 지금까지의 대화와 경험을 그대로 이어볼 수 있어요.</p>
+          <form className="auth-form" onSubmit={saveGuestRecord}>
+            <label>간단 아이디<input autoComplete="username" required minLength="2" maxLength="20" pattern="[0-9A-Za-z가-힣_-]+" placeholder="한글·영문·숫자 2~20자" value={claimForm.identifier} onChange={(event) => setClaimForm({ ...claimForm, identifier: event.target.value })} /></label>
+            <label>PIN<input type="password" inputMode="numeric" autoComplete="new-password" required minLength="6" maxLength="6" pattern="[0-9]{6}" placeholder="숫자 6자리" value={claimForm.pin} onChange={(event) => setClaimForm({ ...claimForm, pin: event.target.value.replace(/\D/g, '').slice(0, 6) })} /></label>
+            <label>닉네임(호칭)<input autoComplete="name" required minLength="1" maxLength="40" placeholder="예: 커리어 탐험가" value={claimForm.displayName} onChange={(event) => setClaimForm({ ...claimForm, displayName: event.target.value })} /></label>
+            <label>PIN 복구 질문<select value={claimForm.recoveryQuestion} onChange={(event) => setClaimForm({ ...claimForm, recoveryQuestion: event.target.value })}>{RECOVERY_QUESTIONS.map((question) => <option key={question.value} value={question.value}>{question.label}</option>)}</select></label>
+            <label>복구 답변<input autoComplete="off" required minLength="2" maxLength="100" placeholder="내가 기억할 답변 2자 이상" value={claimForm.recoveryAnswer} onChange={(event) => setClaimForm({ ...claimForm, recoveryAnswer: event.target.value })} /></label>
+            {message && <p className="auth-success" role="status">{message}</p>}
+            {error && <p className="auth-error" role="alert">{error}</p>}
+            <button className="ui-button" disabled={busy}>{busy ? '기록 저장 중…' : '이 기록 계속 사용하기'}</button>
+          </form>
+          <p className="start-pin-notice">PIN은 복구 질문으로 다시 설정할 수 있지만, 이메일을 받지 않으므로 아이디는 꼭 기억해 주세요.</p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="account-page">
       <div className="account-card">
-        <p className="auth-eyebrow">ACCOUNT</p>
-        <h2>계정 정보</h2>
-        <dl><div><dt>이름</dt><dd>{user?.display_name}</dd></div><div><dt>아이디</dt><dd>{user?.username || '미설정'}</dd></div><div><dt>이메일</dt><dd>{user?.email}</dd></div></dl>
+        <p className="auth-eyebrow">MY MEMORY</p>
+        <h2>내 기록</h2>
+        <dl>
+          <div><dt>간단 아이디</dt><dd>@{user?.username}</dd></div>
+          <div><dt>닉네임(호칭)</dt><dd>{user?.display_name}</dd></div>
+          <div><dt>PIN 복구 질문</dt><dd>{recoveryQuestionLabel(user?.recovery_question)}</dd></div>
+          <div><dt>저장 방식</dt><dd>아이디와 PIN</dd></div>
+        </dl>
       </div>
       <div className="account-card">
-        <h2>이름 변경</h2>
-        <p>변경한 이름은 화면 표시와 AI의 맞춤형 대화에 사용됩니다.</p>
-        <form className="auth-form" onSubmit={submitProfile}>
-          <label>이름<input autoComplete="name" required minLength="1" maxLength="100" value={profileForm.display_name} onChange={(event) => setProfileForm({ display_name: event.target.value })} /></label>
-          {profileMessage && <p className="auth-success" role="status">{profileMessage}</p>}
-          {profileError && <p className="auth-error" role="alert">{profileError}</p>}
-          <button className="ui-button" disabled={profileBusy}>{profileBusy ? '저장 중…' : '이름 저장'}</button>
-        </form>
-      </div>
-      <div className="account-card">
-        <h2>아이디 변경</h2>
-        <p>아이디를 변경하면 다음 로그인부터 새로운 아이디를 사용합니다.</p>
-        <form className="auth-form" onSubmit={submitUsername}>
-          <label>새 아이디<input autoComplete="username" required minLength="4" maxLength="30" pattern="[a-z0-9_]+" value={usernameForm.username} onChange={(event) => setUsernameForm({ ...usernameForm, username: event.target.value })} /></label>
-          <label>현재 비밀번호<input type="password" autoComplete="current-password" required value={usernameForm.current_password} onChange={(event) => setUsernameForm({ ...usernameForm, current_password: event.target.value })} /></label>
-          {usernameMessage && <p className="auth-success" role="status">{usernameMessage}</p>}
-          {usernameError && <p className="auth-error" role="alert">{usernameError}</p>}
-          <button className="ui-button" disabled={usernameBusy}>{usernameBusy ? '저장 중…' : '아이디 저장'}</button>
-        </form>
-      </div>
-      <div className="account-card">
-        <h2>비밀번호 변경</h2>
-        <p>현재 비밀번호를 확인한 후 6자 이상의 새 비밀번호로 변경할 수 있습니다.</p>
-        <form className="auth-form" onSubmit={submitPassword}>
-          <label>현재 비밀번호<input type="password" autoComplete="current-password" required value={passwordForm.current_password} onChange={(event) => setPasswordForm({ ...passwordForm, current_password: event.target.value })} /></label>
-          <label>새 비밀번호<input type="password" autoComplete="new-password" required minLength="6" maxLength="128" value={passwordForm.password} onChange={(event) => setPasswordForm({ ...passwordForm, password: event.target.value })} /></label>
-          <label>새 비밀번호 확인<input type="password" autoComplete="new-password" required minLength="6" maxLength="128" value={passwordForm.password_confirm} onChange={(event) => setPasswordForm({ ...passwordForm, password_confirm: event.target.value })} /></label>
-          {passwordMessage && <p className="auth-success" role="status">{passwordMessage}</p>}
-          {passwordError && <p className="auth-error" role="alert">{passwordError}</p>}
-          <button className="ui-button" disabled={passwordBusy}>{passwordBusy ? '변경 중…' : '비밀번호 변경'}</button>
-        </form>
-      </div>
-      <div className="account-card">
-        <h2>비밀번호 복구 질문 변경</h2>
-        <p>기존 계정은 여기에서 질문을 등록하거나 변경할 수 있습니다. 변경하려면 현재 비밀번호가 필요합니다.</p>
-        <form className="auth-form" onSubmit={submit}>
-          <label>현재 비밀번호<input type="password" autoComplete="current-password" required value={form.current_password} onChange={(event) => setForm({ ...form, current_password: event.target.value })} /></label>
-          <label>복구 질문<select value={form.recovery_question} onChange={(event) => setForm({ ...form, recovery_question: event.target.value })}>{RECOVERY_QUESTIONS.map((question) => <option key={question.value} value={question.value}>{question.label}</option>)}</select></label>
-          <label>복구 답변<input autoComplete="off" required minLength="2" maxLength="100" value={form.recovery_answer} onChange={(event) => setForm({ ...form, recovery_answer: event.target.value })} /><small>다른 사람이 쉽게 추측할 수 없는 답변을 사용하세요.</small></label>
+        <h2>닉네임 바꾸기</h2>
+        <p>AI 대화와 화면에서 사용할 이름만 편하게 바꿀 수 있어요. 로그인 아이디는 그대로 유지됩니다.</p>
+        <form className="auth-form" onSubmit={saveDisplayName}>
+          <label>닉네임(호칭)<input autoComplete="name" required minLength="1" maxLength="40" value={profileForm.display_name} onChange={(event) => setProfileForm({ display_name: event.target.value })} /></label>
           {message && <p className="auth-success" role="status">{message}</p>}
           {error && <p className="auth-error" role="alert">{error}</p>}
-          <button className="ui-button" disabled={busy}>{busy ? '저장 중…' : '복구 질문 저장'}</button>
+          <button className="ui-button" disabled={busy}>{busy ? '저장 중…' : '닉네임 저장'}</button>
         </form>
+      </div>
+      <div className="account-card account-card--notice">
+        <h2>PIN을 잊었다면</h2>
+        <p>시작 화면의 ‘PIN을 잊었어요’에서 저장한 질문에 답하고 새 PIN을 설정할 수 있습니다. 아이디는 별도로 기억해 주세요.</p>
       </div>
     </section>
   );

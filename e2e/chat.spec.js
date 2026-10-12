@@ -1,13 +1,11 @@
 import { expect, test } from '@playwright/test';
 
 const account = {
-  username: 'e2e_browser',
-  email: 'e2e.browser@example.test',
-  display_name: 'E2E Tester',
-  password: 'e2e-pass-123',
-  password_confirm: 'e2e-pass-123',
-  recovery_question: 'childhood_nickname',
-  recovery_answer: 'tester',
+  identifier: 'e2e_browser',
+  pin: '246810',
+  display_name: 'E2E 브라우저',
+  recovery_question: 'recovery_keyword',
+  recovery_answer: 'e2e recovery answer',
 };
 
 async function login(page) {
@@ -19,23 +17,23 @@ async function login(page) {
   page.on('requestfailed', (request) => {
     browserErrors.push(`requestfailed: ${request.url()} (${request.failure()?.errorText})`);
   });
-  const response = await page.goto('/login', { waitUntil: 'domcontentloaded' });
-  const username = page.getByLabel('아이디', { exact: true });
+  const response = await page.goto('/start', { waitUntil: 'domcontentloaded' });
+  const username = page.getByLabel('간단 아이디', { exact: true });
   try {
     await expect(username).toBeVisible({ timeout: 10_000 });
   } catch (error) {
     throw new Error([
-      `로그인 화면을 렌더링하지 못했습니다: ${page.url()} (HTTP ${response?.status()})`,
+      `시작 화면을 렌더링하지 못했습니다: ${page.url()} (HTTP ${response?.status()})`,
       ...browserErrors,
       `body: ${(await page.locator('body').innerHTML()).slice(0, 1000)}`,
       `cause: ${error.message}`,
     ].join('\n'), { cause: error });
   }
-  await username.fill(account.username);
-  await page.getByLabel('비밀번호', { exact: true }).fill(account.password);
+  await username.fill(account.identifier);
+  await page.getByLabel('PIN', { exact: true }).fill(account.pin);
   await Promise.all([
     page.waitForURL(/\/chat(?:\/|$)/),
-    page.getByRole('button', { name: '로그인', exact: true }).click(),
+    page.getByRole('button', { name: '내 기록으로 시작하기', exact: true }).click(),
   ]);
   await expect(page.getByRole('heading', { name: 'Career Memory와 대화하기' })).toBeVisible();
 }
@@ -61,15 +59,15 @@ async function waitForReadyAttachment(page, filename) {
 test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(async ({ request }) => {
-  const response = await request.post('/api/v2/auth/register', { data: account });
-  expect(response.status()).toBe(201);
+  const response = await request.post('/api/v2/auth/simple', { data: account });
+  expect(response.status()).toBe(200);
 });
 
 test.beforeEach(async ({ page }) => {
   await login(page);
 });
 
-test('로그인 후 채팅 스트리밍과 새로고침 복원이 동작한다', async ({ page }) => {
+test('간단 아이디로 시작한 뒤 채팅 스트리밍과 새로고침 복원이 동작한다', async ({ page }) => {
   await startNewConversation(page);
   const prompt = 'E2E 상태 확인입니다.';
 

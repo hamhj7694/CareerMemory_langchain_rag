@@ -71,17 +71,20 @@ def register_error_handlers(app: FastAPI) -> None:
         request: Request,
         error: HTTPException,
     ) -> JSONResponse:
-        message = (
-            error.detail
-            if isinstance(error.detail, str)
-            else "요청을 처리하지 못했습니다."
-        )
+        code = ERROR_CODE_BY_STATUS.get(error.status_code, "HTTP_ERROR")
+        message = "요청을 처리하지 못했습니다."
+        if isinstance(error.detail, str):
+            message = error.detail
+        elif isinstance(error.detail, dict):
+            detail_code = error.detail.get("code")
+            detail_message = error.detail.get("message")
+            if isinstance(detail_code, str) and detail_code.strip():
+                code = detail_code.strip()
+            if isinstance(detail_message, str) and detail_message.strip():
+                message = detail_message.strip()
         return error_response(
             status_code=error.status_code,
-            code=ERROR_CODE_BY_STATUS.get(
-                error.status_code,
-                "HTTP_ERROR",
-            ),
+            code=code,
             message=message,
             request_id=get_request_id(request),
             retryable=error.status_code in {429, 502, 503, 504},

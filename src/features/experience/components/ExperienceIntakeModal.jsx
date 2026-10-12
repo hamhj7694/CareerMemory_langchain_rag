@@ -62,7 +62,7 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
           <div className="mv2-experience-intake__body">
             <label>
               경험 내용
-              <textarea value={content} onChange={(event) => setContent(event.target.value)} rows="9" placeholder="프로젝트, 업무, 상황, 행동, 결과를 자유롭게 적어 주세요." disabled={busy} />
+              <textarea value={content} onChange={(event) => setContent(event.target.value)} rows="9" placeholder="프로젝트, 업무, 상황, 행동, 결과를 자유롭게 적거나 공개 링크를 붙여 넣어 주세요." disabled={busy} />
             </label>
             <label className="mv2-file-picker">
               <span>파일 근거 추가</span>
@@ -74,7 +74,7 @@ export function ExperienceIntakeModal({ open, onClose, onAnalyze, busy = false }
             {fileNotice && <p className="mv2-experience-intake__file-notice" role="status">{fileNotice}</p>}
             {analysisError && <p className="mv2-experience-intake__file-error" role="alert">{analysisError}</p>}
             <AnalysisProgress active={busy} hasFiles={files.length > 0} kind="experience" />
-            <p className="mv2-experience-intake__notice">입력한 원문에서 확인되는 내용만 AI가 경험 초안으로 정리합니다.</p>
+            <p className="mv2-experience-intake__notice">입력한 원문·공개 링크·첨부 자료에서 확인되는 내용만 AI가 경험 초안으로 정리합니다.</p>
           </div>
           <footer>
             <button type="button" className="mv2-button mv2-button--secondary" onClick={close} disabled={busy || checkingFiles}>취소</button>

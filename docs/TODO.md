@@ -23,6 +23,11 @@
 - [x] lease 기반 재시작 가능 파일 작업 큐와 카드 상태·재시도
 - [x] Tesseract 5.4.0 `kor+eng+osd` 실환경 OCR 검증
 - [x] FFmpeg/FFprobe 탐지, STT 타임스탬프 저장 구조
+- [x] LLM 호출 전 입력·전체 출력·버전·coverage의 분석 실행 스냅샷
+- [x] Experience·Job의 typed content block과 규격 밖 `extensions` 무손실 저장
+- [x] 경험 상세의 문단·목록·강조 메모 블록 추가·정렬·삭제 UI
+- [x] 원문 수정·연결 해제 시 fact의 `stale`·`needs_evidence` 상태 전파
+- [x] 저장 전 종료된 경험 분석 결과의 복구·폐기 UI
 
 현재 테스트와 benchmark 결과는 `../AI_Engine/benchmarks/RESULTS.md`를 기준으로 한다.
 

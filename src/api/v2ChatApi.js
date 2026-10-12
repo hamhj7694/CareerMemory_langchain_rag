@@ -422,6 +422,13 @@ export async function getAttachment(attachmentId) {
   return snapshot(find(store.attachments, attachmentId, '첨부 파일'));
 }
 
+export async function downloadAttachment(attachmentId) {
+  if (!apiConfig.useMock) return v2ChatHttpApi.downloadAttachment(attachmentId);
+  const attachment = find(store.attachments, attachmentId, '첨부 파일');
+  const payload = attachment.raw_bytes || attachment.raw_text || '';
+  return new Blob([payload], { type: attachment.mime_type || 'application/octet-stream' });
+}
+
 export async function processAttachment(attachmentId) {
   const attachment = find(store.attachments, attachmentId, '첨부 파일');
   attachment.status = 'ready';
@@ -1034,6 +1041,7 @@ const activeConversationApi = apiConfig.useMock
       ...v2ChatHttpApi,
       preflightAttachments: v2ChatHttpApi.preflightAttachments,
       getAttachment: v2ChatHttpApi.getAttachment,
+      downloadAttachment: v2ChatHttpApi.downloadAttachment,
       processAttachment: v2ChatHttpApi.processAttachment,
       uploadAttachments: v2ChatHttpApi.uploadAttachments,
       deleteAttachment: v2ChatHttpApi.deleteAttachment,
@@ -1052,7 +1060,7 @@ const activeExperienceApi = apiConfig.useMock
 export const v2ChatApi = {
   createConversation, listConversations, getConversation, updateConversation, deleteConversation,
   listMessages, sendMessage, streamMessage, getConversationExtractionStatus, extractConversationExperiences,
-  preflightAttachments, getAttachment, processAttachment, uploadAttachments, deleteAttachment,
+  preflightAttachments, getAttachment, downloadAttachment, processAttachment, uploadAttachments, deleteAttachment,
   getProposal, updateProposal, approveProposal, discardUnapprovedProposalExperiences, rejectProposal,
   listExperiences, getExperience, createExperience, updateExperience,
   getExperienceDeletionImpact, deleteExperience,

@@ -69,7 +69,11 @@ describe('ChatPage 메시지 제안 복원', () => {
       actions: [],
     });
 
-    expect(message.attachments).toEqual(['career.txt']);
+    expect(message.attachments).toEqual([{
+      id: 'ATT-1',
+      filename: 'career.txt',
+      downloadUrl: '/api/v2/attachments/ATT-1/download',
+    }]);
   });
 });
 

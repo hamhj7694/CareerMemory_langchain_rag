@@ -7,6 +7,40 @@ const http = createHttpAdapter({
 });
 
 export const authApi = {
+  startGuest() {
+    return http.request({
+      path: '/api/v2/auth/guest',
+      method: 'POST',
+    });
+  },
+  startSimple(input) {
+    return http.request({
+      path: '/api/v2/auth/simple',
+      method: 'POST',
+      body: input,
+    });
+  },
+  claimGuest(input) {
+    return http.request({
+      path: '/api/v2/auth/simple/claim',
+      method: 'PUT',
+      body: input,
+    });
+  },
+  getSimplePinRecoveryQuestion(input) {
+    return http.request({
+      path: '/api/v2/auth/simple/pin/recovery-question',
+      method: 'POST',
+      body: input,
+    });
+  },
+  resetSimplePin(input) {
+    return http.request({
+      path: '/api/v2/auth/simple/pin/reset',
+      method: 'POST',
+      body: input,
+    });
+  },
   register(input) {
     return http.request({
       path: '/api/v2/auth/register',

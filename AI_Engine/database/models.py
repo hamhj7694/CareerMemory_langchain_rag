@@ -50,6 +50,26 @@ class User(Base):
     )
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+    account_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="legacy",
+        index=True,
+    )
+    login_failed_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    login_locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    guest_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     recovery_question: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
@@ -812,6 +832,11 @@ class Message(Base):
         JSON,
         nullable=True,
     )
+    analysis_metadata: Mapped[dict[str, object]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -897,6 +922,9 @@ class Experience(Base):
         JSON, nullable=False, default=list
     )
     facts: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    fact_evidence_status: Mapped[dict[str, str]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
     metrics: Mapped[list[dict[str, object]]] = mapped_column(
         JSON, nullable=False, default=list
     )
@@ -904,6 +932,27 @@ class Experience(Base):
     missing_information: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     source_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     source_refs: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False, default=list)
+    draft_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    field_citations: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    skill_groups: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    extensions: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    analysis_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    content_document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("content_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="confirmed")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
@@ -911,6 +960,12 @@ class Experience(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     project: Mapped[ExperienceProject] = relationship(back_populates="experiences")
+    analysis_run: Mapped["AnalysisRunRecord | None"] = relationship(
+        foreign_keys=[analysis_run_id]
+    )
+    content_document: Mapped["ContentDocument | None"] = relationship(
+        foreign_keys=[content_document_id]
+    )
 
 
 class ExperienceDraftTrash(Base):
@@ -974,6 +1029,9 @@ class JobAnalysisRecord(Base):
     posting_title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     posting_content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_attachment_ids: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     # AI가 만든 요구사항과 RAG 연결은 구조가 중첩되어 JSON으로 그대로 보관한다.
     requirements: Mapped[list[dict[str, object]]] = mapped_column(
         JSON, nullable=False, default=list
@@ -984,6 +1042,19 @@ class JobAnalysisRecord(Base):
     warnings: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     versions: Mapped[dict[str, object]] = mapped_column(
         JSON, nullable=False, default=dict
+    )
+    extensions: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    analysis_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    content_document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("content_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
@@ -996,13 +1067,160 @@ class JobAnalysisRecord(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="job_analyses")
+    analysis_run: Mapped["AnalysisRunRecord | None"] = relationship(
+        foreign_keys=[analysis_run_id]
+    )
+    content_document: Mapped["ContentDocument | None"] = relationship(
+        foreign_keys=[content_document_id]
+    )
+
+
+class AnalysisRunRecord(Base):
+    """원문 입력부터 AI 출력까지 한 번의 분석을 무손실 스냅샷으로 보관한다."""
+
+    __tablename__ = "analysis_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "client_request_id",
+            "target_type",
+            name="uq_analysis_runs_user_request_target",
+        ),
+        Index("ix_analysis_runs_target", "target_type", "target_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    client_request_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    external_run_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    target_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    input_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    input_payload: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    output_payload: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    source_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="processing")
+    versions: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    token_usage: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    coverage_report: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    omitted_source_ids: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    error: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class ContentDocument(Base):
+    """Experience나 Job의 표시 형식과 독립적인 자유 형식 블록 문서."""
+
+    __tablename__ = "content_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "owner_type", "owner_id", name="uq_content_documents_owner"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    schema_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="content-blocks-v1"
+    )
+    extensions: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    blocks: Mapped[list["ContentBlock"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="ContentBlock.position",
+    )
+
+
+class ContentBlock(Base):
+    """알려지지 않은 타입도 data 원문을 버리지 않는 버전형 콘텐츠 블록."""
+
+    __tablename__ = "content_blocks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "position", name="uq_content_blocks_position"),
+    )
+
+    id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("content_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    block_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    data: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    source_refs: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    citations: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    origin: Mapped[str] = mapped_column(String(30), nullable=False, default="system")
+    review_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="confirmed"
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    visibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="visible"
+    )
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    document: Mapped[ContentDocument] = relationship(back_populates="blocks")
 
 
 __all__ = [
+    "AnalysisRunRecord",
     "Attachment",
     "AuthSession",
     "Conversation",
     "ConversationMemory",
+    "ContentBlock",
+    "ContentDocument",
     "EmbeddingRecord",
     "EvidenceChunk",
     "EvidenceDocument",

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { experienceExtractionApi } from '../../api/experienceExtractionApi.js';
 import { experienceTrashApi } from '../../api/experienceTrashApi.js';
+import { sourceApi } from '../../api/sourceApi.js';
 import { v2ChatApi } from '../../api/v2ChatApi.js';
+import { downloadEvidenceFile } from '../evidence/model/evidenceFileAccess.js';
 import { buildExperienceAnalysisFromResult, discardPendingProposalAttachments, markProposalExperienceSaved, saveProposalExperience } from '../experience/api/experienceProposalService.js';
 import { ExperienceIntakeModal } from '../experience/components/ExperienceIntakeModal.jsx';
 import { ExperienceProposalModal } from '../experience/components/ExperienceProposalModal.jsx';
@@ -198,16 +200,16 @@ function sourceEntries(item) {
       mimeType: source.mimeType || source.mime_type || (type === 'text' ? 'text/plain;charset=utf-8' : 'application/octet-stream'),
       rawBytes: source.rawBytes || source.raw_bytes || null,
       uploadedAt: source.uploadedAt || source.uploaded_at || source.capturedAt || source.captured_at || '',
-      unavailable: type === 'file' && !source.rawBytes && !source.raw_bytes && !source.text,
+      unavailable: type === 'file' && !source.id && !source.rawBytes && !source.raw_bytes && !source.text,
     };
   });
 }
 
-function downloadSource(source) {
-  const payload = source.rawBytes || source.content;
-  if (!payload) return;
-  const url = URL.createObjectURL(new Blob([payload], { type: source.mimeType || 'application/octet-stream' }));
-  const anchor = document.createElement('a'); anchor.href = url; anchor.download = source.name; anchor.click(); URL.revokeObjectURL(url);
+async function downloadSource(experienceId, source) {
+  await downloadEvidenceFile(
+    source,
+    (selectedSource) => sourceApi.download(experienceId, selectedSource),
+  );
 }
 
 function sourceDate(source) {
@@ -221,6 +223,7 @@ function AssetModal({ type, experiences, onClose, onSearch }) {
   const [expanded, setExpanded] = useState(null);
   const [selectedSkillGroup, setSelectedSkillGroup] = useState(null);
   const [hoveredSkillGroup, setHoveredSkillGroup] = useState(null);
+  const [downloadError, setDownloadError] = useState('');
   if (!type) return null;
   const evidenceMode = type === 'evidence';
   const profile = buildSkillProfile(experiences);
@@ -240,7 +243,7 @@ function AssetModal({ type, experiences, onClose, onSearch }) {
   };
   return <div className="mv2-modal-backdrop"><section className="mv2-asset-dialog" role="dialog" aria-modal="true">
     <header><div><span className="mv2-kicker">{evidenceMode ? 'SOURCE LIBRARY' : 'CAREER PROFILE'}</span><h2>{evidenceMode ? '경험 근거' : '내 역량'}</h2><p>{evidenceMode ? '텍스트 원문을 읽고 파일 근거를 내려받을 수 있습니다.' : `유사 역량 그룹이 전체 역량 태그 ${totalOccurrences}회에서 차지하는 비중입니다.`}</p></div><button className="mv2-icon-button" onClick={onClose} aria-label="닫기">×</button></header>
-    {evidenceMode ? <div className="mv2-evidence-library mv2-source-library">{experiences.filter((item) => item.evidenceCount > 0).map((item) => <article key={item.id} className="mv2-source-group"><div className="mv2-source-group__summary"><div><strong>{item.title}</strong><span>{item.domainName} · {item.projectName}</span></div><span className="mv2-evidence-count">원본 {item.evidenceCount}개</span><button onClick={() => setExpanded(expanded === item.id ? null : item.id)} aria-expanded={expanded === item.id}>{expanded === item.id ? '접기' : '원본 보기'}</button></div>{expanded === item.id && <div className="mv2-source-items">{sourceEntries(item).map((source) => <section key={source.id}><div><span className={`mv2-source-kind is-${source.type}`}>{source.type === 'text' ? '텍스트' : source.type === 'file' ? '파일' : '정보 없음'}</span><span className="mv2-source-name"><strong>{source.name}</strong>{sourceDate(source) && <small>업로드 {sourceDate(source)}</small>}</span></div>{source.type === 'text' ? <p>{source.content}</p> : source.type === 'file' ? <button disabled={source.unavailable} title={source.unavailable ? '이전에 저장된 근거라 원본 파일 데이터가 없습니다.' : `${source.name} 다운로드`} onClick={() => downloadSource(source)}>{source.unavailable ? '원본 없음' : '다운로드'}</button> : <small>기존 목데이터에는 원본 메타데이터가 저장되어 있지 않습니다.</small>}</section>)}</div>}</article>)}</div> : <div className="mv2-profile-groups"><section><h3>내 직군·직업 및 역할</h3><div className="mv2-profile-tags">{roles.map((role) => <span key={role}>{role}</span>)}</div></section><section><h3>유사 역량 그룹</h3><div className="mv2-skill-distribution" aria-label="전체 역량 그룹 구성비">{groups.map((group) => <button type="button" key={group.name} style={{ width: `${group.percent}%` }} title={`${group.name} · 전체의 ${group.percent}% (${group.count}회)`} aria-label={`${group.name}, 전체의 ${group.percent}%, ${group.count}회. 클릭하여 역량 그룹 보기`} aria-pressed={selectedSkillGroup === group.name} onMouseEnter={() => setHoveredSkillGroup(group.name)} onMouseLeave={() => setHoveredSkillGroup(null)} onFocus={() => setHoveredSkillGroup(group.name)} onBlur={() => setHoveredSkillGroup(null)} onClick={() => toggleSkillGroup(group.name, true)} />)}</div><div className="mv2-skill-groups">{groups.map((group, index) => <article id={`skill-group-${encodeURIComponent(group.name)}`} role="button" tabIndex="0" className={activeSkillGroup === group.name ? 'is-focused' : ''} key={group.name} onClick={() => onSearch({ type: 'group', value: group.name })} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSearch({ type: 'group', value: group.name }); } }}><div className="mv2-skill-group__heading"><strong><i className={`mv2-skill-dot is-${index + 1}`} />{group.name}</strong><span>전체의 {group.percent}% · {group.count}회</span></div><div className="mv2-profile-tags is-skills">{group.skills.map((skill) => <button type="button" key={skill} onClick={(event) => { event.stopPropagation(); onSearch({ type: 'skill', value: skill }); }}>{skill}</button>)}</div></article>)}</div><p className="mv2-percent-note">모든 그룹의 비율을 합하면 약 100%입니다. 반올림으로 1% 정도 차이가 날 수 있으며, 숙련도나 달성률을 의미하지 않습니다.</p></section></div>}
+    {evidenceMode ? <div className="mv2-evidence-library mv2-source-library">{downloadError && <p className="mv2-sync-error" role="alert">{downloadError}</p>}{experiences.filter((item) => item.evidenceCount > 0).map((item) => <article key={item.id} className="mv2-source-group"><div className="mv2-source-group__summary"><div><strong>{item.title}</strong><span>{item.domainName} · {item.projectName}</span></div><span className="mv2-evidence-count">원본 {item.evidenceCount}개</span><button onClick={() => setExpanded(expanded === item.id ? null : item.id)} aria-expanded={expanded === item.id}>{expanded === item.id ? '접기' : '원본 보기'}</button></div>{expanded === item.id && <div className="mv2-source-items">{sourceEntries(item).map((source) => <section key={source.id}><div><span className={`mv2-source-kind is-${source.type}`}>{source.type === 'text' ? '텍스트' : source.type === 'file' ? '파일' : '정보 없음'}</span><span className="mv2-source-name"><strong>{source.name}</strong>{sourceDate(source) && <small>업로드 {sourceDate(source)}</small>}</span></div>{source.type === 'text' ? <p>{source.content}</p> : source.type === 'file' ? <button disabled={source.unavailable} title={source.unavailable ? '저장된 원본 파일을 찾을 수 없습니다.' : `${source.name} 다운로드`} onClick={async () => { setDownloadError(''); try { await downloadSource(item.id, source); } catch (reason) { setDownloadError(reason.message || '파일을 다운로드하지 못했습니다.'); } }}>{source.unavailable ? '원본 없음' : '다운로드'}</button> : <small>기존 목데이터에는 원본 메타데이터가 저장되어 있지 않습니다.</small>}</section>)}</div>}</article>)}</div> : <div className="mv2-profile-groups"><section><h3>내 직군·직업 및 역할</h3><div className="mv2-profile-tags">{roles.map((role) => <span key={role}>{role}</span>)}</div></section><section><h3>유사 역량 그룹</h3><div className="mv2-skill-distribution" aria-label="전체 역량 그룹 구성비">{groups.map((group) => <button type="button" key={group.name} style={{ width: `${group.percent}%` }} title={`${group.name} · 전체의 ${group.percent}% (${group.count}회)`} aria-label={`${group.name}, 전체의 ${group.percent}%, ${group.count}회. 클릭하여 역량 그룹 보기`} aria-pressed={selectedSkillGroup === group.name} onMouseEnter={() => setHoveredSkillGroup(group.name)} onMouseLeave={() => setHoveredSkillGroup(null)} onFocus={() => setHoveredSkillGroup(group.name)} onBlur={() => setHoveredSkillGroup(null)} onClick={() => toggleSkillGroup(group.name, true)} />)}</div><div className="mv2-skill-groups">{groups.map((group, index) => <article id={`skill-group-${encodeURIComponent(group.name)}`} role="button" tabIndex="0" className={activeSkillGroup === group.name ? 'is-focused' : ''} key={group.name} onClick={() => onSearch({ type: 'group', value: group.name })} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSearch({ type: 'group', value: group.name }); } }}><div className="mv2-skill-group__heading"><strong><i className={`mv2-skill-dot is-${index + 1}`} />{group.name}</strong><span>전체의 {group.percent}% · {group.count}회</span></div><div className="mv2-profile-tags is-skills">{group.skills.map((skill) => <button type="button" key={skill} onClick={(event) => { event.stopPropagation(); onSearch({ type: 'skill', value: skill }); }}>{skill}</button>)}</div></article>)}</div><p className="mv2-percent-note">모든 그룹의 비율을 합하면 약 100%입니다. 반올림으로 1% 정도 차이가 날 수 있으며, 숙련도나 달성률을 의미하지 않습니다.</p></section></div>}
   </section></div>;
 }
 
@@ -276,6 +279,7 @@ export function ExperienceManagerV3() {
   const [experiencePreviewOpen, setExperiencePreviewOpen] = useState(false);
   const [experiencePreviewBusy, setExperiencePreviewBusy] = useState(false);
   const [experienceProposalEditing, setExperienceProposalEditing] = useState(false);
+  const [recoverableAnalysis, setRecoverableAnalysis] = useState(null);
   const [trashCount, setTrashCount] = useState(0);
   const [experienceNoticeState, setExperienceNoticeState] = useState(readExperienceNoticeState);
   const [structureOrder, setStructureOrder] = useState(readStructureOrder);
@@ -312,11 +316,16 @@ export function ExperienceManagerV3() {
   };
   useEffect(() => {
     let active = true;
-    Promise.all([loadLibrary(), experienceTrashApi.list()]).then(([data, trash]) => {
+    Promise.all([
+      loadLibrary(),
+      experienceTrashApi.list(),
+      experienceExtractionApi.listRecoverable().catch(() => ({ items: [] })),
+    ]).then(([data, trash, recoverable]) => {
       if (active) {
         setExperiences(data.experiences);
         setDomains(data.domains);
         setTrashCount(trash.total_count);
+        setRecoverableAnalysis(recoverable.items?.[0] || null);
         syncExperienceNotices(data.experiences);
         setStatus('ready');
       }
@@ -329,10 +338,11 @@ export function ExperienceManagerV3() {
     return () => { active = false; };
   }, []);
   useEffect(() => {
-    const protect = (event) => { if (pendingOps.length) { event.preventDefault(); event.returnValue = ''; } };
+    const hasUnsavedAnalysis = experienceProposal?.experiences?.some((item) => !item.approved);
+    const protect = (event) => { if (pendingOps.length || hasUnsavedAnalysis) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', protect);
     return () => window.removeEventListener('beforeunload', protect);
-  }, [pendingOps.length]);
+  }, [pendingOps.length, experienceProposal]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const hasFilters = Boolean(normalizedQuery || skillGroupFilter);
@@ -748,6 +758,25 @@ export function ExperienceManagerV3() {
   };
 
   const openNewExperience = () => openExperienceIntake();
+  const restoreRecoverableAnalysis = () => {
+    const output = recoverableAnalysis?.outputPayload || recoverableAnalysis?.output_payload;
+    if (!output?.experience_drafts?.length) return;
+    const result = {
+      ...output,
+      analysis_record_id: recoverableAnalysis.id,
+    };
+    const analysis = buildExperienceAnalysisFromResult({ result });
+    setNewExperienceDraft(analysis.draft);
+    setExperienceProposal(analysis.proposal);
+    setExperienceProposalEditing(false);
+    setExperiencePreviewOpen(true);
+    setRecoverableAnalysis(null);
+  };
+  const discardRecoverableAnalysis = async () => {
+    if (!recoverableAnalysis) return;
+    await experienceExtractionApi.discard(recoverableAnalysis.id);
+    setRecoverableAnalysis(null);
+  };
   const closeExperienceIntake = () => setExperienceIntakeOpen(false);
   const closeNewExperience = () => {
     setNewExperienceOpen(false);
@@ -942,6 +971,7 @@ export function ExperienceManagerV3() {
       </section>
       {status === 'loading' && <p className="mv2-sync-status">경험 구조를 불러오는 중입니다…</p>}
       {!editMode && error && <div className="mv2-sync-error" role="alert"><span>{error}</span><button onClick={status === 'error' ? refresh : () => setError('')}>{status === 'error' ? '다시 시도' : '닫기'}</button></div>}
+      {!editMode && recoverableAnalysis && <div className="mv2-sync-error mv2-recovery-notice" role="status"><span>저장하지 못한 AI 경험 분석 결과가 있습니다.</span><div><button onClick={restoreRecoverableAnalysis}>이어서 확인</button><button onClick={discardRecoverableAnalysis}>숨기기</button></div></div>}
       <div className="mv2-structure-heading"><h2>경험 구조</h2><span>{visibleExperienceCount}개 경험</span></div>
       <div className="mv2-structure">{displayDomains.map(({ domain, projects, experiences: domainExperiences }) => {
         const isCollapsed = !normalizedQuery && collapsed.has(domain.id);

@@ -17,7 +17,7 @@
 Career Memory는 자기소개서를 한 번 생성하는 도구보다 **사용자의 경험을 근거와 함께 기억하는 시스템**에 초점을 맞췄습니다.
 
 ```text
-대화·파일·채용공고 원문
+대화·공개 URL·파일·채용공고 원문
   → 근거 추출·기술/수치 정규화
   → AI 경험 초안
   → 사용자 검토·수정·승인
@@ -44,9 +44,10 @@ Career Memory의 핵심은 단순한 AI 채팅이나 자기소개서 1회 생성
 
 ### 1. 여러 형태의 커리어 원본 통합 수집
 
-- 대화, 직접 입력, 채용공고, 문서, 이미지, 음성·영상 파일을 하나의 커리어 데이터 흐름으로 받습니다.
+- 대화, 직접 입력, 공개 웹페이지·Notion, 채용공고, 문서, 이미지, 음성·영상 파일을 하나의 커리어 데이터 흐름으로 받습니다.
 - 파일은 파싱 전에 원본과 SHA-256을 저장하므로 OCR·문서 변환에 실패해도 사용자 자료가 사라지지 않습니다.
 - 파싱·OCR·STT 결과를 출처와 위치 정보가 있는 Evidence로 변환해 이후 분석의 근거로 사용합니다.
+- URL은 공개 HTTP(S) 페이지만 수집하며, HTML 가시 본문·구조화 데이터·이미지 OCR을 같은 Attachment/Evidence 계층에 보존합니다. 사설망·로그인·유료벽·CAPTCHA 우회는 차단합니다.
 
 ### 2. 원문 근거 기반 경험 구조화
 
@@ -245,8 +246,11 @@ Chroma는 원본 저장소가 아닙니다. `content_hash`, provider, model, dim
 | 처리 상태와 재시도 | 첨부 카드에서 대기·처리·완료·부분 성공·실패 상태와 이해하기 쉬운 오류 및 재시도 제공 |
 | 스트리밍 복구 | SSE heartbeat와 동일 `client_request_id`의 snapshot 재연결로 일시적인 연결 중단에 대응 |
 | 대화 관리 | 대화 세션 생성·검색·수정·삭제, 사용자 메시지 선택·복사 지원 |
-| 계정 복구 | 가입 또는 계정 관리에서 복구 질문 하나를 설정하고, 비밀번호 찾기에서 해당 질문만 제시 |
-| 인증과 격리 | Argon2id 비밀번호 해시, HttpOnly 세션 쿠키, DB·첨부·Evidence·vector의 `user_id` 범위 격리 |
+| 간편 시작 | 가입 입력 없는 독립 게스트 공간 또는 간단 아이디·숫자 6자리 PIN으로 즉시 시작 |
+| 아이디·닉네임 분리 | 중복 불가 로그인 아이디와 중복 가능한 화면용 닉네임을 분리하고, 신규 사용자에게만 닉네임 설정 단계 제공 |
+| PIN 복구 | 최초 설정한 질문과 Argon2id 해시 답변을 확인해 PIN을 새로 설정하고, 성공 시 기존 로그인 세션을 모두 종료 |
+| 기록 이어보기 | 체험 중 만든 기록을 아이디·PIN·닉네임으로 전환하고 다른 기기에서 같은 기록 공간을 다시 사용 |
+| 인증과 격리 | Argon2id PIN 해시, HttpOnly 세션 쿠키, 로그인 실패 잠금, DB·첨부·Evidence·vector의 `user_id` 범위 격리 |
 
 ## 품질 검증
 
@@ -265,14 +269,14 @@ Chroma는 원본 저장소가 아닙니다. `content_hash`, provider, model, dim
 
 ### 회귀 테스트
 
-- Backend: **223 tests passed**
-- Frontend: **119 tests passed**
+- Backend: **233 tests passed**
+- Frontend: **127 tests passed**
 - 격리 SQLite·BlobStore·vector 기반 `/chat` Playwright E2E
-- 저장된 복구 질문 조회 → 비밀번호 재설정 → 새 비밀번호 로그인 E2E
+- 가입 없는 체험 → 기록 저장 전환 → 신규 닉네임·복구 정보 설정 → PIN 재설정 → 간단 아이디/PIN 재접속 E2E **9건 통과** (`@live` 1건 제외)
 - Frontend production build, ESLint, `git diff --check` 통과
 - 실제 모델 벤치마크 4회 모두 비의도 DB 쓰기 없음
 
-테스트 수는 2026년 10월 9일 최신 작업 기준입니다. 벤치마크의 상세 조건과 서로 직접 비교할 수 없는 fixture는 [RESULTS.md](AI_Engine/benchmarks/RESULTS.md)에 구분해 기록했습니다.
+테스트 수는 2026년 10월 11일 최신 작업 기준입니다. 벤치마크의 상세 조건과 서로 직접 비교할 수 없는 fixture는 [RESULTS.md](AI_Engine/benchmarks/RESULTS.md)에 구분해 기록했습니다.
 
 ## 기술 스택
 
@@ -396,6 +400,7 @@ python -m AI_Engine.file_processing_worker --poll-seconds 2
 - 저화질 스캔 문서 corpus를 확대해 OCR CER 기준을 추가 검증해야 합니다.
 - DOC/PPT/HWP 실제 변환은 LibreOffice·한컴 변환기 설치 환경에서 추가 인수 검증이 필요합니다.
 - 음성·영상 원본 저장과 STT 구간 구조는 구현했지만 실제 익명화 corpus의 WER·수치 재현율·비용 평가는 남아 있습니다.
+- AWS 공개 전 게스트 데이터 자동 정리 주기와 세션·IP별 AI 호출 한도를 운영 정책으로 확정해야 합니다.
 - Retrieval Recall@K·Precision@K·MRR와 실제 사용자 기반 NLU/RAG 평가 세트를 확대할 예정입니다.
 - 자기소개서 생성·수정 저장과 여러 채용공고 비교 기능은 후속 제품 범위입니다.
 

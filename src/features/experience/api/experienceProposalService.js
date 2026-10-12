@@ -113,6 +113,7 @@ export function buildExperienceAnalysisFromResult({ result, domain, project }) {
   ]));
   const experiences = (result.experience_drafts || []).map((draft) => ({
     ...draft,
+    analysis_run_id: result.analysis_record_id || draft.analysis_run_id || null,
     domain: domain
       ? { id: domain.id, name: domain.name }
       : draft.domain,

@@ -39,9 +39,17 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
         ? <MarkdownMessage content={message.content} />
         : <p className="v2-message__content" draggable={false}>{message.content}</p>}
       {message.status === 'failed' && <small className="v2-message__failed">전송되지 않았습니다. 입력창에서 다시 전송해 주세요.</small>}
-      {message.attachments?.length > 0 && <div className="v2-message__files">{message.attachments.map((file) => <span key={file}>▧ {file}</span>)}</div>}
+      {message.attachments?.length > 0 && <div className="v2-message__files">{message.attachments.map((file, index) => {
+        const attachment = typeof file === 'string' ? { filename: file } : file;
+        const key = attachment.id || attachment.filename || `attachment-${index}`;
+        return attachment.downloadUrl
+          ? <a key={key} href={attachment.downloadUrl}>▧ {attachment.filename}</a>
+          : <span key={key}>▧ {attachment.filename || '첨부 파일'}</span>;
+      })}</div>}
       {message.evidence?.length > 0 && !message.proposalIds?.length && <div className="v2-message__links">
-        {message.evidence.map((item) => <button type="button" key={item.id} onClick={() => onEvidence(item)}>근거 {item.label}</button>)}
+        {message.evidence.map((item) => item.quote
+          ? <details key={item.id}><summary onClick={() => onEvidence(item)}>근거 {item.label}</summary><blockquote>{item.quote}</blockquote></details>
+          : <button type="button" key={item.id} onClick={() => onEvidence(item)}>근거 {item.label}</button>)}
       </div>}
       {message.jobAnalysisIds?.length > 0
         ? <div className="v2-message__links"><button type="button" onClick={() => onOpenJobAnalyses(message.jobAnalysisIds)}>분석 공고 보러가기</button></div>

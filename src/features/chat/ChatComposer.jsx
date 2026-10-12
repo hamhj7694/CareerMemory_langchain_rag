@@ -192,7 +192,7 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
   }, [selectedMode]);
 
   return <div className="v2-composer-shell">
-    {(selectedMode !== GENERAL_CHAT_MODE.id || showQuickActions) && <div className="v2-chat-mode-toolbar">
+    {selectedMode !== GENERAL_CHAT_MODE.id && <div className="v2-chat-mode-toolbar">
       {selectedMode !== GENERAL_CHAT_MODE.id && <div className="v2-chat-mode-indicator" aria-label={`현재 질문 모드: ${activeMode.title}`}>
         <span>질문 모드</span>
         <strong>{activeMode.title}</strong>
@@ -203,18 +203,6 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
           title="모드 해제"
         >×</button>
       </div>}
-      {showQuickActions && <nav className="v2-chat-quick-actions" aria-label="질문 모드 선택">
-        {CHAT_QUICK_ACTIONS.map((action) => <button
-          type="button"
-          key={action.id}
-          className={selectedMode === action.id ? 'is-active' : ''}
-          aria-pressed={selectedMode === action.id}
-          disabled={locked}
-          onClick={() => onModeChange?.(action.id)}
-        >
-          {action.title}
-        </button>)}
-      </nav>}
     </div>}
     <div
       className={`v2-composer ${draggingFiles ? 'is-file-dragging' : ''}`}
@@ -248,13 +236,25 @@ export function ChatComposer({ text, onTextChange, files, onFilesChange, onSubmi
       placeholder={activeMode.placeholder}
     />
     <div className="v2-composer__tools">
+      {showQuickActions && <nav className="v2-chat-quick-actions" aria-label="질문 모드 선택">
+        {CHAT_QUICK_ACTIONS.map((action) => <button
+          type="button"
+          key={action.id}
+          className={selectedMode === action.id ? 'is-active' : ''}
+          aria-pressed={selectedMode === action.id}
+          disabled={locked}
+          onClick={() => onModeChange?.(action.id)}
+        >
+          {action.title}
+        </button>)}
+      </nav>}
       <div className="v2-composer__actions">
         <input ref={fileInput} className="sr-only" type="file" multiple accept={EVIDENCE_FILE_ACCEPT} onChange={addFiles} />
         <button type="button" className="v2-icon-button" onClick={() => fileInput.current?.click()} disabled={locked || checkingFiles || files.length >= CHAT_ATTACHMENT_LIMITS.maxCount} aria-label="파일 첨부">{checkingFiles ? '…' : '＋'}</button>
         <button type="button" className="v2-send-button" onClick={onSubmit} disabled={locked || checkingFiles || files.some((file) => !['ready', 'partial'].includes(file.processingStatus)) || (!text.trim() && files.length === 0)} aria-label="메시지 보내기">{checkingFiles ? '…' : '↑'}</button>
       </div>
     </div>
-    <small className="v2-composer__hint">{busy ? '답변 중에도 이어서 전송할 수 있어요 · ' : ''}Enter로 전송 · 붙여넣기/드롭 지원 · 문서·이미지·음성·영상 최대 10개 · 파일당 25MiB·전체 100MiB</small>
+    <small className="v2-composer__hint">{busy ? '답변 중에도 이어서 전송할 수 있어요 · ' : ''}Enter로 전송 · 공개 링크 읽기 · 붙여넣기/드롭 지원 · 문서·이미지·음성·영상 최대 10개 · 파일당 25MiB·전체 100MiB</small>
     </div>
   </div>;
 }

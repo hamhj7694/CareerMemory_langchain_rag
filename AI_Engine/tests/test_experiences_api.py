@@ -139,6 +139,96 @@ class ExperiencesApiTests(unittest.TestCase):
         self.assertEqual(trash["items"][0]["draft"]["domain"]["name"], "개인 경험")
         self.assertEqual(trash["items"][0]["draft"]["project"]["name"], "학습")
 
+    def test_lossless_fields_and_custom_blocks_survive_round_trip(self) -> None:
+        client = TestClient(app)
+        csrf = self.register(client, "lossless")
+        source_id = "source-manual-lossless"
+        created = client.post(
+            "/api/v2/experiences",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "domain": {"name": "직장 경험"},
+                "project": {"name": "무손실 저장"},
+                "title": "API 응답시간 개선",
+                "summary": "응답시간을 절반으로 줄였습니다.",
+                "facts": ["응답시간 50% 단축"],
+                "skills": ["페스트API"],
+                "skill_mentions": [{
+                    "raw_text": "페스트API",
+                    "canonical_skill_id": "skill-fastapi",
+                }],
+                "skill_groups": [{"name": "백엔드", "skill_names": ["FastAPI"]}],
+                "metrics": [{"raw_text": "50%", "normalized_value": 50, "unit": "%"}],
+                "field_citations": {
+                    "facts.0": [{"source_ref_id": source_id, "quote": "응답시간 50% 단축"}],
+                },
+                "source_ids": [source_id],
+                "source_refs": [{"id": source_id, "type": "manual_text", "text": "응답시간 50% 단축"}],
+                "confidence": 0.93,
+                "extensions": {"constraint": "레거시 호환"},
+                "unmodeled_note": "스키마 밖 정보도 보존",
+                "content_blocks": [{
+                    "id": "custom-constraint",
+                    "type": "custom",
+                    "data": {"label": "제약사항", "value": "레거시 호환"},
+                    "origin": "user",
+                    "future_property": "다음 버전 필드",
+                }],
+            },
+        )
+
+        self.assertEqual(created.status_code, 201)
+        payload = created.json()
+        self.assertEqual(payload["field_citations"]["facts.0"][0]["quote"], "응답시간 50% 단축")
+        self.assertEqual(payload["skill_groups"][0]["name"], "백엔드")
+        self.assertEqual(payload["confidence"], 0.93)
+        self.assertEqual(payload["extensions"]["unmodeled_note"], "스키마 밖 정보도 보존")
+        self.assertEqual(payload["fact_evidence_status"]["응답시간 50% 단축"], "supported")
+        custom_block = next(
+            block for block in payload["content_blocks"]
+            if block["type"] == "custom"
+        )
+        self.assertEqual(
+            custom_block["data"]["extensions"]["future_property"],
+            "다음 버전 필드",
+        )
+        self.assertTrue(any(
+            block["type"] == "properties"
+            and block["data"]["value"]["unmodeled_note"] == "스키마 밖 정보도 보존"
+            for block in payload["content_blocks"]
+        ))
+
+        updated = client.patch(
+            f"/api/v2/experiences/{payload['id']}",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "base_version": payload["version"],
+                "changes": {
+                    "summary": "수정된 요약",
+                    "future_change": "유지",
+                    "content_blocks": [{
+                        "id": "custom-user-note",
+                        "type": "paragraph",
+                        "data": {"title": "추가 메모", "text": "사용자가 편집한 블록"},
+                        "origin": "user",
+                    }],
+                },
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        updated_payload = updated.json()
+        self.assertEqual(updated_payload["extensions"]["future_change"], "유지")
+        self.assertTrue(any(
+            block["type"] == "paragraph"
+            and block["data"].get("text") == "사용자가 편집한 블록"
+            for block in updated_payload["content_blocks"]
+        ))
+        self.assertTrue(any(
+            block["type"] == "summary"
+            and block["data"].get("text") == "수정된 요약"
+            for block in updated_payload["content_blocks"]
+        ))
+
     def test_deleting_project_moves_all_child_experiences_to_trash(self) -> None:
         client = TestClient(app)
         csrf = self.register(client, "project_delete")

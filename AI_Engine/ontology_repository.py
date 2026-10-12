@@ -231,6 +231,8 @@ def seed_ontology(database: Session, *, dry_run: bool = False) -> OntologySeedRe
         "relations_updated": 0,
     }
     seed_alias_owners: dict[tuple[str, str], str] = {}
+    # SQLite의 foreign_keys 검사가 켜진 환경에서도 alias/relation 삽입 순서가
+    # ORM 내부 정렬에 의존하지 않도록 모든 concept를 먼저 영속화한다.
     for definition in SKILL_REGISTRY:
         concept = database.get(OntologyConcept, definition.id)
         concept_values = {
@@ -251,6 +253,10 @@ def seed_ontology(database: Session, *, dry_run: bool = False) -> OntologySeedRe
                 for key, value in concept_values.items():
                     setattr(concept, key, value)
 
+    if not dry_run:
+        database.flush()
+
+    for definition in SKILL_REGISTRY:
         for alias in definition.aliases:
             key = alias_key(alias)
             alias_identity = (key, "und")
