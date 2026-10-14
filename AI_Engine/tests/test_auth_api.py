@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -79,6 +80,15 @@ class AuthApiTests(unittest.TestCase):
             user = database.query(models.User).one()
         self.assertEqual(user.account_type, "guest")
         self.assertIsNotNone(user.guest_expires_at)
+
+    def test_production_cookie_is_secure_httponly_and_samesite(self) -> None:
+        with patch("AI_Engine.auth.router.COOKIE_SECURE", True):
+            response = TestClient(app, base_url="https://testserver").post("/api/v2/auth/guest")
+        self.assertEqual(response.status_code, 201)
+        cookie = response.headers["set-cookie"]
+        self.assertIn("Secure", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=lax", cookie)
 
     def test_simple_identifier_creates_then_reopens_same_space(self) -> None:
         profile_required = self.client.post(

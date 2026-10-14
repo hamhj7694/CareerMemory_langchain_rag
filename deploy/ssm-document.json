@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Deploy a digest-pinned Career Memory release using the EC2 instance role",
+  "parameters": {
+    "ReleaseId": {
+      "type": "String", "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9a-f]{40}-[0-9]+-[0-9]+$"
+    },
+    "ApiDigest": {
+      "type": "String", "interpolationType": "ENV_VAR",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "WebDigest": {
+      "type": "String", "interpolationType": "ENV_VAR",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "mainSteps": [{
+    "action": "aws:runShellScript",
+    "name": "deploy",
+    "inputs": {
+      "timeoutSeconds": "1800",
+      "runCommand": [
+        "set -eu",
+        "/usr/local/sbin/career-memory-deploy \"$SSM_ReleaseId\" \"$SSM_ApiDigest\" \"$SSM_WebDigest\""
+      ]
+    }
+  }]
+}

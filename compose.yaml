@@ -1,0 +1,75 @@
+name: career-memory
+x-backend: &backend
+  image: ${API_IMAGE:-career-memory-api:${IMAGE_TAG:-local}}
+  build: .
+  env_file: ${DEPLOY_ENV_FILE:-.env.deploy}
+  environment:
+    CAREER_MEMORY_DATA_ROOT: /state
+    DATABASE_URL: sqlite:////state/data/career_memory.db
+    ATTACHMENT_STORAGE_ROOT: /state/data/uploads
+    FILE_PROCESSING_MODE: worker
+    AI_BUDGET_DB: /state/data/ai_budget.db
+  volumes:
+    - application-data:/state
+  restart: unless-stopped
+  init: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+  networks: [application]
+services:
+  api:
+    <<: *backend
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    mem_limit: 2g
+  worker:
+    <<: *backend
+    command: [python, -m, AI_Engine.file_processing_worker]
+    environment:
+      CAREER_MEMORY_DATA_ROOT: /state
+      DATABASE_URL: sqlite:////state/data/career_memory.db
+      ATTACHMENT_STORAGE_ROOT: /state/data/uploads
+      FILE_PROCESSING_MODE: worker
+      AI_BUDGET_DB: /state/data/ai_budget.db
+      WORKER_SKIP_DATABASE_INIT: "true"
+    depends_on:
+      api: {condition: service_healthy}
+    stop_grace_period: 240s
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD, python, -c, "import time; from pathlib import Path; p=Path('/tmp/worker-heartbeat'); assert p.exists() and time.time()-p.stat().st_mtime < 300"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+  web:
+    image: ${WEB_IMAGE:-career-memory-web:${IMAGE_TAG:-local}}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    ports: ["127.0.0.1:${WEB_PORT:-8080}:80"]
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    networks: [application]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1/health]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+volumes:
+  application-data:
+    name: career-memory-data
+networks:
+  application:

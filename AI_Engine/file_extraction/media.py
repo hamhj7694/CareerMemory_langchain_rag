@@ -172,7 +172,10 @@ def _transcribe(audio: BufferedReader, filename: str) -> tuple[str, tuple[Extrac
             "현재 타임스탬프 근거 모드는 AI_STT_MODEL=whisper-1만 지원합니다."
         )
     try:
-        response = OpenAI(api_key=api_key).audio.transcriptions.create(
+        from AI_Engine.deployment_safety import production, reserve_ai_operations
+        if production():
+            reserve_ai_operations()
+        response = OpenAI(api_key=api_key, **({"max_retries": 0} if production() else {})).audio.transcriptions.create(
             file=(filename, audio, "audio/mpeg"),
             model=STT_MODEL,
             response_format="verbose_json",
@@ -231,6 +234,9 @@ def parse_media(file: SourceFile, *, parser_version: str) -> FileExtractionResul
         if not any(stream.get("codec_type") == "audio" for stream in streams):
             raise FileExtractionError("음성 track이 없는 미디어 파일입니다.")
         duration_seconds = float((probe.get("format") or {}).get("duration") or 0.0)
+        from AI_Engine.deployment_safety import production
+        if production() and not 0 < duration_seconds <= float(os.getenv("AI_MAX_MEDIA_SECONDS", "120")):
+            raise FileExtractionError("체험 서비스에서는 120초 이하의 음성·영상만 처리할 수 있습니다.")
         _normalise_audio(capability.ffmpeg, input_path, output_path)
         with output_path.open("rb") as audio:
             text, segments, metadata = _transcribe(audio, output_path.name)

@@ -6,10 +6,13 @@ from dataclasses import dataclass
 from datetime import timedelta
 import hashlib
 import socket
+import os
+import time
+import shutil
 import unicodedata
 from uuid import uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, update, func
 from sqlalchemy.orm import Session
 
 from AI_Engine.blob_store import (
@@ -87,6 +90,17 @@ class AttachmentService:
         ))
         if existing is not None:
             return AttachmentIngestResult(existing, self.latest_job(database, existing.id), True)
+
+        if os.getenv("APP_ENV", "development").lower() == "production":
+            user_bytes = database.scalar(select(func.coalesce(func.sum(Attachment.size_bytes), 0)).where(Attachment.user_id == user_id))
+            total_bytes = database.scalar(select(func.coalesce(func.sum(Attachment.size_bytes), 0)))
+            user_limit = int(os.getenv("ATTACHMENT_MAX_USER_MIB", "100")) * 1024 * 1024
+            total_limit = int(os.getenv("ATTACHMENT_MAX_TOTAL_MIB", "2048")) * 1024 * 1024
+            minimum_free = int(os.getenv("ATTACHMENT_MIN_FREE_MIB", "1024")) * 1024 * 1024
+            if user_bytes + len(source.content) > user_limit or total_bytes + len(source.content) > total_limit:
+                raise FileInputError("체험 서비스의 파일 저장 한도를 초과했습니다.")
+            if shutil.disk_usage(get_blob_store().root).free < minimum_free + len(source.content):
+                raise FileInputError("파일 저장 공간이 부족합니다. 잠시 후 다시 시도해 주세요.")
 
         attachment_id = f"ATT-{uuid4()}"
         stored = get_blob_store().put(
@@ -180,6 +194,18 @@ class AttachmentService:
         job = database.get(FileProcessingJob, job_id)
         if job is None:
             raise FileInputError("파일 처리 작업을 찾을 수 없습니다.")
+        # Legacy file-analysis endpoints need extracted text before returning.
+        # In worker mode they wait for the queue instead of racing its owner.
+        if os.getenv("FILE_PROCESSING_MODE", "inline") == "worker" and worker_id is None:
+            deadline = time.monotonic() + 240
+            database.commit()
+            while job.status in ACTIVE_JOB_STATUSES:
+                if time.monotonic() >= deadline:
+                    raise FileInputError("파일 처리가 진행 중입니다. 잠시 후 다시 시도해 주세요.")
+                time.sleep(0.5)
+                database.rollback()
+                database.refresh(job)
+            return job
         attachment = database.get(Attachment, job.attachment_id)
         if attachment is None:
             job.status = "failed"

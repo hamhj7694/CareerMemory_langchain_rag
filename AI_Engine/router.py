@@ -6,6 +6,7 @@ from __future__ import annotations
 # 서버가 시작할 때 DB 테이블을 준비하기 위해 비동기 context manager를 사용한다.
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import os
 
 # 2. FastAPI 서버 기능
 # FastAPI는 HTTP API를 만들고, CORSMiddleware는 브라우저의 로컬 개발 요청을 허용한다.
@@ -36,6 +37,8 @@ from AI_Engine.file_extraction.external_tools import (
 )
 from AI_Engine.file_extraction.media import get_media_capability
 from AI_Engine.operational_metrics import register_operational_metrics
+from AI_Engine.deployment_safety import AIBudgetExceeded, production
+from AI_Engine.api.errors import error_response, get_request_id
 
 
 # 3. 로컬 개발 주소
@@ -78,6 +81,9 @@ app = FastAPI(
     version="0.1.0",
     description="Career Memory 프론트엔드와 AI 엔진을 연결하는 API",
     lifespan=lifespan,
+    docs_url=None if production() else "/docs",
+    redoc_url=None if production() else "/redoc",
+    openapi_url=None if production() else "/openapi.json",
 )
 
 
@@ -85,7 +91,7 @@ app = FastAPI(
 # 프론트엔드와 백엔드의 포트가 다르므로 브라우저 요청을 명시적으로 허용해야 한다.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=LOCAL_FRONTEND_ORIGINS,
+    allow_origins=[os.environ["FRONTEND_URL"]] if production() else LOCAL_FRONTEND_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,6 +100,12 @@ register_operational_metrics(app)
 
 # 공개 API 오류를 프론트엔드 AppError 형식으로 통일한다.
 register_error_handlers(app)
+
+
+@app.exception_handler(AIBudgetExceeded)
+async def handle_ai_budget(request, error):
+    return error_response(status_code=429, code="AI_QUOTA_EXCEEDED",
+                          message=str(error), request_id=get_request_id(request))
 
 
 # 8. 기능별 API 라우터 연결

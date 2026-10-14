@@ -19,6 +19,10 @@ from langchain_google_genai import (
 )
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import OpenAI
+from AI_Engine.deployment_safety import (
+    BudgetCallback, BudgetedEmbeddings, BudgetedResponses, production,
+    reserve_ai_operations,
+)
 
 # 3. .env 설정 불러오기
 load_dotenv()
@@ -100,18 +104,21 @@ def create_chat_model(
     # 이후 대화 요약 엔진을 추가해도 용도별 한도가 서로 영향을 주지 않는다.
     chat_output_tokens = int(os.getenv("AI_CHAT_MAX_TOKENS", "8000"))
     chat_temperature = get_chat_temperature()
+    safety_options = {"callbacks": [BudgetCallback()], "max_retries": 0} if production() else {}
     if active_provider == "gemini":
         return ChatGoogleGenerativeAI(
             model=selected_model,
             api_key=_required_api_key("GEMINI_API_KEY"),
             max_tokens=chat_output_tokens,
             temperature=chat_temperature,
+            **safety_options,
         )
     return ChatOpenAI(
         model=selected_model,
         api_key=_required_api_key("OPENAI_API_KEY"),
         temperature=chat_temperature,
         max_completion_tokens=chat_output_tokens,
+        **safety_options,
     )
 
 
@@ -125,14 +132,17 @@ def create_embeddings(
     active_provider = get_ai_provider(provider)
     selected_model = model_name or get_embedding_model_name(active_provider)
     if active_provider == "gemini":
-        return GoogleGenerativeAIEmbeddings(
+        embeddings = GoogleGenerativeAIEmbeddings(
             model=selected_model,
             api_key=_required_api_key("GEMINI_API_KEY"),
         )
-    return OpenAIEmbeddings(
-        model=selected_model,
-        api_key=_required_api_key("OPENAI_API_KEY"),
-    )
+    else:
+        embeddings = OpenAIEmbeddings(
+            model=selected_model,
+            api_key=_required_api_key("OPENAI_API_KEY"),
+            **({"max_retries": 0} if production() else {}),
+        )
+    return BudgetedEmbeddings(embeddings) if production() else embeddings
 
 
 # 9. 구조화 출력용 Gemini 어댑터
@@ -170,16 +180,21 @@ class GeminiStructuredClient:
         structured_output_tokens = int(
             os.getenv("AI_STRUCTURED_OUTPUT_MAX_TOKENS", "65536")
         )
+        if production() and len(input) > int(os.getenv("AI_MAX_STRUCTURED_INPUT_CHARS", "100000")):
+            raise ValueError("분석 입력이 체험 서비스의 허용 길이를 초과합니다.")
         model_client = ChatGoogleGenerativeAI(
             model=model,
             api_key=_required_api_key("GEMINI_API_KEY"),
             max_tokens=structured_output_tokens,
             temperature=0,
+            **({"max_retries": 0} if production() else {}),
         )
         structured_model = model_client.with_structured_output(
             dict(schema),
             method="json_schema",
         )
+        if production():
+            reserve_ai_operations()
         result = structured_model.invoke(
             [
                 SystemMessage(content=instructions),
@@ -204,7 +219,13 @@ def create_structured_client(
     active_provider = get_ai_provider(provider)
     if active_provider == "gemini":
         return GeminiStructuredClient()
-    return OpenAI(api_key=_required_api_key("OPENAI_API_KEY"))
+    client = OpenAI(
+        api_key=_required_api_key("OPENAI_API_KEY"),
+        **({"max_retries": 0} if production() else {}),
+    )
+    if production():
+        return SimpleNamespace(responses=BudgetedResponses(client.responses))
+    return client
 
 
 # 11. Provider별 RAG 인덱스 버전

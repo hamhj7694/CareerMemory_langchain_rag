@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import socket
 import time
+from pathlib import Path
+from tempfile import gettempdir
+from threading import Event, Thread
 from uuid import uuid4
 
 from AI_Engine.attachment_service import attachment_service
@@ -39,11 +42,22 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     args = parser.parse_args()
-    initialize_database()
-    count = process_available_jobs(
-        once=args.once,
-        poll_seconds=args.poll_seconds,
-    )
+    # The API has already completed startup migrations in Compose.
+    # Standalone workers still initialize by default.
+    import os
+    if os.getenv("WORKER_SKIP_DATABASE_INIT", "false") != "true":
+        initialize_database()
+    stop_heartbeat = Event()
+    def heartbeat():
+        path = Path(gettempdir()) / "worker-heartbeat"
+        while not stop_heartbeat.is_set():
+            path.touch()
+            stop_heartbeat.wait(10)
+    Thread(target=heartbeat, daemon=True).start()
+    try:
+        count = process_available_jobs(once=args.once, poll_seconds=args.poll_seconds)
+    finally:
+        stop_heartbeat.set()
     if args.once:
         print(f"processed_jobs={count}")
 

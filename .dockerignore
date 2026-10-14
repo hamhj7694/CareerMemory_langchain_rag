@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+dist
+data
+**/__pycache__
+**/*.pyc
+.venv
+test-results
+playwright-report
+release
+*.db
+*.sqlite*
+포트폴리오 및 기타 raw 자료
+docs/reports/work/*.png

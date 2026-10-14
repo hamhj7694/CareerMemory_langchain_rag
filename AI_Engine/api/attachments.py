@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import datetime
 from typing import Literal
 from urllib.parse import quote
@@ -248,7 +249,8 @@ async def upload_attachment(
         if exact is not None:
             return _attachment_response(exact, database, reused=True)
         raise
-    if ingested.job is not None and ingested.job.status == "queued":
+    if (ingested.job is not None and ingested.job.status == "queued"
+            and os.getenv("FILE_PROCESSING_MODE", "inline") == "inline"):
         await run_file_extraction(
             attachment_service.process_job,
             database,
@@ -272,7 +274,7 @@ async def process_attachment(
 
     attachment = _owned_attachment(attachment_id, current_user.id, database)
     job = attachment_service.retry(database, attachment)
-    if job.status == "queued":
+    if job.status == "queued" and os.getenv("FILE_PROCESSING_MODE", "inline") == "inline":
         await run_file_extraction(
             attachment_service.process_job,
             database,
