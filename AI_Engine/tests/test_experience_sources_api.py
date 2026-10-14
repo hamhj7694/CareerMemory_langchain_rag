@@ -90,6 +90,23 @@ class ExperienceSourcesApiTests(unittest.TestCase):
             },
         ).json()
 
+    def test_worker_mode_queues_upload_and_worker_completes_it(self) -> None:
+        from AI_Engine.attachment_service import attachment_service
+        with patch.dict("os.environ", {"FILE_PROCESSING_MODE": "worker"}):
+            with patch.object(attachment_service, "process_job", wraps=attachment_service.process_job) as process:
+                uploaded = self.client.post("/api/v2/attachments", headers=self.headers,
+                                            files={"file": ("worker.txt", b"queued evidence", "text/plain")})
+                self.assertEqual(uploaded.status_code, 201)
+                self.assertEqual(uploaded.json()["status"], "queued")
+                process.assert_not_called()
+            with self.session_factory() as database:
+                job = attachment_service.claim_next_queued_job(database, worker_id="test-worker")
+                attachment_service.process_job(database, job.id, worker_id="test-worker")
+            result = self.client.get(f'/api/v2/attachments/{uploaded.json()["id"]}')
+            self.assertEqual(result.json()["status"], "ready")
+            original = self.client.get(f'/api/v2/attachments/{uploaded.json()["id"]}/download')
+            self.assertEqual(original.content, b"queued evidence")
+
     def test_sources_can_be_added_and_reorganized_as_independent_copy(self) -> None:
         added_text = self.client.post(
             f"/api/v2/experiences/{self.experience['id']}/sources/text",

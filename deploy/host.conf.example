@@ -1,0 +1,5 @@
+# Install as /etc/career-memory-deploy.conf, root:root mode 0600.
+AWS_REGION=ap-northeast-2
+ECR_REGISTRY=123456789012.dkr.ecr.ap-northeast-2.amazonaws.com
+API_REPOSITORY=career-memory-api
+WEB_REPOSITORY=career-memory-web

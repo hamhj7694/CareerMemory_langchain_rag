@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,21 +16,21 @@
     "test:e2e:headed": "node scripts/run-playwright-e2e.mjs --headed"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
+    "@vitejs/plugin-react": "6.0.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "latest",
+    "react-router-dom": "7.18.4",
     "remark-gfm": "^4.0.1",
-    "vite": "latest"
+    "vite": "8.1.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
-    "@eslint/js": "latest",
-    "eslint": "latest",
-    "eslint-plugin-react-hooks": "latest",
-    "eslint-plugin-react-refresh": "latest",
-    "globals": "latest",
-    "vitest": "latest"
+    "@eslint/js": "10.0.1",
+    "eslint": "10.7.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.3",
+    "globals": "17.7.0",
+    "vitest": "4.1.11"
   }
 }

@@ -1,0 +1,28 @@
+services:
+  gateway:
+    image: caddy:2-alpine
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in .env.deploy}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy-config:/config
+    networks:
+      application:
+        ipv4_address: 172.30.88.2
+    depends_on:
+      web: {condition: service_healthy}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  certificates:
+    name: career-memory-certificates
+  caddy-config:
+networks:
+  application:
+    ipam:
+      config:
+        - subnet: 172.30.88.0/24

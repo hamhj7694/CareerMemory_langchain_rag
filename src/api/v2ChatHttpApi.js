@@ -281,11 +281,25 @@ export async function downloadAttachment(attachmentId) {
   return response.blob();
 }
 
-export function processAttachment(attachmentId) {
-  return http.request({
+export async function waitForAttachment(attachment, { timeoutMs = 240_000, pollIntervalMs = 1000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let current = attachment;
+  while (['queued', 'processing', 'pending'].includes(current.status)) {
+    if (Date.now() >= deadline) {
+      throw new Error('파일 처리가 오래 걸리고 있어요. 잠시 후 다시 시도해 주세요.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    current = await getAttachment(current.id);
+  }
+  return current;
+}
+
+export async function processAttachment(attachmentId) {
+  const attachment = await http.request({
     path: `/api/v2/attachments/${encodeURIComponent(attachmentId)}/process`,
     method: 'POST',
   });
+  return waitForAttachment(attachment);
 }
 
 export async function uploadAttachments(selections = [], { throwOnFailure = true } = {}) {
@@ -298,18 +312,19 @@ export async function uploadAttachments(selections = [], { throwOnFailure = true
   const uploaded = await mapWithConcurrency(input, 2, async (selection) => {
     if (selection.existingAttachmentId) {
       const existing = await getAttachment(selection.existingAttachmentId);
-      return { ...existing, reused: true };
+      return waitForAttachment({ ...existing, reused: true });
     }
     const file = selection.file || selection;
     const body = new FormData();
     body.append('file', file);
     body.append('content_hash', selection.contentHash || '');
     body.append('original_attachment_id', selection.previousAttachmentId || '');
-    return http.request({
+    const attachment = await http.request({
       path: '/api/v2/attachments',
       method: 'POST',
       body,
     });
+    return waitForAttachment(attachment);
   });
   const failed = uploaded.filter((attachment) => ['failed', 'unsupported'].includes(attachment.status));
   if (throwOnFailure && failed.length) {
