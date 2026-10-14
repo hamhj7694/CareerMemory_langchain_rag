@@ -60,10 +60,14 @@ GitHub Actions containers job의 실제 Docker smoke test에서 검증했다.
 - AWS 설정 전에는 Repository variable `DEPLOY_ENABLED` 조건으로 게시·배포 job을 건너뛴다.
 
 로컬에서는 SSM 제어 테스트 5개, JSON/YAML 파싱, Bash 구문 검사를 통과했다.
-Linux에서 실제 Bash 스크립트를 실행하는 테스트 8개도 GitHub CI에서 통과했다.
-이 8개는 Docker/AWS CLI를 대역으로 바꾸어 다운로드·설정·백업·컨테이너 및 공개 health 실패,
+Linux에서 실제 Bash 스크립트를 실행하는 테스트 10개도 GitHub CI에서 통과했다(SSM 제어 테스트와 합계 15개).
+이 10개는 Docker/AWS CLI를 대역으로 바꾸어 다운로드·설정·백업·컨테이너 및 공개 health 실패,
 첫 배포 실패, 롤백 실패 보고, 동시 배포 잠금, 수동 롤백과 release ID 변조 거부를 확인한다.
+또한 검증한 이미지의 ECR 게시, digest 전달, 게시 실패·잘못된 digest 차단을 검사한다.
 실제 AWS 연동 성공을 의미하지는 않는다.
+
+반복 CI에서 텍스트 선택 E2E가 채팅 route 전환 중 DOM 교체와 경쟁하는 현상을 발견했다.
+현재 대화의 복원 API 완료와 입력 가능 상태를 기다리도록 수정했고, 로컬 실제 브라우저에서 해당 테스트를 5회 연속 통과했다.
 
 기존 Docker 검증: [CI run 38568825964](https://github.com/hamhj7694/CareerMemory_langchain_rag/actions/runs/38568825964).
 이번 구현 `0038ad3`의 검증: [CI run 38571987312](https://github.com/hamhj7694/CareerMemory_langchain_rag/actions/runs/38571987312).

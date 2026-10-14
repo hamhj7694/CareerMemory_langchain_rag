@@ -116,7 +116,18 @@ test('사용자 말풍선의 텍스트를 마우스 드래그로 선택할 수 �
   const prompt = '드래그해서 복사할 수 있는 사용자 메시지입니다.';
 
   await page.locator('textarea').fill(prompt);
+  // Completing the first stream navigates to /chat/:id and restores the thread.
+  // Wait for that restore, otherwise the paragraph can detach during the drag.
+  const restored = page.waitForResponse((response) => {
+    const conversationId = new URL(page.url()).pathname.split('/')[2];
+    return conversationId?.startsWith('CONV-')
+      && response.request().method() === 'GET'
+      && new URL(response.url()).pathname === `/api/v2/conversations/${conversationId}/analysis-status`;
+  });
   await page.getByRole('button', { name: '메시지 보내기' }).click();
+  await expect(page).toHaveURL(/\/chat\/CONV-/);
+  await (await restored).finished();
+  await expect(page.getByRole('button', { name: '파일 첨부' })).toBeEnabled();
   const userContent = page.locator('.v2-message--user .v2-message__content').last();
   await expect(userContent).toContainText(prompt);
   await expect(page.locator('.v2-message--assistant').last()).toContainText('채팅 응답 정상');
