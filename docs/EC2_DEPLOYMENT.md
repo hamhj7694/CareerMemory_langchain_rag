@@ -73,81 +73,16 @@ OpenAI 자동 재시도는 운영에서 끈다. Gemini SDK 내부 호출 수는 
 채팅 출력 2000토큰, 구조화 출력 8000토큰, 구조화 입력 100000자, 미디어 120초 제한을 함께 적용한다.
 한도 초과는 새 provider 호출 전에 차단하며 기존 API 오류 처리 경로에 따라 429 또는 분석 실패 안내로 표시된다.
 
-## AWS 복구 후 준비
+## AWS CI/CD
 
-1. 루트 MFA를 복구한 뒤 운영용 IAM 권한을 분리하고, EC2 관리에 루트 계정을 사용하지 않는다.
-2. Ubuntu 24.04 x86_64 EC2를 생성한다. 이 Compose의 메모리 상한 합계를 고려해 RAM 8GiB 이상을 시작점으로 잡고 실제 OCR·문서 변환 부하를 측정한다.
-3. EBS는 암호화하고 충분한 저장 공간을 확보한다. 종료 시 볼륨 삭제 설정을 확인하고 별도 백업·스냅샷 정책을 설정한다.
-4. 보안 그룹: 80/443 공개, SSH 22는 관리자/배포 접근 경로만 허용. 8000/8080/SQLite/Chroma는 공개하지 않는다.
-5. Elastic IP와 도메인 A 레코드를 연결한다. IPv6를 구성하지 않았다면 AAAA 레코드를 추가하지 않는다.
-6. Docker 공식 Ubuntu 설치 문서로 Docker Engine과 Compose plugin을 설치한다.
-7. 전용 배포 계정에 `/opt/career-memory` 쓰기 권한과 Docker 실행 권한을 부여한다. Docker 그룹은 호스트 관리 권한에 준하므로 계정과 SSH 키를 보호한다.
-8. 서버에 `/opt/career-memory/.env.deploy`를 직접 생성하고 권한을 `600`으로 설정한다. SITE_DOMAIN·FRONTEND_URL·키를 채운다. API 키를 GitHub/Vite 변수로 전달하지 않는다.
-9. 공개 HTTPS, 게스트 로그인, CSRF 거부, 사용자 간 접근 차단, 파일 원본 다운로드, AI 한도 동작을 확인한다.
-10. EBS 용량·EC2 메모리·컨테이너 재시작·백업 실패·Provider 사용량 알림을 설정한다.
+See [AWS_CICD_SETUP.md](AWS_CICD_SETUP.md) for ECR, GitHub OIDC, IAM, EC2,
+SSM, GitHub variables, activation, backup and rollback procedures.
 
-GitHub-hosted runner의 IP는 고정되지 않는다. SSH를 전체 공개하는 방식 대신 고정 egress 배포 runner 또는 VPN 경로를 준비한다.
-EC2 인스턴스에 PR을 실행하는 self-hosted runner를 설치하지 않는다.
+PRs run tests and builds only. After AWS setup, set the **repository variable**
+`DEPLOY_ENABLED=true` to deploy tested main images through ECR and SSM automatically.
+No AWS long-lived access key or server SSH private key is used.
 
-## GitHub Actions
-
-`.github/workflows/deploy.yml`은 PR/main push/수동 실행에서 다음을 수행한다:
-
-1. 프론트엔드 lint·단위 테스트·production build.
-2. 백엔드 회귀 테스트와 stub AI 기반 브라우저 E2E.
-3. Docker API·web 이미지 빌드, 실제 Worker 처리와 down/up 영속성 smoke test.
-4. main/수동 실행은 commit SHA로 이미지와 배포 묶음을 artifact로 보관한다.
-5. `DEPLOY_ENABLED=true`인 main 실행만 SSH로 검증한 이미지를 EC2에 반영한다.
-
-AWS 접근 키는 필요하지 않는다. 계정 복구 전에는 `DEPLOY_ENABLED`를 설정하지 않아 배포 job을 건너뛴다.
-PR에는 EC2 secrets가 전달되지 않는다. GitHub `production` Environment에서 main 제한과 필요 시 reviewer 규칙을 설정한다.
-
-| GitHub 설정 | 값 |
-| --- | --- |
-| Repository variable `DEPLOY_ENABLED` | 준비가 끝난 뒤 `true` |
-| Environment secret `EC2_HOST` | EC2 DNS/IP, SSH 접속 가능한 주소 |
-| `EC2_USER` | 전용 배포 계정 |
-| `EC2_SSH_KEY` | 전용 private key |
-| `EC2_KNOWN_HOSTS` | 신뢰할 수 있는 경로로 확인한 서버 host key를 포함한 known_hosts 줄 |
-
-워크플로는 StrictHostKeyChecking을 켜고 임의 `ssh-keyscan` 결과를 자동 신뢰하지 않는다.
-SSH secrets만 Environment에 저장하고 AI 키는 서버의 `.env.deploy`에만 둔다.
-main branch protection에서 frontend/backend/containers checks를 필수로 지정한다.
-Actions 버전 태그와 Docker base image 태그는 향후 업데이트될 수 있다. 검증한 이미지 artifact는 SHA별로 보존하며,
-더 강한 공급망 고정이 필요하면 action SHA·base image digest와 Linux용 Python lock을 추가한다.
-배포 묶음에는 이미지가 포함되어 크기가 크므로 artifact 저장 공간과 보존 기간을 확인한다.
-artifact 보관은 GitHub 저장량에 포함된다. [공식 저장량 안내](https://docs.github.com/en/billing/concepts/product-billing/github-actions)를 참고한다.
-
-## 백업과 롤백
-
-자동 배포는 기존 API·Worker를 중지하고 `career-memory-data` 전체를
-`/opt/career-memory/backups/<UTC시간>-<SHA>.tar.gz`로 백업한 뒤 새 컨테이너를 시작한다.
-SQLite·Chroma·업로드·AI 사용량을 함께 보존한다. 백업에는 개인정보가 포함되므로 접근을 제한한다.
-서버 밖 암호화 저장소로 복사하고 보존 기간·복구 테스트를 운영한다. 이 저장소에는 아직 S3 자동 업로드를 구성하지 않았다.
-디스크가 부족하면 백업이 실패할 수 있으며 배포를 중단한다. 자동 배포 중에는 짧은 서비스 중단이 발생한다.
-
-health 실패 시 이전 release 이미지로 돌아간다. **DB 스키마는 자동으로 되돌리지 않는다.**
-기존 startup migration은 컬럼을 보완하므로 코드 롤백만으로 충분한지 확인해야 한다.
-데이터 복구가 필요하면 사용자 입력을 중단하고 현재 상태도 별도 보관한 뒤 검증한 백업을 새 볼륨에 복원한다.
-기존 볼륨을 삭제하지 말고 임시 Compose override로 복원 볼륨을 연결해 검증한 후 교체한다.
-
-수동 이미지 롤백 예시(이전 SHA는 보관된 release 디렉터리 이름):
-
-```bash
-cd /opt/career-memory/releases/<이전_SHA>
-export IMAGE_TAG=<이전_SHA> DEPLOY_ENV_FILE=/opt/career-memory/.env.deploy
-docker compose --env-file "$DEPLOY_ENV_FILE" -f compose.yaml -f compose.production.yaml up -d --no-build --wait
-```
-
-기존 로컬 데이터를 옮길 때에는 로컬 API·Worker를 중지하고 SQLite와 uploads/vector_store를 함께 복사한다.
-실사용 개인정보를 공개 체험 서버에 자동으로 넣지 않는다. 기존 DB 내부 blob은 필요하면
-`python -m AI_Engine.migrate_attachment_blobs`의 dry run 결과를 먼저 검토한다.
-
-## 공식 참고
-
-- [Compose startup order와 health 조건](https://docs.docker.com/compose/how-tos/startup-order/)
-- [Docker 볼륨](https://docs.docker.com/compose-file/volumes/)
-- [Docker Engine Ubuntu 설치](https://docs.docker.com/engine/install/ubuntu/)
-- [GitHub deployment environments](https://docs.github.com/en/actions/concepts/workflows-and-actions/deployment-environments)
-- [Caddy forwarded headers](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
-- [EC2 security groups](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/creating-security-group.html)
+Production environment variables remain at `/opt/career-memory/.env.deploy`.
+The fixed `career-memory-data` volume preserves SQLite, Chroma, uploads and AI budgets.
+Deployment backs up this volume and restores the previous image/Compose release on health failure.
+Database schemas are not automatically rewound; see the setup guide for recovery limits.

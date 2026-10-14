@@ -33,6 +33,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - name: Deployment control and failure tests (no AWS credentials)
+        run: |
+          bash -n deploy/bootstrap-release.sh deploy/activate-release.sh deploy/publish-release.sh
+          python -m unittest discover -s scripts/tests -v
       - run: pip install -r requirements.txt httpx
       - run: python -m unittest discover -s AI_Engine/tests
         env:
@@ -66,41 +70,50 @@ jobs:
           python scripts/smoke-deployment.py verify
       - if: always()
         run: docker compose logs --no-color --tail=100
-      - if: github.event_name != 'pull_request'
-        run: |
-          docker save "career-memory-api:$GITHUB_SHA" "career-memory-web:$GITHUB_SHA" | gzip > images.tar.gz
-          tar -czf deployment.tar.gz images.tar.gz compose.yaml compose.production.yaml deploy
+      - name: Export tested images
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+        run: docker save "career-memory-api:$GITHUB_SHA" "career-memory-web:$GITHUB_SHA" | gzip > images.tar.gz
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
         with:
-          name: deployment
-          path: deployment.tar.gz
-          retention-days: 7
+          name: tested-images
+          path: images.tar.gz
+          compression-level: 0
+          retention-days: 1
   deploy:
     needs: containers
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      API_REPOSITORY: ${{ vars.ECR_API_REPOSITORY }}
+      WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      SSM_DOCUMENT_NAME: ${{ vars.SSM_DOCUMENT_NAME }}
+      SSM_DOCUMENT_VERSION: ${{ vars.SSM_DOCUMENT_VERSION }}
+      RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      AWS_PAGER: ''
     steps:
       - uses: actions/checkout@v4
+      - name: Validate deployment settings
+        run: python scripts/deploy-ssm.py --validate-only
       - uses: actions/download-artifact@v4
         with:
-          name: deployment
-      - name: Transfer and activate tested release
-        env:
-          DEPLOY_HOST: ${{ secrets.EC2_HOST }}
-          DEPLOY_USER: ${{ secrets.EC2_USER }}
-          DEPLOY_KEY: ${{ secrets.EC2_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
-          [[ "$DEPLOY_USER" =~ ^[a-zA-Z0-9_-]+$ ]]
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/career-memory/incoming'
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes deployment.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/opt/career-memory/incoming/$GITHUB_SHA.tar.gz"
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" < deploy/activate-release.sh
+          name: tested-images
+      - name: Get short-lived AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: career-memory-${{ github.run_id }}
+          role-duration-seconds: 3600
+      - name: Publish tested images to ECR
+        run: bash deploy/publish-release.sh
+      - name: Deploy through restricted SSM document and wait for result
+        run: python scripts/deploy-ssm.py

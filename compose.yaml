@@ -1,6 +1,6 @@
 name: career-memory
 x-backend: &backend
-  image: career-memory-api:${IMAGE_TAG:-local}
+  image: ${API_IMAGE:-career-memory-api:${IMAGE_TAG:-local}}
   build: .
   env_file: ${DEPLOY_ENV_FILE:-.env.deploy}
   environment:
@@ -50,7 +50,7 @@ services:
       retries: 3
       start_period: 90s
   web:
-    image: career-memory-web:${IMAGE_TAG:-local}
+    image: ${WEB_IMAGE:-career-memory-web:${IMAGE_TAG:-local}}
     build:
       context: .
       dockerfile: deploy/Dockerfile.web

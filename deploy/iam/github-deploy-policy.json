@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EcrAuthentication", "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken", "Resource": "*"
+    },
+    {
+      "Sid": "PushOnlyApplicationRepositories", "Effect": "Allow",
+      "Action": ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:DescribeImages"],
+      "Resource": [
+        "arn:aws:ecr:AWS_REGION:ACCOUNT_ID:repository/career-memory-api",
+        "arn:aws:ecr:AWS_REGION:ACCOUNT_ID:repository/career-memory-web"
+      ]
+    },
+    {
+      "Sid": "RunOnlyDeploymentDocumentOnOneInstance", "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:document/CareerMemory-Deploy",
+        "arn:aws:ec2:AWS_REGION:ACCOUNT_ID:instance/INSTANCE_ID"
+      ]
+    },
+    {
+      "Sid": "ReadCommandResult", "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation", "Resource": "*"
+    }
+  ]
+}

@@ -8,6 +8,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY AI_Engine ./AI_Engine
+COPY compose.yaml compose.production.yaml /opt/career-memory-release/
+COPY deploy /opt/career-memory-release/deploy
 RUN mkdir -p /state/data && chown -R app:app /state
 USER app
 CMD ["python", "-m", "uvicorn", "AI_Engine.router:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-proxy-headers"]
