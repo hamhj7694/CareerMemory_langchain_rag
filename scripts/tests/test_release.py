@@ -1,5 +1,6 @@
 """Run the actual Bash orchestration with fake Docker/AWS; never needs cloud credentials."""
 import json
+import gzip
 import os
 from pathlib import Path
 import shutil
@@ -19,7 +20,7 @@ args = sys.argv[1:]
 with open(os.environ["CALL_LOG"], "a") as stream:
     stream.write(json.dumps(args) + "\n")
 failure = os.environ.get("FAIL_STAGE", "")
-if args[0] == "login":
+if args[0] in {"login", "load"}:
     sys.stdin.read()
 elif args[0] == "create":
     print("test-container")
@@ -31,6 +32,8 @@ elif args[0] == "run":
     if failure == "backup": sys.exit(1)
     print("consistent-state-backup")
 elif args[0] == "pull" and failure == "download":
+    sys.exit(1)
+elif args[0] == "push" and failure == "push":
     sys.exit(1)
 elif args[0] == "compose":
     release = pathlib.Path(args[args.index("-f") + 1]).parent.name
@@ -156,6 +159,47 @@ class ReleaseTests(unittest.TestCase):
         result = self.deploy("../../escape")
         self.assertEqual(result.returncode, 2)
         self.assertFalse(self.log.exists())
+
+    def publish(self, **env):
+        fake_aws = self.base / "bin/aws"
+        fake_aws.write_text(f"#!{sys.executable}\n" + '''
+import os, sys
+args = sys.argv[1:]
+if args[0] == "sts": print("123456789012")
+elif args[1] == "get-login-password": print("temporary-token")
+elif args[1] == "describe-images":
+    if os.environ.get("INVALID_DIGEST") == "1": print("None")
+    else: print("sha256:" + ("c" if "career-memory-api" in args else "d") * 64)
+''')
+        with gzip.open(self.base / "images.tar.gz", "wb") as stream:
+            stream.write(b"tested-image-archive")
+        return subprocess.run(["bash", str(REPO / "deploy/publish-release.sh")], cwd=self.base,
+                              env={**self.env, "RELEASE_ID": NEW, "GITHUB_SHA": "b" * 40,
+                                   "AWS_REGION": "ap-northeast-2", "API_REPOSITORY": "career-memory-api",
+                                   "WEB_REPOSITORY": "career-memory-web", "GITHUB_ENV": str(self.base / "output.env"),
+                                   "GITHUB_STEP_SUMMARY": str(self.base / "summary"), **env},
+                              text=True, capture_output=True, timeout=20)
+
+    def test_publish_uses_tested_images_and_exports_resolved_digests(self):
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = (self.base / "output.env").read_text()
+        self.assertIn("API_DIGEST=" + API, output)
+        self.assertIn("WEB_DIGEST=" + WEB, output)
+        calls = self.calls()
+        self.assertIn(["load"], calls)
+        self.assertFalse(any("build" in c for c in calls))
+        self.assertEqual(len([c for c in calls if c[0] == "push"]), 2)
+        self.assertTrue(any(c[:2] == ["tag", "career-memory-api:" + "b" * 40] for c in calls))
+        self.assertEqual(calls[-1][0], "logout")
+
+    def test_publish_failure_cannot_export_deployable_digests(self):
+        for env in [{"FAIL_STAGE": "push"}, {"INVALID_DIGEST": "1"}]:
+            with self.subTest(env=env):
+                result = self.publish(**env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.base / "output.env").exists())
+                self.assertEqual(self.calls()[-1][0], "logout")
 
 
 if __name__ == "__main__":
