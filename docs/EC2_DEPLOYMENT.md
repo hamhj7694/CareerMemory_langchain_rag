@@ -115,6 +115,8 @@ SSH secrets만 Environment에 저장하고 AI 키는 서버의 `.env.deploy`에�
 main branch protection에서 frontend/backend/containers checks를 필수로 지정한다.
 Actions 버전 태그와 Docker base image 태그는 향후 업데이트될 수 있다. 검증한 이미지 artifact는 SHA별로 보존하며,
 더 강한 공급망 고정이 필요하면 action SHA·base image digest와 Linux용 Python lock을 추가한다.
+배포 묶음에는 이미지가 포함되어 크기가 크므로 artifact 저장 공간과 보존 기간을 확인한다.
+artifact 보관은 GitHub 저장량에 포함된다. [공식 저장량 안내](https://docs.github.com/en/billing/concepts/product-billing/github-actions)를 참고한다.
 
 ## 백업과 롤백
 
@@ -147,3 +149,5 @@ docker compose --env-file "$DEPLOY_ENV_FILE" -f compose.yaml -f compose.producti
 - [Docker 볼륨](https://docs.docker.com/compose-file/volumes/)
 - [Docker Engine Ubuntu 설치](https://docs.docker.com/engine/install/ubuntu/)
 - [GitHub deployment environments](https://docs.github.com/en/actions/concepts/workflows-and-actions/deployment-environments)
+- [Caddy forwarded headers](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
+- [EC2 security groups](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/creating-security-group.html)
