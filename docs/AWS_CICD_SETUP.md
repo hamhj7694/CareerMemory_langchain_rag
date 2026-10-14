@@ -44,11 +44,24 @@ IAM → Identity providers → OpenID Connect를 추가한다.
 - Audience: `sts.amazonaws.com`
 
 `deploy/iam/github-trust.json`의 `ACCOUNT_ID`를 바꾸어 `CareerMemory-GitHubDeploy` role을 만든다.
+치환한 JSON 파일을 로컬 작업 사본에 저장한 뒤 실행한다.
+
+```bash
+aws iam create-role --role-name CareerMemory-GitHubDeploy \
+  --assume-role-policy-document file://deploy/iam/github-trust.json
+```
+
 신뢰 조건은 이 저장소의 **production environment**로 제한되어 있다.
 따라서 6단계에서 GitHub environment의 배포 가능 브랜치를 반드시 `main`으로 제한한다.
 저장소를 이전하면 trust policy의 owner/repo도 변경해야 한다.
 
 EC2 생성 후 `deploy/iam/github-deploy-policy.json`의 `ACCOUNT_ID`, `AWS_REGION`, `INSTANCE_ID`를 치환해 role의 inline policy로 추가한다.
+
+```bash
+aws iam put-role-policy --role-name CareerMemory-GitHubDeploy --policy-name CareerMemoryDeploy \
+  --policy-document file://deploy/iam/github-deploy-policy.json
+```
+
 이 policy는 두 ECR 저장소 push와 단일 EC2·단일 배포 문서 실행만 허용한다.
 `AWS-RunShellScript`, 문서 생성/변경, IAM 변경 권한을 이 role에 추가하지 않는다.
 인증 토큰과 명령 결과 조회의 `Resource: *`는 해당 API의 권한 범위에 필요하다.
@@ -61,6 +74,19 @@ GitHub OIDC role을 EC2에 연결하지 않는다. 다음 instance role과 별�
 
 - AWS 관리 policy `AmazonSSMManagedInstanceCore`
 - `deploy/iam/ec2-ecr-pull-policy.json`의 계정·리전 치환본
+
+치환을 마친 후 role과 instance profile을 만든다.
+
+```bash
+aws iam create-role --role-name CareerMemory-EC2 \
+  --assume-role-policy-document file://deploy/iam/ec2-trust.json
+aws iam attach-role-policy --role-name CareerMemory-EC2 \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+aws iam put-role-policy --role-name CareerMemory-EC2 --policy-name CareerMemoryEcrPull \
+  --policy-document file://deploy/iam/ec2-ecr-pull-policy.json
+aws iam create-instance-profile --instance-profile-name CareerMemory-EC2
+aws iam add-role-to-instance-profile --instance-profile-name CareerMemory-EC2 --role-name CareerMemory-EC2
+```
 
 이 role의 instance profile을 Ubuntu 24.04 x86_64 EC2에 연결한다. RAM 8GiB 이상을 시작점으로 보고 OCR 부하를 측정한다.
 EBS 암호화, 충분한 이미지·백업 여유 공간, 종료 시 데이터 볼륨 삭제 여부를 설정한다.

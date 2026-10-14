@@ -26,15 +26,16 @@
 Worker 큐 업로드/완료/원본 다운로드, 실제 브라우저 stub AI 흐름을 실행한다.
 OpenAI/Gemini 실제 유료 호출과 AWS 자원 생성은 하지 않는다.
 
-Docker image build·Compose health·컨테이너 재생성 후 데이터 보존·운영 TLS 발급은 로컬 Docker 부재와 AWS 접근 불가로
-로컬에서 아직 검증할 수 없다. GitHub Actions containers job에 실제 Docker smoke test를 포함했다.
+Docker image build·Compose health·컨테이너 재생성 후 데이터 보존은 로컬 Docker 부재로
+GitHub Actions containers job의 실제 Docker smoke test에서 검증했다.
+운영 TLS 발급과 AWS 인증·ECR·SSM 실연동은 AWS 계정 접근 불가로 아직 검증하지 못했다.
 이 파일 아래 결과는 실제 완료된 검사만 기록한다.
 
 ## 완료 결과
 
 | 검사 | 결과 |
 | --- | --- |
-| Python unittest | 248개 실행, 실패 0, skip 1 |
+| Python unittest | 249개 실행, 실패 0, skip 1 |
 | Vitest | 36개 파일, 130개 테스트 통과 |
 | Production Vite build | 통과 (bundle 크기 경고 있음) |
 | ESLint | 통과 |
@@ -46,3 +47,23 @@ Docker image build·Compose health·컨테이너 재생성 후 데이터 보존�
 브라우저 텍스트 선택 검사는 문단 박스 가운데 대신 실제 글자 위치를 사용하고 AI 응답 완료를 기다리도록 보완했다.
 기존 테스트의 브라우저 줄바꿈·화면 이동에 따른 실패를 해결했으며 앱의 텍스트 선택 동작을 제거하지 않았다.
 마지막 Worker heartbeat 변경은 프로세스 생존을 표시하며 작업 진척을 보장하지 않는다. 작업 실패·stale lease는 DB 큐에서 별도로 확인한다.
+
+## OIDC·ECR·SSM 자동 배포 전환
+
+작업 시작 브랜치는 `codex/ec2-deployment-prep`, HEAD는 `2cbe42f`, 미커밋 변경은 없었다.
+기존 main을 삭제·초기화하거나 직접 변경하지 않고 PR #4의 작업 브랜치에서 구현했다.
+
+- SSH 전송을 제거하고 OIDC 단기 인증, ECR digest 배포, 제한된 SSM 문서 실행으로 전환했다.
+- SSM 접수 후 실행 완료까지 조회하고 비정상 종료·시간 초과를 실패로 처리한다.
+- 배포 파일을 API 이미지에 포함해 이미지와 Compose·스크립트의 버전을 함께 고정했다.
+- 호스트 잠금, 백업, 자동·수동 롤백, 운영 환경변수 보존을 구현했다.
+- AWS 설정 전에는 Repository variable `DEPLOY_ENABLED` 조건으로 게시·배포 job을 건너뛴다.
+
+로컬에서는 SSM 제어 테스트 5개, JSON/YAML 파싱, Bash 구문 검사를 통과했다.
+Linux에서 실제 Bash 스크립트를 실행하는 테스트 8개도 GitHub CI에서 통과했다.
+이 8개는 Docker/AWS CLI를 대역으로 바꾸어 다운로드·설정·백업·컨테이너 및 공개 health 실패,
+첫 배포 실패, 롤백 실패 보고, 동시 배포 잠금, 수동 롤백과 release ID 변조 거부를 확인한다.
+실제 AWS 연동 성공을 의미하지는 않는다.
+
+기존 Docker 검증: [CI run 38568825964](https://github.com/hamhj7694/CareerMemory_langchain_rag/actions/runs/38568825964).
+이번 구현 `0038ad3`의 검증: [CI run 38571987312](https://github.com/hamhj7694/CareerMemory_langchain_rag/actions/runs/38571987312).

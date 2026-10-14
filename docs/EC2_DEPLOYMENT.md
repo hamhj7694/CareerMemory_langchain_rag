@@ -75,14 +75,14 @@ OpenAI 자동 재시도는 운영에서 끈다. Gemini SDK 내부 호출 수는 
 
 ## AWS CI/CD
 
-See [AWS_CICD_SETUP.md](AWS_CICD_SETUP.md) for ECR, GitHub OIDC, IAM, EC2,
-SSM, GitHub variables, activation, backup and rollback procedures.
+ECR·GitHub OIDC·IAM·EC2·SSM 설정, GitHub 변수, 자동 배포 활성화와 롤백 절차는
+[AWS_CICD_SETUP.md](AWS_CICD_SETUP.md)를 참고한다.
 
-PRs run tests and builds only. After AWS setup, set the **repository variable**
-`DEPLOY_ENABLED=true` to deploy tested main images through ECR and SSM automatically.
-No AWS long-lived access key or server SSH private key is used.
+PR에서는 테스트와 빌드만 실행한다. AWS 설정을 마친 뒤 **Repository variable**
+`DEPLOY_ENABLED=true`를 등록하면 검증한 main 이미지를 ECR과 SSM을 통해 자동 배포한다.
+AWS 장기 Access Key와 서버 SSH 개인키는 사용하지 않는다.
 
-Production environment variables remain at `/opt/career-memory/.env.deploy`.
-The fixed `career-memory-data` volume preserves SQLite, Chroma, uploads and AI budgets.
-Deployment backs up this volume and restores the previous image/Compose release on health failure.
-Database schemas are not automatically rewound; see the setup guide for recovery limits.
+운영 환경변수는 `/opt/career-memory/.env.deploy`에 유지한다.
+고정 볼륨 `career-memory-data`가 SQLite·Chroma·업로드·AI 예산을 보존한다.
+배포 전 이 볼륨을 백업하고, health 실패 시 이전 이미지와 Compose를 복구한다.
+DB 스키마는 자동으로 되돌리지 않는다. 복구 범위와 제한은 위 설정 문서에 정리했다.
