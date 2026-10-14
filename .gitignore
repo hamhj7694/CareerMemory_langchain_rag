@@ -3,6 +3,13 @@ dist/
 playwright-report/
 test-results/
 .env
+.env.deploy
+.env.deploy.*
+deploy/.env.deploy
+!deploy/.env.deploy.example
+deployment-smoke-state.json
+images.tar.gz
+deployment.tar.gz
 .env.*.local
 .venv/
 *.log

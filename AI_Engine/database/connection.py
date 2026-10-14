@@ -39,7 +39,7 @@ class Base(DeclarativeBase):
 # SQLite는 같은 연결을 여러 FastAPI 요청에서 사용할 수 있도록 별도 옵션이 필요하다.
 if DATABASE_URL.startswith("sqlite"):
     DEFAULT_DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connect_args = {"check_same_thread": False}
+    connect_args = {"check_same_thread": False, "timeout": 30}
 else:
     connect_args = {}
 
@@ -55,6 +55,7 @@ if DATABASE_URL.startswith("sqlite"):
     def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
 SessionLocal = sessionmaker(

@@ -228,5 +228,13 @@ class AttachmentPipelineTests(unittest.TestCase):
             self.assertEqual(stored, content)
 
 
+    def test_public_upload_storage_quota_blocks_new_blobs(self):
+        with patch.dict(os.environ, {"APP_ENV": "production", "ATTACHMENT_MAX_USER_MIB": "0"}):
+            with self.session_factory() as database:
+                with self.assertRaisesRegex(ValueError, "저장 한도"):
+                    self.service.ingest(database, user_id="USER-1", filename="quota.txt",
+                                        mime_type="text/plain", content=b"quota")
+
+
 if __name__ == "__main__":
     unittest.main()

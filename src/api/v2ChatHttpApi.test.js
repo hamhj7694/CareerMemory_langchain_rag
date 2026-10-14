@@ -8,7 +8,7 @@ vi.mock('./adapters/httpAdapter.js', () => ({
   createHttpAdapter: () => ({ request }),
 }));
 
-import { v2ChatHttpApi } from './v2ChatHttpApi.js';
+import { v2ChatHttpApi, waitForAttachment } from './v2ChatHttpApi.js';
 import { apiConfig } from './config.js';
 import { clearCsrfToken, setCsrfToken } from '../auth/authSession.js';
 
@@ -19,8 +19,25 @@ describe('실제 대화 HTTP API', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     clearCsrfToken();
     vi.unstubAllGlobals();
+  });
+
+  it('Worker가 처리 중인 첨부를 준비 완료까지 확인한다', async () => {
+    vi.useFakeTimers();
+    request.mockResolvedValueOnce({ id: 'ATT-1', status: 'processing' })
+      .mockResolvedValueOnce({ id: 'ATT-1', status: 'ready' });
+    const pending = waitForAttachment({ id: 'ATT-1', status: 'queued' });
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(pending).resolves.toMatchObject({ status: 'ready' });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('Worker 처리 실패를 호출자에게 반환한다', async () => {
+    request.mockResolvedValueOnce({ id: 'ATT-1', status: 'failed', parse_error: 'failed' });
+    await expect(waitForAttachment({ id: 'ATT-1', status: 'queued' }, { pollIntervalMs: 0 }))
+      .resolves.toMatchObject({ status: 'failed' });
   });
 
   it('대화 생성 요청에 client_request_id를 보충한다', async () => {

@@ -119,12 +119,24 @@ test('사용자 말풍선의 텍스트를 마우스 드래그로 선택할 수 �
   await page.getByRole('button', { name: '메시지 보내기' }).click();
   const userContent = page.locator('.v2-message--user .v2-message__content').last();
   await expect(userContent).toContainText(prompt);
-
-  const box = await userContent.boundingBox();
-  expect(box).not.toBeNull();
-  await page.mouse.move(box.x + 3, box.y + (box.height / 2));
+  await expect(page.locator('.v2-message--assistant').last()).toContainText('채팅 응답 정상');
+  await userContent.scrollIntoViewIfNeeded();
+  // Select from actual glyphs; the paragraph's center may be between wrapped lines.
+  const points = await userContent.evaluate((element) => {
+    const text = element.firstChild;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 1);
+    const first = range.getBoundingClientRect();
+    range.setStart(text, text.length - 1);
+    range.setEnd(text, text.length);
+    const last = range.getBoundingClientRect();
+    return { startX: first.left + 1, startY: first.top + first.height / 2,
+      endX: last.right - 1, endY: last.top + last.height / 2 };
+  });
+  await page.mouse.move(points.startX, points.startY);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width - 3, box.y + (box.height / 2), { steps: 12 });
+  await page.mouse.move(points.endX, points.endY, { steps: 12 });
   await page.mouse.up();
 
   const selectedText = await page.evaluate(() => window.getSelection()?.toString() || '');
