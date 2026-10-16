@@ -26,4 +26,5 @@ networks:
     ipam:
       config:
         - subnet: 172.30.88.0/24
+          # Keep dynamic addresses separate from the gateway's fixed .2 address.
           ip_range: 172.30.88.128/25
