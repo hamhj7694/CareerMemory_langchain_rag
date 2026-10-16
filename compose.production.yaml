@@ -26,3 +26,4 @@ networks:
     ipam:
       config:
         - subnet: 172.30.88.0/24
+          ip_range: 172.30.88.128/25
