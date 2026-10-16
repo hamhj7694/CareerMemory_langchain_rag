@@ -1,6 +1,6 @@
-# AWS EC2 배포 준비 및 운영
+# AWS EC2 배포 및 운영
 
-AWS 접근 없이 준비하는 구성이다. 실제 EC2 생성·DNS 연결·HTTPS 발급은 계정 복구 후 진행한다.
+React/Nginx·FastAPI/Uvicorn·파일 처리 Worker의 AWS EC2/Docker Compose 배포와 DNS·HTTPS 공개 환경을 구성했습니다. 이 문서는 해당 환경의 구성·로컬 실행·운영 점검·백업 및 배포 절차를 설명합니다. 별도 운영 안정성·복구 검증은 실행 기록에 따라 구분합니다.
 
 ## 구성
 
