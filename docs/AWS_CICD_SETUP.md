@@ -1,7 +1,7 @@
 # GitHub main → ECR → SSM → EC2 자동 배포
 
-AWS 계정 복구 후 아래 설정을 한 번 완료하면, `main` push/merge마다 테스트 성공 후 같은 공개 URL에 자동 배포한다.
-지금은 `DEPLOY_ENABLED`가 없거나 `false`이면 AWS 인증·ECR 업로드·SSM 실행을 모두 건너뛴다.
+GitHub Actions·OIDC·ECR·SSM·EC2를 연계한 배포 워크플로우를 구성했습니다. **2026-10-16 `main` 대상 `workflow_dispatch` 실행에서 frontend·backend·containers·deploy 작업이 모두 성공**했습니다. [성공 실행 기록](https://github.com/hamhj7694/CareerMemory_langchain_rag/actions/runs/38906826122). 이는 해당 수동 실행의 배포 성공이며, `main` push마다 자동 배포되는 경로의 모든 실행이나 장기간 운영 안정성을 검증한 기록은 아닙니다.
+`DEPLOY_ENABLED`가 없거나 `false`이면 AWS 인증·ECR 업로드·SSM 실행을 건너뛰고, `true`일 때 `main` 브랜치 배포가 허용됩니다.
 PR은 테스트와 빌드만 실행한다. 운영 서버에 GitHub runner를 설치하지 않는다.
 
 ## 배포 흐름
