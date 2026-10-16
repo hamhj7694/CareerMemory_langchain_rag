@@ -6,6 +6,8 @@
 - **Backend:** FastAPI · SQLAlchemy · SQLite
 - **AI:** OpenAI/Gemini · LangChain/LangGraph · ChromaDB
 - **핵심 설계:** Bronze/Silver/Gold/Serving, source ID + exact quote, 경량 기술 온톨로지, 사용자 승인형 지식
+- **배포·서빙:** AWS EC2 · Docker Compose · Nginx · Caddy(HTTPS)
+- **CI/CD:** GitHub Actions · AWS ECR · OIDC · SSM
 
 ## 로컬 개발 실행
 
@@ -51,10 +53,19 @@ npm run test:e2e
 - [AI 데이터 아키텍처](docs/AI_DATA_ARCHITECTURE.md)
 - [벤치마크 결과와 평가 조건](AI_Engine/benchmarks/RESULTS.md)
 
-## 공개 배포 전 점검
+## AWS EC2 · Docker Compose 배포 및 서빙
+
+React/Nginx, FastAPI/Uvicorn, 파일 처리 Worker를 Docker 컨테이너로 분리해 **AWS EC2에서 Docker Compose로 통합 배포**했습니다. Caddy 기반 HTTPS 공개 환경과 SQLite·ChromaDB·업로드 파일의 Docker 볼륨 영속성 구조를 구성했습니다.
+
+**GitHub Actions → AWS ECR → SSM → EC2** 배포 워크플로우를 구현했습니다. GitHub OIDC 인증으로 ECR에 이미지를 업로드하고 SSM을 통해 배포하는 흐름이며, **2026-10-16 `main` 대상 수동 실행(`workflow_dispatch`)에서 Frontend·Backend·Containers·Deploy 작업이 모두 성공**한 기록을 확인했습니다. 이 기록은 배포 파이프라인의 성공을 나타내며, 모든 `main` push의 자동 배포 성공이나 장기간 운영 안정성을 검증했다는 의미는 아닙니다.
+
+- [자동 배포 성공 실행 기록](https://github.com/hamhj7694/CareerMemory_langchain_rag/actions/runs/38906826122)
+- [EC2 배포 구성](docs/EC2_DEPLOYMENT.md) · [CI/CD 설정 및 절차](docs/AWS_CICD_SETUP.md)
+
+## 운영 범위 및 주의사항
 
 이 저장소의 `main`은 애플리케이션 소스와 테스트·검증에 필요한 파일 중심으로 정리되어 있습니다. 이전의 포트폴리오 원본 및 개발 작업 기록은 `archive/pre-deploy-cleanup-20261014` 브랜치에서 확인할 수 있습니다.
 
-인터넷 공개 전 **HTTPS·Secure 세션 쿠키·IP/계정별 LLM 호출 한도·비용 예산·게스트 기록 삭제 정책·DB/파일/벡터 백업과 복구**를 검증해야 합니다. Docker/EC2 운영 자동화는 별도 단계에서 구축할 예정입니다.
+HTTPS 공개 및 배포 파이프라인 구성과 별개로, **비용·호출 제한, 게스트 기록 삭제 정책, DB/파일/벡터 백업과 복구, 장애 대응 및 장기간 안정성**은 운영 환경에 맞춰 지속적으로 점검해야 합니다. Docker 볼륨은 EC2·EBS 장애에 대한 독립 백업을 대체하지 않습니다.
 
 이 프로젝트는 Foundation Model을 직접 학습한 프로젝트나 상용 규모의 데이터레이크가 아니라, 경량 지식 구조와 원문 근거 검증을 갖춘 AI 애플리케이션 PoC입니다.
