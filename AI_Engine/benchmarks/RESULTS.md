@@ -1,275 +1,330 @@
-# Conversation Analysis Benchmark Results
+# Career Memory | AI 분석·검색·파일 처리 벤치마크 결과 보고서
 
-Measured on 2026-10-07 (Asia/Seoul) with `gpt-4o-mini`.
-Every case used one cold run and three repeated runs. Benchmark execution did
-not call the persistence API and detected no database writes.
+> **평가 목적:** 대화 분석의 LLM 호출·시간·비용을 개선하면서 원문 근거와 핵심 경험 정보가 유지되는지 확인하고, 이후 확장한 온톨로지·Evidence·파일 처리·서비스 안정성 기능을 단계별로 검증한 내부 기술 보고서입니다.
 
-## Long conversation performance
+**기준 측정일:** 2026-10-07 (Asia/Seoul) · **후속 v4 실험:** 2026-10-08 · **LLM:** `gpt-4o-mini`
 
-Input: 38 user messages and 405 unique source tokens. Values are four-run
-medians.
+> [!IMPORTANT]
+> 이 보고서의 값은 **제한된 내부·합성 데이터 평가 결과**입니다. 실제 사용자 전체나 상용 환경의 일반화 성능을 의미하지 않습니다. 특히 **38개 메시지 장문 대화 성능**, **소규모 한국어 합성 정답 세트(Gold Set)**, **v4의 별도 실행 조건**은 구분해야 합니다. 테스트 결과와 실제 운영 측정값도 동일시하지 않습니다.
 
-| KPI | `combined-analysis-v1` | `routed-analysis-v2` | Change |
+## 01. 핵심 결과 요약
+
+| 검증 영역 | 주요 결과 | 해석 |
+|---|---|---|
+| **장문 대화 최적화 (v1 → v3)** | **LLM 호출 7회 → 2회 (71.43% 감소)** | 같은 38개 사용자 메시지의 4회 실행 중앙값 |
+| **장문 대화 최적화 (v1 → v3)** | **총 실행 시간 13.151초 → 4.564초 (65.30% 단축)** | 위와 동일한 장문 대화 조건 |
+| **소규모 한국어 Gold Set (v1 → v2)** | 경험 사실 재현율 **66.667% → 100%** | 별도 품질 평가, 4회 평균 |
+| **Structured v3 Gold Set** | 경험·문맥 사실 재현율 및 정확 인용 유효성 **100%** | 제한된 합성 정답 세트의 결과 |
+| **v4 온톨로지·Evidence** | 4/4 실행 성공, Gold Set 핵심 품질 지표 유지 | 입력 크기·측정일이 달라 v1~v3 시간과 직접 비교 불가 |
+| **파일 파서** | 결정적 파서 **5/5 성공**, 필수 구간·숫자 재현율 **100%** | 메모리에서 생성한 5개 형식의 고정 테스트 |
+| **지식 계층·인덱스** | 개념·관계 판정 등 고정 평가 **100%**, 변경 없는 임베딩 재기록 **0회** | 인메모리 DB·가짜 벡터 저장소 테스트 |
+| **회귀 검사** | Backend **219개**, Frontend **108개** 테스트 통과 | 2026-10-08 당시 실행 기록 |
+
+**평가 실행 방식:** 대화 분석 관련 각 세트는 **첫 실행(Cold Run) 1회 + 반복 실행 3회**, 총 4회 수행했습니다. 해당 벤치마크 실행은 영속 저장 API를 호출하지 않았으며, 감지된 데이터베이스 쓰기는 없었습니다.
+
+---
+
+## 02. 장문 대화 성능 개선 — v1과 v2 비교
+
+**입력 조건:** 사용자 메시지 **38개**, 원문 고유 토큰 **405개**. 아래 수치는 **4회 실행의 중앙값**입니다.
+
+| 평가 지표 | `combined-analysis-v1` (기존) | `routed-analysis-v2` (개선) | 변화 |
 |---|---:|---:|---:|
-| Input tokens/run | 8,533.5 | 7,329.5 | -14.11% |
-| Output tokens/run | 255.0 | 121.5 | -52.35% |
-| LLM calls/run | 7.0 | 2.0 | -71.43% |
-| Token amplification | 21.0705x | 18.0975x | -14.11% |
-| Unique-source ratio | 4.746% | 5.526% | +0.780%p |
-| Cached tokens/run | 0 | 0 | unchanged |
-| Estimated cost/run | $0.00143265 | $0.00119168 | -16.82% |
-| Total duration | 13.151s | 4.665s | -64.53% |
-| Cold duration | 15.046s | 7.149s | -52.49% |
-| Repeated-run duration | 12.921s | 4.446s | -65.59% |
-| Database writes detected | 0/4 | 0/4 | passed |
+| 실행당 입력 토큰 | 8,533.5 | 7,329.5 | **-14.11%** |
+| 실행당 출력 토큰 | 255.0 | 121.5 | **-52.35%** |
+| 실행당 LLM 호출 | 7.0회 | 2.0회 | **-71.43%** |
+| 토큰 증폭 비율 | 21.0705배 | 18.0975배 | -14.11% |
+| 고유 원문 비율 | 4.746% | 5.526% | +0.780%p |
+| 실행당 캐시 토큰 | 0 | 0 | 동일 |
+| 실행당 추정 비용 | $0.00143265 | $0.00119168 | -16.82% |
+| **총 실행 시간** | **13.151초** | **4.665초** | **-64.53%** |
+| 첫 실행 소요 시간 | 15.046초 | 7.149초 | -52.49% |
+| 반복 실행 소요 시간 | 12.921초 | 4.446초 | -65.59% |
+| 감지된 DB 쓰기 | 0/4 | 0/4 | 통과 |
 
-The baseline made five job-discovery calls, one job-analysis call, and one
-experience-analysis call. The final route made one content-routing call and one
-experience-analysis call. The complete-job guard correctly rejected the isolated
-requirement bullet that the baseline had treated as a full posting, so no job
-analysis call was needed for this conversation.
+### 무엇을 바꿨는가?
 
-## Gold-set preservation quality
+기존 v1은 **채용공고 탐색 5회 + 채용공고 분석 1회 + 경험 분석 1회**로 총 7회 LLM을 호출했습니다.
 
-The same synthetic Korean conversation and gold labels were used before and
-after the change. Values are four-run means.
+개선된 v2에서는 **콘텐츠 라우팅 1회 + 경험 분석 1회**만 호출했습니다. 특히 **완전한 채용공고 여부를 확인하는 가드(Complete Job Guard)**가 단독으로 들어온 채용공고 요구사항 한 줄을 전체 공고로 잘못 인식하지 않도록 차단했습니다. 해당 대화에서는 공고 분석 호출 자체가 필요하지 않았습니다.
 
-| KPI | Before | After | Change |
+> **효과:** 분석 대상에 맞는 라우팅과 불완전 공고 차단을 통해 불필요한 LLM 호출과 입력·출력 토큰을 줄였습니다.
+
+---
+
+## 03. 한국어 합성 Gold Set — 정보 보존 품질
+
+**동일한 소규모 한국어 합성 대화와 정답 레이블**을 변경 전·후에 사용했습니다. 아래는 **4회 실행 평균값**입니다.
+
+| 품질 평가 지표 | 변경 전 | 변경 후 | 변화 |
 |---|---:|---:|---:|
-| Experience fact recall | 66.667% | 100.000% | +33.333%p |
-| Context-dependent fact recall | 0.000% | 100.000% | +100.000%p |
-| Expected source usage | 100.000% | 100.000% | unchanged |
-| Expected source fact-citation coverage | 66.667% | 91.667% | +25.000%p |
-| Exact citation validity | 100.000% | 100.000% | unchanged |
-| Job detection recall | 100.000% | 100.000% | unchanged |
-| Job detection precision | 100.000% | 100.000% | unchanged |
-| Job requirement term recall | 50.000% | 100.000% | +50.000%p |
-| Assistant-only claim contamination | 0.000% | 0.000% | unchanged |
-| Irrelevant-chat leakage | 0.000% | 0.000% | unchanged |
+| 경험 사실 재현율 | 66.667% | **100.000%** | +33.333%p |
+| 문맥 의존 사실 재현율 | 0.000% | **100.000%** | +100.000%p |
+| 기대 원문 출처 활용률 | 100.000% | 100.000% | 동일 |
+| 기대 출처의 사실 인용 포괄률 | 66.667% | **91.667%** | +25.000%p |
+| 원문 인용 정확성 | 100.000% | 100.000% | 동일 |
+| 채용공고 탐지 재현율 | 100.000% | 100.000% | 동일 |
+| 채용공고 탐지 정밀도 | 100.000% | 100.000% | 동일 |
+| 공고 요구사항 용어 재현율 | 50.000% | **100.000%** | +50.000%p |
+| AI 발화만으로 생긴 근거 없는 사실 혼입 | 0.000% | 0.000% | 동일 |
+| 무관한 대화 내용 유입 | 0.000% | 0.000% | 동일 |
 
-On the small gold set, richer context and evidence validation increased input
-tokens by 14.56%, output tokens by 43.06%, estimated cost by 28.90%, and duration
-by 57.66%. This is the quality cost for recovering context-dependent facts and
-validating exact source evidence. On the longer conversation, removing repeated
-discovery calls and rejecting an incomplete job fragment outweighed that overhead
-and reduced input, cost, and latency. The 91.667% fact-citation coverage means one
-expected source was represented in structured output but was not redundantly
-cited as a separate `facts` entry in one of four runs; source usage and exact
-citation validity both remained 100%.
+### 품질 향상과 처리 비용의 관계
 
-## Structured skill and metric normalization follow-up
+같은 소규모 Gold Set에서는 문맥 정보와 근거 검증을 강화하면서 입력 토큰이 **14.56%**, 출력 토큰이 **43.06%**, 추정 비용이 **28.90%**, 실행 시간이 **57.66%** 증가했습니다. 이는 문맥 의존 경험 사실을 복원하고 정확한 출처 근거를 검증하는 데 사용된 비용입니다.
 
-The v3 follow-up keeps the raw `skills`, `facts`, `keywords`, source text, and
-exact quotes, then adds optional `skill_mentions` and `metrics` projections.
-Unknown technologies remain `unresolved`; they are not discarded. Embeddings
-still retrieve candidates, but a required technology is satisfied only by a
-sourced canonical skill ID match. Related technologies such as FastAPI/REST API
-and JavaScript/TypeScript remain searchable without being treated as identical.
+반면 **장문 대화 실험**에서는 반복적인 공고 탐색을 제거하고 미완성 공고를 걸러낸 이점이 더 커서 총 입력·비용·지연 시간이 감소했습니다.
 
-Numbers are reparsed from exact source quotes. Model-proposed numeric values are
-not trusted directly, and calendar years are excluded from performance metrics.
+**사실 인용 포괄률 91.667%의 의미:** 4회 중 1회에서 예상 출처 하나가 구조화 출력에 반영됐지만 별도의 `facts` 항목으로 중복 인용되지는 않았습니다. **출처 활용률과 정확 인용 유효성은 모두 100%**를 유지했습니다.
 
-### V3 gold-set quality
+---
 
-Cold one run plus three repeated runs, using the same
-`synthetic-korean-career-conversation-v1` fixture:
+## 04. Structured v3 — 기술명·정량 성과 구조화
 
-| KPI | Structured v3 |
+v3에서는 기존의 `skills`, `facts`, `keywords`, 원문·정확 인용을 보존하면서 선택적 구조화 결과인 `skill_mentions`와 `metrics`를 추가했습니다.
+
+- **기술명 정규화:** 표준 기술 개념 ID와 연결되지 않는 기술은 버리지 않고 `unresolved` 상태로 보존
+- **기술 요구사항 매칭:** 임베딩은 후보 검색에 사용하지만, 필수 기술 충족 판정은 **출처에 근거한 표준 기술 ID 일치**로 수행
+- **유사 기술 구별:** FastAPI/REST API, JavaScript/TypeScript처럼 연관성은 있으나 동일하지 않은 기술을 잘못 동치로 판정하지 않도록 처리
+- **정량 수치 검증:** 모델이 제안한 숫자를 그대로 신뢰하지 않고 **정확한 원문 인용에서 재파싱**하며, 연도는 성과 수치에서 제외
+
+### 4-1. v3 Gold Set 품질
+
+고정 입력: `synthetic-korean-career-conversation-v1` · 첫 실행 1회 + 반복 실행 3회.
+
+| 평가 지표 | Structured v3 |
 |---|---:|
-| Experience fact recall | 100.000% |
-| Context-dependent fact recall | 100.000% |
-| Expected source usage | 100.000% |
-| Expected source fact-citation coverage | 100.000% |
-| Exact citation validity | 100.000% |
-| Job detection recall / precision | 100.000% / 100.000% |
-| Job requirement term recall | 100.000% |
-| Canonical skill normalization recall | 100.000% |
-| Structured metric value recall | 100.000% |
-| Assistant-only claim contamination | 0.000% |
-| Irrelevant-chat leakage | 0.000% |
-| Numeric hallucination | 0.000% |
-| Database writes detected | 0/4 |
+| 경험 사실 재현율 | 100.000% |
+| 문맥 의존 사실 재현율 | 100.000% |
+| 기대 출처 활용률 | 100.000% |
+| 기대 출처의 사실 인용 포괄률 | 100.000% |
+| 정확 인용 유효성 | 100.000% |
+| 채용공고 탐지 재현율 / 정밀도 | 100.000% / 100.000% |
+| 채용공고 요구사항 용어 재현율 | 100.000% |
+| 표준 기술 정규화 재현율 | 100.000% |
+| 구조화 정량값 재현율 | 100.000% |
+| AI 발화만으로 생긴 사실 혼입 | 0.000% |
+| 무관한 대화 내용 유입 | 0.000% |
+| 숫자 환각 | 0.000% |
+| 감지된 DB 쓰기 | 0/4 |
 
-### V3 long-conversation performance
+### 4-2. v3 장문 대화 성능
 
-Against the original `combined-analysis-v1` baseline on the same 38-message
-conversation:
+기존 `combined-analysis-v1`과 **동일한 38개 메시지 장문 대화**를 비교했습니다.
 
-| KPI | Baseline | Structured v3 | Change |
+| 평가 지표 | 기존 v1 | Structured v3 | 변화 |
 |---|---:|---:|---:|
-| Input tokens/run | 8,533.5 | 7,494.0 | -12.18% |
-| Output tokens/run | 255.0 | 147.0 | -42.35% |
-| LLM calls/run | 7.0 | 2.0 | -71.43% |
-| Estimated cost/run | $0.00143265 | $0.00123195 | -14.01% |
-| Total duration | 13.151s | 4.564s | -65.30% |
-| Database writes detected | 0/4 | 0/4 | passed |
+| 실행당 입력 토큰 | 8,533.5 | 7,494.0 | -12.18% |
+| 실행당 출력 토큰 | 255.0 | 147.0 | -42.35% |
+| **실행당 LLM 호출** | **7.0회** | **2.0회** | **-71.43%** |
+| 실행당 추정 비용 | $0.00143265 | $0.00123195 | -14.01% |
+| **총 실행 시간** | **13.151초** | **4.564초** | **-65.30%** |
+| 감지된 DB 쓰기 | 0/4 | 0/4 | 통과 |
 
-Compared with routed v2, the larger structured schema increased input tokens by
-2.24%, output tokens by 20.99%, and cost by 3.38%, while median duration improved
-by 2.16%. This is the measured cost of lossless skill/metric projections and
-their source validation; the main routing savings over the original baseline
-remain intact.
+v2와 비교하면 더 큰 구조화 스키마로 인해 입력 토큰은 **2.24%**, 출력 토큰은 **20.99%**, 추정 비용은 **3.38%** 증가했습니다. 그러나 중앙값 기준 실행 시간은 **2.16% 단축**되었습니다.
 
-## V4 ontology/Evidence actual-model validation
+이는 **원본 손실 없는 기술·수치 구조화와 출처 검증**에 따른 추가 처리량을 보여주며, 원래 v1 대비 라우팅 최적화 효과는 유지됐습니다.
 
-Measured on 2026-10-08 with the synthetic Korean gold fixture and
-`gpt-4o-mini`. The run used one cold execution plus three repeated executions.
-All 12 model calls succeeded without fallback or workflow failure.
+---
 
-| Runtime KPI | V4 result |
+## 05. v4 온톨로지·Evidence — 실제 LLM 모델 검증
+
+**측정일:** 2026-10-08 · **모델:** `gpt-4o-mini` · **데이터:** 동일한 합성 한국어 Gold Fixture · **실행:** Cold 1회 + 반복 3회
+
+총 **12회 모델 호출이 모두 성공**했으며, Fallback이나 워크플로우 실패는 발생하지 않았습니다.
+
+### 5-1. 실행 성능
+
+| 실행 지표 | v4 측정 결과 |
 |---|---:|
-| Successful runs | 4/4 |
-| Input tokens/run, median | 3,995.5 |
-| Output tokens/run, median | 1,374.5 |
-| LLM calls/run | 3 |
-| Duration/run, median | 18.955s |
-| Estimated cost/run, median | $0.00142463 |
-| Total cost for four runs | $0.00574995 |
-| Database writes detected | 0/4 |
+| 성공 실행 | 4/4 |
+| 실행당 입력 토큰 중앙값 | 3,995.5 |
+| 실행당 출력 토큰 중앙값 | 1,374.5 |
+| 실행당 LLM 호출 | 3회 |
+| 실행당 시간 중앙값 | 18.955초 |
+| 실행당 추정 비용 중앙값 | $0.00142463 |
+| 4회 실행 총비용 | $0.00574995 |
+| 감지된 DB 쓰기 | 0/4 |
 
-| Gold-set KPI | V4 result |
+### 5-2. Gold Set 품질
+
+| 품질 지표 | v4 측정 결과 |
 |---|---:|
-| Experience fact recall | 100% |
-| Context-dependent fact recall | 100% |
-| Expected source usage / citation coverage | 100% / 100% |
-| Exact citation validity | 100% |
-| Job detection recall / precision | 100% / 100% |
-| Job requirement term recall | 100% |
-| Skill normalization recall | 100% |
-| Structured metric value recall | 100% |
-| Assistant-only claim contamination | 0% |
-| Irrelevant-chat leakage | 0% |
-| Numeric hallucination | 0% |
+| 경험 사실 재현율 | 100% |
+| 문맥 의존 사실 재현율 | 100% |
+| 기대 출처 활용률 / 인용 포괄률 | 100% / 100% |
+| 정확 인용 유효성 | 100% |
+| 채용공고 탐지 재현율 / 정밀도 | 100% / 100% |
+| 공고 요구사항 용어 재현율 | 100% |
+| 기술 정규화 재현율 | 100% |
+| 구조화 정량값 재현율 | 100% |
+| AI 발화만으로 생긴 사실 혼입 | 0% |
+| 무관한 대화 내용 유입 | 0% |
+| 숫자 환각 | 0% |
 
-This V4 run validates that the ontology/Evidence persistence changes preserve the
-previous structured-v3 gold-set quality. Runtime values are reported as a new
-fixture validation, not as a direct long-conversation comparison with the v1/v2/v3
-tables above because their input sizes and measurement dates differ.
+**해석:** v4의 온톨로지·Evidence 영속성 관련 변경 이후에도, 이 Gold Set에서 확인한 이전 Structured v3 수준의 품질을 유지했습니다.
 
-## File extraction quality
+> **비교 주의:** v4는 **측정일과 입력 크기가 다른 별도 Fixture 검증**입니다. 위 v4의 시간·토큰·비용을 v1/v2/v3 **38개 메시지 장문 대화 벤치마크와 직접 비교해 개선·악화율을 산출하지 않습니다.**
 
-The deterministic `file-extraction-gold-v1` fixture covers Markdown with a
-percentage, native PDF, DOCX tables, PPTX slide relationship order, and HWPX
-section paragraphs. Each format is generated in memory and passed through the
-same parser registry used by the APIs.
+---
 
-| KPI | Result |
+## 06. 파일 추출 및 한국어 OCR 품질
+
+### 6-1. 파일 형식별 파서 검증
+
+`file-extraction-gold-v1` 고정 Fixture에서 Markdown(백분율 포함), 네이티브 PDF, DOCX 표, PPTX 슬라이드 관계 순서, HWPX 본문 단락을 검사했습니다.
+
+파일은 메모리에서 생성하고, 실제 API와 같은 **파서 레지스트리**를 거쳐 검증했습니다.
+
+| 평가 지표 | 결과 |
 |---|---:|
-| Deterministic parser success | 5/5 (100%) |
-| Required-fragment recall | 100% |
-| Numeric-token recall | 100% |
-| Character error rate | 0% |
-| Unintended database writes | 0 |
-| Real Korean OCR smoke test | passed: Tesseract 5.4.0, kor+eng+osd |
-| OCR required-fragment recall | 100% |
-| OCR numeric-token recall | 100% |
-| OCR character error rate | 8.333% |
-| OCR quality score | 0.8246 |
-| OCR duration | 1,102.862ms |
+| 결정적 파서 성공 | **5/5 (100%)** |
+| 필수 텍스트 조각 재현율 | 100% |
+| 숫자 토큰 재현율 | 100% |
+| 문자 오류율 | 0% |
+| 의도하지 않은 DB 쓰기 | 0 |
+| 실제 한국어 OCR 스모크 테스트 | 통과 · Tesseract 5.4.0, `kor+eng+osd` |
+| OCR 필수 텍스트 조각 재현율 | 100% |
+| OCR 숫자 토큰 재현율 | 100% |
+| OCR 문자 오류율 | **8.333%** |
+| OCR 품질 점수 | 0.8246 |
+| OCR 소요 시간 | 1,102.862ms |
 
-`run_ocr` now evaluates PSM 3/4/6/11 candidates and penalizes short or fragmented
-results even when their confidence is high. Repeated horizontal table separators
-trigger row-level OCR whose output is fuzzy-deduplicated with the whole-page result.
+`run_ocr`는 PSM **3·4·6·11** 후보를 평가하고, 신뢰도가 높더라도 결과가 지나치게 짧거나 분절되면 감점합니다. 가로 표 구분선이 반복되면 행 단위 OCR을 수행하고, 전체 페이지 결과와 유사 중복 제거 방식으로 통합합니다.
 
-Two existing portfolio assets were also inspected read-only as an acceptance check.
-The chat UI screenshot reproduced 6/6 required phrases. The KPI table reproduced
-all nine core values (`41.45%`, `68.0%`, `+26.55%p`, `23.59%`, `52.0%`,
-`+28.41%p`, `96.67%`, `98.0%`, `+1.33%p`). Small footer text still misread
-`477,293` and `P95 34.06`, so this is not reported as 100% recall over every numeric
-token in the source image. The actual 31-slide PPTX parsed 31 segments and 18,937
-characters without warnings.
+### 6-2. 실제 포트폴리오 자료 추가 검사
 
-### Attachment storage and durable queue
+기존 포트폴리오 파일 2종을 **읽기 전용**으로 검사했습니다.
 
-`attachment-pipeline-v1` creates ten files in an isolated temporary LocalBlobStore
-and in-memory DB, processes the persisted jobs, verifies every SHA-256 hash, and
-simulates one expired worker lease.
+- **챗봇 UI 스크린샷:** 필수 문구 6/6 재현
+- **KPI 표 이미지:** 핵심 수치 9개 모두 재현 — `41.45%`, `68.0%`, `+26.55%p`, `23.59%`, `52.0%`, `+28.41%p`, `96.67%`, `98.0%`, `+1.33%p`
+- **이미지의 작은 글씨:** `477,293`과 `P95 34.06`을 잘못 인식한 사례가 있어, **원본 이미지의 전체 숫자 토큰 100% 재현으로 보고하지 않음**
+- **실제 31장 PPTX:** 경고 없이 **31개 세그먼트, 18,937자** 추출
 
-| KPI | Result |
+---
+
+## 07. 첨부파일 저장·영속 작업 큐 검증
+
+`attachment-pipeline-v1`는 격리된 임시 `LocalBlobStore`와 인메모리 DB에 파일 10개를 저장하고, 지속성 작업을 처리한 뒤 각 SHA-256을 검사했습니다. **Worker Lease 1건 만료 상황**도 시뮬레이션했습니다.
+
+| 검증 지표 | 결과 |
 |---|---:|
-| Files ingested | 10 |
-| LocalBlobStore originals | 10/10 |
-| New DB BLOB bytes | 0 |
-| SHA-256 verification | 10/10 |
-| Completed processing jobs | 10/10 |
-| Expired leases recovered | 1/1, returned to `queued` |
-| Ingest duration | 113.007ms |
-| Parse duration | 44.857ms |
-| Total duration | 175.314ms |
-| Persistent database writes | 0 |
+| 입력 파일 | 10개 |
+| 원본 LocalBlobStore 저장 | 10/10 |
+| 신규 DB BLOB 바이트 | 0 |
+| SHA-256 검증 | 10/10 |
+| 완료된 파일 처리 작업 | 10/10 |
+| 만료된 Lease 복구 | 1/1 · `queued` 상태로 복귀 |
+| 입력·저장 소요 시간 | 113.007ms |
+| 파싱 소요 시간 | 44.857ms |
+| 총 소요 시간 | 175.314ms |
+| 영속 DB 쓰기 | 0 |
 
-### Ontology, Evidence, and incremental index
+**검증 취지:** 파일 원본 저장·비동기 처리·중복 실행 방지·장애 후 재처리를 분리해 확인한 실험입니다. 실사용 운영 환경에서 무제한 파일 규모와 동시 요청을 검증했다는 의미는 아닙니다.
 
-`knowledge-layers-gold-v1` uses an isolated in-memory database and fake vector
-store. It verifies conservative concept resolution, evidence lineage, invalid quote
-rejection, dry-run safety, and content-hash-based incremental indexing.
+---
 
-| KPI | Result |
+## 08. 온톨로지·Evidence·증분 인덱싱
+
+`knowledge-layers-gold-v1`는 격리된 **인메모리 DB와 가짜(Fake) 벡터 저장소**를 사용합니다. 보수적인 개념 해석, Evidence 출처 연결, 유효하지 않은 인용 차단, Dry Run의 안전성, 콘텐츠 해시 기반 증분 인덱싱을 검사했습니다.
+
+| 검증 지표 | 결과 |
 |---|---:|
-| Concept resolution accuracy | 100% |
-| Relation classification accuracy | 100% |
-| Unresolved expression preservation | 100% |
-| Evidence lineage completeness | 100% |
-| Invalid quote rejection | passed |
-| Ontology dry-run data writes | 0 |
-| Evidence dry-run data writes | 0 |
-| Seed projection | 10 concepts / 20 normalized aliases / 19 relations |
-| Initial evidence projection | 1 document / 1 chunk / 1 link |
-| Initial embedding writes | 1 |
-| Repeated unchanged embedding writes | 0 |
+| 개념 해석 정확도 | 100% |
+| 관계 분류 정확도 | 100% |
+| 미해결 표현 보존 | 100% |
+| Evidence 출처 연결 완결성 | 100% |
+| 잘못된 인용 차단 | 통과 |
+| 온톨로지 Dry Run 데이터 쓰기 | 0 |
+| Evidence Dry Run 데이터 쓰기 | 0 |
+| 초기 개념 투영 | 개념 10개 / 정규화 별칭 20개 / 관계 19개 |
+| 최초 Evidence 투영 | 문서 1개 / 청크 1개 / 링크 1개 |
+| 최초 임베딩 기록 | 1회 |
+| 내용이 바뀌지 않은 반복 인덱싱의 임베딩 기록 | **0회** |
 
-The regression suite also covers changed source text, stale record transitions,
-source unlink deletion, stale vector removal, and full rebuild. The production DB
-dry-run scanned zero existing confirmed experiences/source refs and planned no user
-data writes; it reported the same deterministic ontology seed projection.
+회귀 테스트에는 원문 변경, 오래된 기록 상태 변경, 출처 연결 해제로 인한 삭제, 오래된 벡터 제거, 전체 재구축도 포함됩니다.
 
-### Product and operational stability
+운영 DB 대상 Dry Run에서는 기존의 사용자 승인 경험·원문 참조가 **0개**였고, 사용자 데이터 쓰기를 계획하지 않았습니다. 동일한 결정적 초기 온톨로지 개념 투영 결과를 보고했습니다.
 
-- File workers claim a queued job atomically with `UPDATE ... RETURNING`, a worker
-  lease, and ownership checks, preventing two workers from processing one job.
-- SSE sends heartbeats and reconnects once with the same `client_request_id`.
-  The server returns the persisted `assistant.snapshot` and terminal event without
-  starting another model call or storing duplicate messages.
-- HTTP middleware records route count, error rate, P50/P95 latency and request ID.
-  It deliberately excludes query strings, request bodies, and user source text.
+---
 
-Capability check on the development PC:
+## 09. 서비스·운영 안정성
 
-- Tesseract 5.4.0: available with `kor`, `eng`, `osd`.
-- FFmpeg/FFprobe: not detected in the 2026-10-08 capability run; STT key configured.
-- LibreOffice: unavailable, so actual DOC/PPT conversion remains environment-blocked.
-- Hancom HWP→HWPX converter: unavailable, so actual HWP conversion remains environment-blocked.
-- STT timestamp mapping and persistence passed mocked integration tests; a paid live-audio
-  request was intentionally not included in this benchmark.
+### 9-1. 비동기 파일 처리
 
-### Validation
+Worker는 `UPDATE ... RETURNING`, Lease, 소유권 검증을 통해 **대기 작업을 원자적으로 선점**합니다. 두 Worker가 같은 작업을 중복 수행하지 않도록 설계했습니다.
 
-- Backend: 219 tests passed, including actual Korean OCR, ontology/Evidence/index,
-  atomic file claim, request metrics, and SSE replay coverage.
-- Frontend: 108 tests passed, including interrupted SSE reconnection.
-- Frontend production build passed.
-- ESLint passed.
-- `git diff --check` passed.
-- Normalization backfill dry-run scanned 0 existing experiences and wrote no data.
-- Attachment BLOB migration dry-run examined 0 existing attachments and wrote no data.
-- Both four-run benchmark suites detected 0 database writes.
+### 9-2. SSE 스트리밍 복구
 
-The 2026-10-08 V4 actual-model rerun completed successfully after explicit approval
-to send the synthetic fixture to OpenAI. The earlier connection-failed attempt is
-not included in any quality, token, cost, or latency result.
+SSE 연결은 Heartbeat를 전송하며, 연결이 끊기면 같은 `client_request_id`로 1회 재연결합니다. 서버는 저장된 `assistant.snapshot`과 종료 이벤트를 반환해 **새로운 모델 호출이나 메시지 중복 저장을 방지**합니다.
 
-## Raw reports
+### 9-3. HTTP 요청 관측
 
-Runtime reports are intentionally written under the ignored
-`data/benchmarks/conversation-analysis/` directory:
+HTTP Middleware는 요청 경로별 호출 수, 에러율, P50/P95 지연 시간, 요청 ID를 기록합니다. 개인정보 노출 위험을 줄이기 위해 **Query String·Request Body·사용자 원문 텍스트는 기록 대상에서 제외**했습니다.
+
+### 9-4. 개발 PC 환경 확인
+
+| 항목 | 2026-10-08 당시 상태 |
+|---|---|
+| Tesseract 5.4.0 | 사용 가능 (`kor`·`eng`·`osd`) |
+| FFmpeg / FFprobe | 해당 점검에서 미탐지, STT 키는 설정됨 |
+| LibreOffice | 사용 불가 · 실제 DOC/PPT 변환 환경 제약 |
+| 한컴 HWP → HWPX 변환기 | 사용 불가 · 실제 HWP 변환 환경 제약 |
+| STT 타임스탬프 매핑·저장 | Mock 통합 테스트 통과 |
+| 유료 실제 음성 STT 요청 | 벤치마크에 포함하지 않음 |
+
+---
+
+## 10. 테스트 및 검증 기록
+
+2026-10-08 당시 실행한 주요 검사 결과입니다.
+
+| 검사 | 결과 |
+|---|---|
+| Backend | **219개 테스트 통과** |
+| Frontend | **108개 테스트 통과** |
+| Frontend Production Build | 통과 |
+| ESLint | 통과 |
+| `git diff --check` | 통과 |
+| 정규화 Backfill Dry Run | 기존 경험 0개 검사, 데이터 쓰기 없음 |
+| 첨부파일 BLOB Migration Dry Run | 기존 첨부 0개 검사, 데이터 쓰기 없음 |
+| 대화 분석 4회 실행 벤치마크 | 양쪽 세트 모두 DB 쓰기 0건 |
+
+**Backend 테스트 범위:** 실제 한국어 OCR, 온톨로지·Evidence·인덱스, 파일 작업 원자적 선점, 요청 관측 지표, SSE 재생 검증 등을 포함합니다.
+
+**Frontend 테스트 범위:** 중단된 SSE 연결의 재접속 등을 포함합니다.
+
+v4 실제 모델 재실행은 **합성 Fixture를 OpenAI로 전송하는 데 명시적으로 승인한 후 정상 완료**했습니다. 앞서 발생했던 연결 실패 시도는 품질·토큰·비용·지연 시간의 어떤 결과에도 포함하지 않았습니다.
+
+> **재현·해석 주의:** 이 표는 **2026-10-08 측정 당시의 테스트 결과**입니다. 이후 코드 변경이 있는 현재 `main` 브랜치를 대상으로 모든 테스트를 다시 실행했다고 주장하지 않습니다.
+
+---
+
+## 11. 원본 JSON 보고서·추적 파일
+
+실행 결과의 원본 JSON은 기본적으로 Git에 포함되지 않는 `data/benchmarks/conversation-analysis/` 디렉터리에 기록하도록 구성했습니다.
 
 - `baseline-v1-20261007-020121.json`
 - `routed-v2-complete-job-guard-20261007-025529.json`
 - `gold-baseline-v1-valid-20261007-020806.json`
 - `gold-routed-v2-complete-job-guard-20261007-025437.json`
-- matching `-evaluation.json` files for the gold runs
+- Gold Set 평가에 대응하는 `-evaluation.json` 파일들
 - `routed-v3-structured-normalization-20261007.json`
 - `gold-routed-v3-structured-normalization-20261007.json`
 - `gold-routed-v3-structured-normalization-20261007-evaluation.json`
 - `routed-v4-ontology-evidence-20261008-155150.json`
 - `routed-v4-ontology-evidence-20261008-155150-evaluation.json`
+
+**주의:** 위 파일명은 벤치마크 실행 기록의 원본 경로를 안내하기 위한 것입니다. `data/benchmarks/conversation-analysis/`가 Git 제외 대상이므로 GitHub의 공개 저장소에서 원본 JSON을 직접 다운로드할 수 있다는 뜻은 아닙니다.
+
+---
+
+## 결과 해석 요약
+
+**1. 효율성:** 동일한 38개 메시지 대화에서 Content Routing과 채용공고 완전성 검증을 적용해 **LLM 호출 7회 → 2회(71.43% 감소)**, **총 실행 시간 13.151초 → 4.564초(65.30% 단축)**를 기록했습니다.
+
+**2. 정확성과 근거:** 별도의 소규모 합성 Gold Set에서 경험·문맥 사실 보존 및 정확한 출처 인용을 검증했습니다. 수치 정규화·온톨로지·Evidence 구조는 출처에 근거한 검증과 잘못된 인용 차단을 목적으로 확장했습니다.
+
+**3. 제품 품질:** 파일 파서, OCR, 첨부 Worker·작업 큐, SSE 재연결, HTTP 관측·회귀 검사를 수행했습니다. 다만 **제한된 테스트 Fixture의 통과 기록**이며, 운영 환경의 장애율이나 대규모 실제 사용자 성능을 입증하는 자료는 아닙니다.
+
+**상세 구조:** [AI 데이터 아키텍처](../../docs/AI_DATA_ARCHITECTURE.md) · [Career Memory 프로젝트 README](../../README.md)
