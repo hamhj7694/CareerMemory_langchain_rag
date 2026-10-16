@@ -2,6 +2,8 @@
 
 대화·문서·채용공고에 흩어진 커리어 원본을 근거와 함께 보존하고, AI가 추출한 경험 초안을 사용자가 검토·승인한 후 RAG로 재사용하는 개인 AI 서비스입니다.
 
+**🌐 [Career Memory 배포 서비스 바로가기](https://16-184-60-60.sslip.io/)**
+
 - **Frontend:** React · Vite
 - **Backend:** FastAPI · SQLAlchemy · SQLite
 - **AI:** OpenAI/Gemini · LangChain/LangGraph · ChromaDB
