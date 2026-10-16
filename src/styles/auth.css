@@ -85,7 +85,7 @@
 .start-intro .auth-brand { gap: 8px; font-size: .875rem; }
 .start-intro .auth-brand span { width: 36px; height: 32px; border-radius: 6px; color: #334e86; background: white; }
 .start-intro .auth-eyebrow { margin-bottom: 16px; color: rgb(255 255 255 / 85%); font-size: .625rem; letter-spacing: 0; }
-.start-intro h1 { margin: 0; font-size: clamp(1.4rem, 2.4vw, 1.625rem); line-height: 1.3; letter-spacing: -.025em; word-break: keep-all; overflow-wrap: anywhere; }
+.start-intro h1 { margin: 0; font-size: clamp(1.55rem, 2.7vw, 1.85rem); line-height: 1.3; letter-spacing: -.025em; word-break: keep-all; overflow-wrap: anywhere; }
 .start-description { margin: 16px 0 0; color: rgb(255 255 255 / 88%); font-size: 1rem; line-height: 1.65; word-break: keep-all; overflow-wrap: anywhere; }
 .start-features { margin: 6px 0 0; padding: 24px 0 0; border-top: 1px solid rgb(255 255 255 / 25%); display: grid; gap: 16px; list-style: none; }
 .start-features li { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 12px; align-items: baseline; }
@@ -116,7 +116,7 @@
   .auth-card { min-height: 100dvh; padding: 28px 20px; border: 0; border-radius: 0; align-content: center; box-shadow: none; }
   .start-card { min-height: 100dvh; border: 0; border-radius: 0; grid-template-columns: 1fr; }
   .start-intro, .start-actions { padding: 32px 22px; }
-  .start-intro h1 { font-size: 1.4rem; }
+  .start-intro h1 { font-size: 1.55rem; }
   .start-features li { grid-template-columns: 1fr; gap: 2px; }
 }
 
