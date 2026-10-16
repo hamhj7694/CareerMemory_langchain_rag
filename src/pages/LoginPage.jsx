@@ -81,15 +81,15 @@ export function LoginPage() {
           <Link className="auth-brand" to="/start"><span>CM</span>Career Memory</Link>
           <div>
             <p className="auth-eyebrow">YOUR CAREER, REMEMBERED</p>
-            <h1 id="start-title">내 경험을 근거와 함께 기억하는 AI</h1>
-            <p className="start-description">대화와 파일에 흩어진 경험을 정리하고, 원문 근거와 함께 다시 활용할 수 있는 커리어 지식으로 쌓아보세요.</p>
+            <h1 id="start-title">내 경험을 한곳에 모아,<br />필요할 때 꺼내 쓰는 AI</h1>
+            <p className="start-description">대화와 파일에 흩어진 경험을 AI가 정리하고, 원문 근거와 함께 보관해요. 쌓아둔 경험을 채용공고 분석과 커리어 준비에 활용하세요.</p>
           </div>
           <ul className="start-features">
-            <li><strong>원문 보존</strong><span>대화·문서·이미지의 출처를 잃지 않아요.</span></li>
-            <li><strong>AI 경험 정리</strong><span>상황·행동·결과와 역량을 구조화해요.</span></li>
-            <li><strong>공고 매칭</strong><span>요구사항마다 내 경험의 실제 근거를 찾아요.</span></li>
+            <li><strong>원문 보존</strong><span>대화·문서·파일의 원본과 출처를 남겨요.</span></li>
+            <li><strong>AI 경험 정리</strong><span>흩어진 경험을 구조화하고 확인 후 저장해요.</span></li>
+            <li><strong>공고 매칭</strong><span>채용공고에 맞는 경험과 근거를 찾아요.</span></li>
           </ul>
-          <p className="start-privacy">체험 공간은 방문자마다 분리됩니다. 개인 정보가 포함된 자료는 체험 모드에 올리지 않는 것을 권장해요.</p>
+          <p className="start-privacy">체험 공간은 방문자별로 분리됩니다. 개인정보가 포함된 자료는 체험 모드에 업로드하지 않는 것을 권장합니다.</p>
         </div>
 
         <div className="start-actions">
