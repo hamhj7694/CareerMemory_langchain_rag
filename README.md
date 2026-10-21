@@ -6,7 +6,7 @@
 
 `React` · `FastAPI` · `LangChain/LangGraph` · `OpenAI/Gemini` · `ChromaDB` · `SQLite`
 
-**🌐 [배포 서비스 사용해보기](https://16-184-60-60.sslip.io/)** · **[상세 Notion 포트폴리오](https://app.notion.com/p/da8c753ff28a8368998a0153f085e3e3)**
+**🌐 [배포 서비스 사용해보기](https://16-184-60-60.sslip.io/)** · **[상세 Notion 포트폴리오](https://app.notion.com/p/3ffc753ff28a8176b746f1ec6fd8a3e9)**
 
 [벤치마크 결과](AI_Engine/benchmarks/RESULTS.md) · [AI 데이터 아키텍처](docs/AI_DATA_ARCHITECTURE.md) · [AWS 배포 구성](docs/EC2_DEPLOYMENT.md) · [CI/CD 설정](docs/AWS_CICD_SETUP.md)
 
