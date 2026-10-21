@@ -1,8 +1,8 @@
-# Career Memory — AI Application & RAG
+# Career Memory — 근거를 확인할 수 있는 AI 커리어 지식관리 서비스
 
 > **흩어진 내 경험을 한곳에 모아, 필요할 때 꺼내 쓰는 AI.** 대화·문서·파일의 원문을 보존하고 AI로 경험을 구조화한 뒤, 사용자가 승인한 지식을 RAG로 검색해 채용공고 분석과 커리어 질의에 활용하는 개인 AI 서비스입니다.
 
-**AI 서비스 기획 · LLM 애플리케이션 개발 · RAG/데이터 아키텍처 · Backend/Frontend 통합**
+**AI 서비스 기획 · LLM/RAG 구현 · 원본·근거·확정 지식 구조 설계 · 백엔드·프론트엔드 통합**
 
 `React` · `FastAPI` · `LangChain/LangGraph` · `OpenAI/Gemini` · `ChromaDB` · `SQLite`
 
@@ -14,7 +14,7 @@
 
 ## 프로젝트 요약
 
-Career Memory는 자기소개서를 한 번 생성하는 도구보다 **사용자의 경험을 근거와 함께 기억하는 시스템**에 초점을 맞췄습니다.
+Career Memory는 자기소개서를 한 번 생성하는 도구보다 **원본 기록·AI 분석 근거·사용자가 승인한 경험을 구분해 관리하고 다시 활용하는 서비스**에 초점을 맞췄습니다.
 
 ```text
 대화·공개 URL·파일·채용공고 원문
@@ -29,7 +29,7 @@ Career Memory는 자기소개서를 한 번 생성하는 도구보다 **사용�
 
 - 사용자 원문은 AI 분석 결과와 무관하게 보존합니다.
 - AI 출력은 사실이 아니라 검증·재생성 가능한 파생 데이터로 취급합니다.
-- 확정 경험은 `source ID`와 `exact quote`를 통해 원본까지 추적합니다.
+- 확정된 경험의 출처를 원본 데이터 식별자(`source ID`)와 실제 원문 인용(`exact quote`)을 통해 추적합니다.
 - 임베딩은 후보 검색에 사용하고, 명시적인 기술·수치 조건의 최종 판정은 규칙과 근거로 수행합니다.
 - AI가 만든 초안은 사용자가 승인한 뒤에만 정식 경험이 됩니다.
 
@@ -46,14 +46,14 @@ Career Memory의 핵심은 단순한 AI 채팅이나 자기소개서 1회 생성
 
 - 대화, 직접 입력, 공개 웹페이지·Notion, 채용공고, 문서, 이미지, 음성·영상 파일을 하나의 커리어 데이터 흐름으로 받습니다.
 - 파일은 파싱 전에 원본과 SHA-256을 저장하므로 OCR·문서 변환에 실패해도 사용자 자료가 사라지지 않습니다.
-- 파싱·OCR·STT 결과를 출처와 위치 정보가 있는 Evidence로 변환해 이후 분석의 근거로 사용합니다.
+- 문서·이미지·음성에서 추출한 결과를 출처와 위치 정보가 있는 분석 근거(Evidence)로 관리합니다.
 - URL은 공개 HTTP(S) 페이지만 수집하며, HTML 가시 본문·구조화 데이터·이미지 OCR을 같은 Attachment/Evidence 계층에 보존합니다. 사설망·로그인·유료벽·CAPTCHA 우회는 차단합니다.
 
 ### 2. 원문 근거 기반 경험 구조화
 
 - 비정형 대화와 파일에서 서로 다른 경험을 구분해 여러 개의 경험 초안으로 추출합니다.
 - 각 경험을 상황·행동·결과·역할·역량으로 구조화합니다.
-- 추출된 사실은 `source ID`와 `exact quote`로 원문에 연결하며, AI가 생성한 문장은 사용자 경험의 증거로 사용하지 않습니다.
+- 추출된 사실은 원본 식별자와 실제 인용문으로 연결하고, AI가 생성한 문장 자체를 사용자 경험의 증거로 사용하지 않습니다.
 
 ### 3. 사용자 승인형 커리어 메모리
 
@@ -70,8 +70,8 @@ Career Memory의 핵심은 단순한 AI 채팅이나 자기소개서 1회 생성
 
 ### 5. 개인화된 커리어 RAG 대화
 
-- 단순 대화 기록뿐 아니라 승인된 경험과 원문 Evidence를 함께 검색해 사용자별 답변 문맥을 구성합니다.
-- 대화 요약, 최근 원문, 첨부 자료, Experience RAG, Evidence RAG를 목적에 맞게 조합합니다.
+- 단순 대화 기록뿐 아니라 사용자가 승인한 경험과 원문 분석 근거를 검색해 개인화된 답변에 활용합니다.
+- 대화 요약·최근 기록·첨부 자료를 **확정 경험 검색(Experience RAG)** 및 **원문 근거 검색(Evidence RAG)**과 목적에 따라 조합합니다.
 - 한 번 저장한 경험을 이후 커리어 회고, 역량 탐색, 채용공고 검토에서 반복 활용할 수 있습니다.
 
 ## 핵심 성과
@@ -146,7 +146,7 @@ flowchart LR
 
 현재는 대규모 데이터 레이크나 범용 그래프 DB를 도입한 구조가 아닙니다. SQLite·SQLAlchemy·LocalBlobStore·Chroma 안에서 **계층, lineage, 버전, 재처리라는 데이터 레이크의 핵심 원칙을 점진적으로 적용**했습니다.
 
-## LLM·NLU 파이프라인
+## AI 입력 분석·구조화 처리 흐름
 
 ### 1. 콘텐츠 라우팅
 
@@ -222,12 +222,12 @@ queued → processing → ready
 
 worker lease가 만료되면 작업을 다시 `queued`로 복구하므로 서버 중단 후에도 재처리할 수 있습니다. Tesseract·LibreOffice·한컴 변환기·FFmpeg·STT API가 없는 환경에서는 원문을 추정하지 않고 명확한 capability 오류를 반환합니다.
 
-## RAG와 증분 인덱싱
+## 목적별 RAG 검색과 변경 데이터 재색인
 
 검색 목적을 두 계층으로 분리했습니다.
 
-1. **Experience RAG** — 사용자가 승인한 경험을 대화와 공고 매칭에 활용
-2. **Evidence RAG** — 대화·파일 원문 chunk를 검색해 출처 확인과 재구조화에 활용
+1. **확정 경험 검색(Experience RAG)** — 사용자가 검토·승인한 경험을 대화와 채용공고 매칭에 활용
+2. **원문 근거 검색(Evidence RAG)** — 대화·파일의 원문 구간을 검색해 출처 확인과 경험 정보 재구조화에 활용
 
 Chroma는 원본 저장소가 아닙니다. `content_hash`, provider, model, dimensions, index version을 `EmbeddingRecord`에 기록하고 변경된 대상만 재임베딩합니다.
 
@@ -253,6 +253,14 @@ Chroma는 원본 저장소가 아닙니다. `content_hash`, provider, model, dim
 | PIN 복구 | 최초 설정한 질문과 Argon2id 해시 답변을 확인해 PIN을 새로 설정하고, 성공 시 기존 로그인 세션을 모두 종료 |
 | 기록 이어보기 | 체험 중 만든 기록을 아이디·PIN·닉네임으로 전환하고 다른 기기에서 같은 기록 공간을 다시 사용 |
 | 인증과 격리 | Argon2id PIN 해시, HttpOnly 세션 쿠키, 로그인 실패 잠금, DB·첨부·Evidence·vector의 `user_id` 범위 격리 |
+
+## AI 보조 개발 · 구현 결과 검토
+
+- **Codex 보조 개발:** 요구사항을 정리한 뒤 코드 분석·구현·수정·디버깅·코드 검토에 활용하고, 코드·설계 문서와 실행 결과를 대조해 반영했습니다.
+- **자동화 테스트:** GitHub Actions에서 백엔드 `unittest`, 프론트엔드 Vitest, Playwright 브라우저 테스트, 빌드와 Docker Compose 기본 구동 검사를 실행했습니다. AI 보조 코드 검토와 자동 실행되는 테스트는 각각 다른 검증 절차입니다.
+- **배포 확인:** Linux 기반 AWS EC2에 Docker Compose 서비스를 배포하고, GitHub Actions → ECR → SSM → EC2 실행 결과와 공개 HTTPS 상태를 확인했습니다.
+
+[코드·테스트·배포 구현 PR](https://github.com/hamhj7694/CareerMemory_langchain_rag/pull/4) · [GitHub Actions 실제 배포 실행](https://github.com/hamhj7694/CareerMemory_langchain_rag/actions/runs/39599015724)
 
 ## 품질 검증
 
@@ -435,6 +443,6 @@ python -m AI_Engine.file_processing_worker --poll-seconds 2
 - [GitHub Actions·OIDC·ECR·SSM 설정](docs/AWS_CICD_SETUP.md)
 - [이전 개발 문서·작업 기록 (`dev` 브랜치)](https://github.com/hamhj7694/CareerMemory_langchain_rag/tree/dev/docs)
 
-## 포트폴리오 한 문장
+## 포트폴리오 핵심 요약
 
 > 대화와 다양한 첨부 원본에 흩어진 커리어 경험을 보존하고, LLM이 추출한 기술·수치·사실을 온톨로지와 exact quote로 검증한 뒤 사용자가 승인한 지식만 RAG로 재활용하는 Career Memory 서비스를 개발했습니다. 구조화 라우팅으로 동일 38개 메시지 내부 평가에서 LLM 호출을 71.43%, 실행 시간 중앙값을 65.30% 줄였고, 별도의 소규모 한국어 합성 정답 세트에서 경험·문맥·공고 요구사항 재현율 100%를 기록했습니다. Evidence lineage·증분 인덱싱·OCR/STT·영속 작업 큐·Playwright E2E를 구현하고 AWS EC2·Docker Compose로 배포했으며 GitHub Actions–ECR–SSM 기반 배포 실행 성공을 확인했습니다.
