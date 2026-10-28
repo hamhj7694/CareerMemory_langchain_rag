@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -34,11 +36,28 @@ from AI_Engine.knowledge_documents import (
     begin_analysis_run,
     experience_content_blocks,
     fail_analysis_run,
+    link_analysis_target,
     merge_projected_blocks,
     upsert_content_document,
 )
+from AI_Engine.experience_units import (
+    EXPERIENCE_UNITS_ACTION,
+    EXPERIENCE_UNITS_SEGMENTER_VERSION,
+    build_experience_units_proposal,
+    organize_segmented_sources,
+    proposal_action as experience_units_action,
+    recalculate_proposal_coverage,
+    segment_sources,
+    source_manifest,
+    validate_proposal_invariants,
+)
+from AI_Engine.experience_unit_storage import (
+    annotate_proposal_matches,
+    save_experience_unit,
+)
 from AI_Engine.normalization_backfill import structured_fields_for_experience
 from AI_Engine.experience_ai import ExperienceAI, ExperienceAIInputError, ExperienceAIOutputError
+from AI_Engine.privacy import guest_private_mode, redact_guest_text, redact_source_texts
 from AI_Engine.file_extraction import FileInputError, run_file_extraction
 from AI_Engine.job_file_text import (
     MAX_JOB_FILE_BYTES,
@@ -67,6 +86,18 @@ class ConversationProposalApprove(BaseModel):
     version: int = Field(ge=1)
     draft_id: str | None = None
     experience_index: int | None = Field(default=None, ge=0)
+
+
+class ExperienceUnitsProposalUpdate(BaseModel):
+    version: int = Field(ge=1)
+    units: list[dict]
+    coverage: dict
+    status: Literal["edited", "rejected"] = "edited"
+
+
+class ExperienceUnitApprove(BaseModel):
+    version: int = Field(ge=1)
+    unit_id: str = Field(min_length=1, max_length=100)
 
 
 class ConversationJobRecord(BaseModel):
@@ -114,6 +145,186 @@ def _replace_proposal_action(message: Message, current_action: dict, proposal: d
         _proposal_action(proposal) if item is current_action else item
         for item in message.actions
     ]
+
+
+def _replace_units_proposal_action(
+    message: Message,
+    current_action: dict,
+    proposal: dict,
+) -> None:
+    message.actions = [
+        {"type": EXPERIENCE_UNITS_ACTION, "proposal": proposal}
+        if item is current_action else item
+        for item in message.actions
+    ]
+
+
+def _store_units_proposal_on_run(
+    analysis_record: AnalysisRunRecord,
+    proposal: dict,
+) -> None:
+    coverage = proposal.get("coverage") or {}
+    analysis_record.output_payload = {
+        **(analysis_record.output_payload or {}),
+        "proposal": proposal,
+        "unit_ids": [unit["unit_id"] for unit in proposal.get("units", [])],
+    }
+    analysis_record.coverage_report = coverage
+    analysis_record.versions = {
+        **(analysis_record.versions or {}),
+        "contract": "experience-units-v2",
+        "segmenter": EXPERIENCE_UNITS_SEGMENTER_VERSION,
+    }
+    if coverage.get("processing_status") == "partial":
+        analysis_record.status = "partial"
+    analysis_record.updated_at = utc_now()
+
+
+def _experience_create_from_draft(draft: dict) -> ExperienceCreate:
+    extensions = dict(draft.get("extensions") or {})
+    if draft.get("unit_id"):
+        extensions["experience_unit_v2"] = {
+            "unit_id": draft["unit_id"],
+            "contract_version": "experience-units-v2",
+            "primary_span_ids": list(draft.get("primary_span_ids") or []),
+            "context_span_ids": list(draft.get("context_span_ids") or []),
+            "field_span_ids": dict(draft.get("field_span_ids") or {}),
+            "fact_ids": list(draft.get("fact_ids") or []),
+        }
+    return ExperienceCreate(
+        project_id=draft.get("project_id"),
+        domain=draft.get("domain"),
+        project=draft.get("project"),
+        title=str(draft.get("title") or "제목 없는 경험").strip(),
+        summary=str(draft.get("summary") or ""),
+        situation=str(draft.get("situation") or ""),
+        actions=list(draft.get("actions") or []),
+        results=list(draft.get("results") or []),
+        role=str(draft.get("role") or ""),
+        skills=list(draft.get("skills") or []),
+        skill_mentions=list(draft.get("skill_mentions") or []),
+        facts=list(draft.get("facts") or []),
+        metrics=list(draft.get("metrics") or []),
+        period=draft.get("period"),
+        missing_information=list(draft.get("missing_information") or []),
+        source_ids=list(draft.get("source_ref_ids") or draft.get("source_ids") or []),
+        source_refs=list(draft.get("source_refs") or []),
+        draft_id=draft.get("draft_id"),
+        field_citations=dict(draft.get("field_citations") or {}),
+        skill_groups=list(draft.get("skill_groups") or []),
+        confidence=draft.get("confidence"),
+        extensions=extensions,
+        analysis_run_id=draft.get("analysis_run_id"),
+        content_blocks=list(draft.get("content_blocks") or []),
+    )
+
+
+def _hydrate_unit_source_refs(
+    database: Session,
+    *,
+    unit: dict,
+    current_user: User,
+    conversation_id: str,
+) -> list[dict]:
+    """V2 메타데이터 참조를 현재 사용자가 소유한 원문으로 복원한다."""
+
+    hydrated: list[dict] = []
+    guest = guest_private_mode(current_user)
+    for source in unit.get("source_refs") or []:
+        item = dict(source)
+        message_id = item.get("message_id")
+        attachment_id = item.get("attachment_id")
+        if message_id:
+            message = database.get(Message, message_id)
+            if message is None or message.conversation_id != conversation_id:
+                raise HTTPException(status_code=422, detail="연결할 수 없는 대화 원문입니다.")
+            item["type"] = "message_text"
+            item["text"] = redact_guest_text(message.content) if guest else message.content
+        elif attachment_id:
+            attachment = database.get(Attachment, attachment_id)
+            if attachment is None or attachment.user_id != current_user.id:
+                raise HTTPException(status_code=422, detail="연결할 수 없는 첨부 원문입니다.")
+            item.update({
+                "type": "file",
+                "filename": attachment.filename,
+                "mime_type": attachment.mime_type,
+                "text": redact_guest_text(attachment.extracted_text)
+                if guest else attachment.extracted_text,
+            })
+        else:
+            raise HTTPException(status_code=422, detail="원문 식별자가 없는 근거입니다.")
+        hydrated.append(item)
+    return hydrated
+
+
+def _persist_confirmed_experience(
+    database: Session,
+    *,
+    create_request: ExperienceCreate,
+    current_user: User,
+    unit_id: str | None = None,
+) -> Experience:
+    analysis_run = None
+    if create_request.analysis_run_id:
+        analysis_run = database.scalar(select(AnalysisRunRecord).where(
+            AnalysisRunRecord.id == create_request.analysis_run_id,
+            AnalysisRunRecord.user_id == current_user.id,
+        ))
+        if analysis_run is None:
+            raise HTTPException(status_code=422, detail="연결할 수 없는 AI 분석 기록입니다.")
+    project = resolve_project(create_request, current_user, database)
+    period = create_request.period if isinstance(create_request.period, dict) else {}
+    skill_mentions, metrics = structured_fields_for_experience(
+        create_request.skills,
+        create_request.facts,
+        skill_mentions=create_request.skill_mentions,
+        metrics=create_request.metrics,
+        source_refs=create_request.source_refs,
+    )
+    experience = Experience(
+        id=create_resource_id("EXP"), user_id=current_user.id, project_id=project.id,
+        title=create_request.title, summary=create_request.summary,
+        situation=create_request.situation, actions=create_request.actions,
+        results=create_request.results, role=create_request.role,
+        skills=create_request.skills, skill_mentions=skill_mentions,
+        facts=create_request.facts,
+        fact_evidence_status={
+            fact: ("supported" if create_request.field_citations.get(f"facts.{index}") else "needs_evidence")
+            for index, fact in enumerate(create_request.facts)
+        },
+        metrics=metrics, period=period,
+        missing_information=create_request.missing_information,
+        source_ids=create_request.source_ids, source_refs=create_request.source_refs,
+        draft_id=create_request.draft_id, field_citations=create_request.field_citations,
+        skill_groups=create_request.skill_groups, confidence=create_request.confidence,
+        extensions=create_request.extensions,
+        analysis_run_id=analysis_run.id if analysis_run else None,
+        status="confirmed",
+    )
+    experience.project = project
+    database.add(experience)
+    database.flush()
+    document = upsert_content_document(
+        database, user_id=current_user.id, owner_type="experience",
+        owner_id=experience.id, title=experience.title,
+        blocks=merge_projected_blocks(experience_content_blocks({
+            **create_request.model_dump(mode="json"),
+            "skill_mentions": skill_mentions, "metrics": metrics,
+            "fact_evidence_status": experience.fact_evidence_status,
+        }), create_request.content_blocks),
+        extensions=create_request.extensions,
+    )
+    experience.content_document_id = document.id
+    if analysis_run is not None:
+        if unit_id:
+            link_analysis_target(
+                database, analysis_run, unit_id=unit_id,
+                target_type="experience", target_id=experience.id, commit=False,
+            )
+        else:
+            analysis_run.target_id = experience.id
+    sync_experience_evidence(database, experience)
+    return experience
 
 
 def _unprocessed_user_messages(conversation, database: Session) -> list[Message]:
@@ -172,7 +383,7 @@ def extract_recent_chat_experiences(
     ))
     if existing_assistant is not None:
         action = next(
-            (item for item in existing_assistant.actions if item.get("type") == "experience_proposal"),
+            (item for item in existing_assistant.actions if item.get("type") in {EXPERIENCE_UNITS_ACTION, "experience_proposal"}),
             None,
         )
         if action is None:
@@ -237,8 +448,13 @@ def extract_recent_chat_experiences(
             for attachment in attachments
             if attachment.extracted_text.strip()
         ])
+    sources = redact_source_texts(sources, guest=guest_private_mode(current_user))
     if not sources:
         raise HTTPException(status_code=422, detail="분석 가능한 대화내용이 없습니다.")
+    segmented = segment_sources(
+        sources,
+        privacy_policy="guest_redacted" if guest_private_mode(current_user) else "registered_full",
+    )
 
     extraction_request = ExperienceExtractionRequest(
         client_request_id=request.client_request_id,
@@ -258,16 +474,14 @@ def extract_recent_chat_experiences(
         target_type="conversation_experience_extraction",
         input_type=str(ExperienceExtractionInputType.CONVERSATION.value),
         input_payload={
-            **extraction_request.model_dump(mode="json"),
-            "messages": [
-                {"id": message.id, "sequence": message.sequence, "content": message.content}
-                for message in text_messages
-            ],
+            **extraction_request.model_dump(mode="json", exclude={"text"}),
+            "source_manifest": source_manifest(segmented),
+            "segmenter_version": EXPERIENCE_UNITS_SEGMENTER_VERSION,
         },
         source_ids=[source.id for source in sources],
     )
     try:
-        result = experience_ai.organize(extraction_request, sources=sources)
+        result = organize_segmented_sources(experience_ai, extraction_request, segmented)
         result = _persist_extraction_result(database, analysis_record, result)
     except ExperienceAIInputError as error:
         fail_analysis_run(database, analysis_record, code="invalid_input", message=str(error))
@@ -276,7 +490,15 @@ def extract_recent_chat_experiences(
         fail_analysis_run(database, analysis_record, code="invalid_ai_output", message=str(error))
         raise HTTPException(status_code=502, detail="대화내용을 경험 초안으로 정리하지 못했습니다.") from error
 
-    proposal = _proposal_from_result(result)
+    proposal = build_experience_units_proposal(
+        result,
+        segmented,
+        analysis_run_id=analysis_record.id,
+    )
+    proposal = annotate_proposal_matches(
+        database, proposal, user_id=current_user.id,
+    )
+    _store_units_proposal_on_run(analysis_record, proposal)
     proposal["analysis_scope"] = {
         "message_count": len(messages),
         "attachment_count": len({
@@ -297,7 +519,7 @@ def extract_recent_chat_experiences(
         requested_intent="experience",
         resolved_intents=["experience"],
         proposal_ids=[proposal["id"]],
-        actions=[_proposal_action(proposal)],
+        actions=[experience_units_action(proposal)],
         completed_at=utc_now(),
     )
     database.add(assistant_message)
@@ -337,7 +559,7 @@ async def analyze_chat_experience(
         if existing_assistant is None:
             raise HTTPException(status_code=409, detail="같은 경험 분석 요청이 아직 처리 중입니다.")
         action = next(
-            (item for item in existing_assistant.actions if item.get("type") == "experience_proposal"),
+            (item for item in existing_assistant.actions if item.get("type") in {EXPERIENCE_UNITS_ACTION, "experience_proposal"}),
             None,
         )
         if action is None:
@@ -348,6 +570,8 @@ async def analyze_chat_experience(
             "proposal": action["proposal"],
             "run": {"id": "replayed"},
         }
+    if guest_private_mode(current_user):
+        text = redact_guest_text(text)
     if len(files) > MAX_JOB_FILE_COUNT:
         raise HTTPException(status_code=422, detail=f"파일은 최대 {MAX_JOB_FILE_COUNT}개까지 선택할 수 있습니다.")
     uploaded_files: list[tuple[str, str, bytes]] = []
@@ -392,10 +616,23 @@ async def analyze_chat_experience(
             user_id=current_user.id,
             attachment_ids=attachment_ids,
         )
+        sources = redact_source_texts(sources, guest=guest_private_mode(current_user))
+        if text.strip():
+            sources.insert(0, EvidenceSource(
+                id=f"source-{client_request_id}",
+                type=EvidenceSourceType.MANUAL_TEXT,
+                title="사용자 직접 입력",
+                manual_input_id=client_request_id,
+                text=text,
+            ))
+        segmented = segment_sources(
+            sources,
+            privacy_policy="guest_redacted" if guest_private_mode(current_user) else "registered_full",
+        )
         extraction_request = ExperienceExtractionRequest(
             client_request_id=client_request_id,
             input_type=ExperienceExtractionInputType.DIRECT_INPUT,
-            text=text.strip() or None,
+            text=text if text.strip() else None,
             attachment_ids=attachment_ids,
         )
         analysis_record = begin_analysis_run(
@@ -404,10 +641,14 @@ async def analyze_chat_experience(
             client_request_id=client_request_id,
             target_type="conversation_experience_extraction",
             input_type=str(ExperienceExtractionInputType.DIRECT_INPUT.value),
-            input_payload=extraction_request.model_dump(mode="json"),
+            input_payload={
+                **extraction_request.model_dump(mode="json", exclude={"text"}),
+                "source_manifest": source_manifest(segmented),
+                "segmenter_version": EXPERIENCE_UNITS_SEGMENTER_VERSION,
+            },
             source_ids=[source.id for source in sources],
         )
-        result = experience_ai.organize(extraction_request, sources=sources)
+        result = organize_segmented_sources(experience_ai, extraction_request, segmented)
         result = _persist_extraction_result(database, analysis_record, result)
     except (FileInputError, ValueError, ExperienceAIInputError) as error:
         if "analysis_record" in locals():
@@ -418,7 +659,15 @@ async def analyze_chat_experience(
             fail_analysis_run(database, analysis_record, code="invalid_ai_output", message=str(error))
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    proposal = _proposal_from_result(result)
+    proposal = build_experience_units_proposal(
+        result,
+        segmented,
+        analysis_run_id=analysis_record.id,
+    )
+    proposal = annotate_proposal_matches(
+        database, proposal, user_id=current_user.id,
+    )
+    _store_units_proposal_on_run(analysis_record, proposal)
     user_sequence = conversation.message_count + 1
     proposal["analysis_scope"] = {
         "message_count": 1,
@@ -433,7 +682,7 @@ async def analyze_chat_experience(
         sequence=user_sequence,
         role="user",
         status="completed",
-        content=text.strip() or "첨부한 자료로 경험을 정리해 주세요.",
+        content=text if text.strip() else "첨부한 자료로 경험을 정리해 주세요.",
         requested_intent="experience",
         resolved_intents=["experience"],
         attachment_ids=attachment_ids,
@@ -449,7 +698,7 @@ async def analyze_chat_experience(
         requested_intent="experience",
         resolved_intents=["experience"],
         proposal_ids=[proposal["id"]],
-        actions=[_proposal_action(proposal)],
+        actions=[experience_units_action(proposal)],
         completed_at=utc_now(),
     )
     database.add_all([user_message, assistant_message])
@@ -465,6 +714,210 @@ async def analyze_chat_experience(
         "assistant_message": assistant_message,
         "proposal": proposal,
         "run": result.run,
+    }
+
+
+@router.patch("/{conversation_id}/messages/{message_id}/experience-units-proposal")
+def update_experience_units_proposal(
+    conversation_id: str,
+    message_id: str,
+    request: ExperienceUnitsProposalUpdate,
+    current_user: User = Depends(require_csrf_user),
+    database: Session = Depends(get_database_session),
+):
+    """V2 경험 단위를 안정 ID 기준으로 수정하며 원문 추적 정보는 잠근다."""
+
+    conversation = get_conversation_or_404(conversation_id, current_user.id, database)
+    message = database.get(Message, message_id)
+    if message is None or message.conversation_id != conversation_id or message.role != "assistant":
+        raise HTTPException(status_code=404, detail="경험 단위 제안 메시지를 찾을 수 없습니다.")
+    action = next(
+        (item for item in message.actions if item.get("type") == EXPERIENCE_UNITS_ACTION),
+        None,
+    )
+    if action is None:
+        raise HTTPException(status_code=404, detail="저장된 경험 단위 제안을 찾을 수 없습니다.")
+    current = action["proposal"]
+    if current.get("version") != request.version:
+        raise HTTPException(status_code=409, detail="경험 제안이 변경되었습니다. 새로고침해 주세요.")
+    current_by_id = {unit["unit_id"]: unit for unit in current.get("units", [])}
+    for unit in request.units:
+        stored = current_by_id.get(unit.get("unit_id"))
+        if stored is None:
+            raise HTTPException(status_code=422, detail="새 경험 단위 ID를 임의로 추가할 수 없습니다.")
+        for key in (
+            "analysis_run_id", "source_ref_ids", "source_refs", "primary_span_ids",
+            "context_span_ids", "field_span_ids", "saved_experience_id", "saved_at",
+            "fact_ids",
+        ):
+            if unit.get(key) != stored.get(key):
+                raise HTTPException(status_code=422, detail=f"{key} 추적 정보는 수정할 수 없습니다.")
+    incoming_ids = {unit.get("unit_id") for unit in request.units}
+    if any(
+        unit.get("saved_experience_id") and unit.get("unit_id") not in incoming_ids
+        for unit in current.get("units", [])
+    ):
+        raise HTTPException(status_code=409, detail="이미 저장된 경험 단위는 삭제할 수 없습니다.")
+    proposal = {
+        **current,
+        "version": request.version + 1,
+        "units": deepcopy(request.units),
+        "coverage": current.get("coverage", {}),
+        "status": request.status,
+    }
+    proposal = annotate_proposal_matches(
+        database, proposal, user_id=current_user.id,
+    )
+    for updated in proposal.get("units", []):
+        stored = current_by_id.get(updated.get("unit_id")) or {}
+        if stored.get("saved_experience_id"):
+            updated["save_strategy"] = stored.get("save_strategy", {"operation": "create"})
+    proposal["coverage"] = recalculate_proposal_coverage(proposal)
+    try:
+        validate_proposal_invariants(proposal)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    _replace_units_proposal_action(message, action, proposal)
+    if current.get("status") not in {"approved", "rejected"} and request.status in {"approved", "rejected"}:
+        conversation.pending_proposal_count = max(0, conversation.pending_proposal_count - 1)
+    database.commit()
+    return proposal
+
+
+@router.get("/{conversation_id}/messages/{message_id}/experience-units-proposal/spans")
+def get_experience_unit_spans(
+    conversation_id: str,
+    message_id: str,
+    current_user: User = Depends(get_current_user),
+    database: Session = Depends(get_database_session),
+):
+    """Return authorized source slices on demand instead of copying full text into units."""
+
+    get_conversation_or_404(conversation_id, current_user.id, database)
+    message = database.get(Message, message_id)
+    if message is None or message.conversation_id != conversation_id or message.role != "assistant":
+        raise HTTPException(status_code=404, detail="경험 단위 제안 메시지를 찾을 수 없습니다.")
+    action = next(
+        (item for item in message.actions if item.get("type") == EXPERIENCE_UNITS_ACTION),
+        None,
+    )
+    if action is None:
+        raise HTTPException(status_code=404, detail="저장된 경험 단위 제안을 찾을 수 없습니다.")
+    proposal = action["proposal"]
+    span_status = (proposal.get("coverage") or {}).get("span_status") or {}
+    values: list[dict] = []
+    guest = guest_private_mode(current_user)
+    for snapshot in proposal.get("source_snapshots") or []:
+        source_text = ""
+        if snapshot.get("message_id"):
+            source = database.get(Message, snapshot["message_id"])
+            if source is None or source.conversation_id != conversation_id:
+                raise HTTPException(status_code=422, detail="원문 메시지 연결이 유효하지 않습니다.")
+            source_text = source.content
+        elif snapshot.get("attachment_id"):
+            attachment = database.get(Attachment, snapshot["attachment_id"])
+            if attachment is None or attachment.user_id != current_user.id:
+                raise HTTPException(status_code=422, detail="원문 첨부 연결이 유효하지 않습니다.")
+            source_text = attachment.extracted_text
+        if guest:
+            source_text = redact_guest_text(source_text)
+        expected_hash = snapshot.get("text_hash")
+        current_hash = sha256(source_text.encode("utf-8")).hexdigest()
+        if expected_hash and current_hash != expected_hash:
+            raise HTTPException(
+                status_code=409,
+                detail="원문이 분석 이후 변경되어 근거 구간을 표시할 수 없습니다.",
+            )
+        for span in snapshot.get("spans") or []:
+            start = int(span.get("char_start") or 0)
+            end = int(span.get("char_end") or start)
+            values.append({
+                "id": span.get("id"),
+                "source_id": snapshot.get("source_id"),
+                "source_title": snapshot.get("title") or "원문",
+                "category": span_status.get(span.get("id"), span.get("category")),
+                "char_start": start,
+                "char_end": end,
+                "text": source_text[start:end],
+            })
+    return {"items": values, "total_count": len(values)}
+
+
+@router.post("/{conversation_id}/messages/{message_id}/experience-units-proposal/approve")
+def approve_experience_unit(
+    conversation_id: str,
+    message_id: str,
+    request: ExperienceUnitApprove,
+    current_user: User = Depends(require_csrf_user),
+    database: Session = Depends(get_database_session),
+):
+    """V2 경험 한 단위를 저장하고 같은 unit_id 재요청은 재생 처리한다."""
+
+    conversation = get_conversation_or_404(conversation_id, current_user.id, database)
+    message = database.get(Message, message_id)
+    if message is None or message.conversation_id != conversation_id or message.role != "assistant":
+        raise HTTPException(status_code=404, detail="경험 단위 제안 메시지를 찾을 수 없습니다.")
+    action = next(
+        (item for item in message.actions if item.get("type") == EXPERIENCE_UNITS_ACTION),
+        None,
+    )
+    if action is None:
+        raise HTTPException(status_code=404, detail="저장된 경험 단위 제안을 찾을 수 없습니다.")
+    current = action["proposal"]
+    try:
+        validate_proposal_invariants(current)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=f"저장된 경험 단위 계약이 손상되었습니다: {error}") from error
+    unit = next(
+        (item for item in current.get("units", []) if item.get("unit_id") == request.unit_id),
+        None,
+    )
+    if unit is None:
+        raise HTTPException(status_code=404, detail="저장할 경험 단위를 찾을 수 없습니다.")
+    if unit.get("saved_experience_id"):
+        return {
+            "proposal": current,
+            "created": {"experience_id": unit["saved_experience_id"]},
+            "replayed": True,
+        }
+    if current.get("version") != request.version:
+        raise HTTPException(status_code=409, detail="경험 제안이 변경되었습니다. 새로고침해 주세요.")
+    if current.get("status") == "rejected":
+        raise HTTPException(status_code=409, detail="삭제된 경험 제안은 저장할 수 없습니다.")
+
+    source_refs = _hydrate_unit_source_refs(
+        database, unit=unit, current_user=current_user,
+        conversation_id=conversation_id,
+    )
+    experience, operation = save_experience_unit(
+        database, unit=unit, source_refs=source_refs,
+        current_user=current_user,
+    )
+    units = deepcopy(current.get("units", []))
+    saved_unit = next(item for item in units if item.get("unit_id") == request.unit_id)
+    saved_unit["saved_experience_id"] = experience.id
+    saved_unit["saved_at"] = utc_now().isoformat()
+    saved_unit["status"] = "approved"
+    all_approved = all(item.get("saved_experience_id") for item in units)
+    proposal = {
+        **current,
+        "version": request.version + 1,
+        "units": units,
+        "status": "approved" if all_approved else "edited",
+        "coverage": {
+            **current.get("coverage", {}),
+            "review_status": "approved" if all_approved else "partial",
+        },
+    }
+    _replace_units_proposal_action(message, action, proposal)
+    if current.get("status") not in {"approved", "rejected"} and all_approved:
+        conversation.pending_proposal_count = max(0, conversation.pending_proposal_count - 1)
+    database.commit()
+    return {
+        "proposal": proposal,
+        "created": {"experience_id": experience.id},
+        "operation": operation,
+        "replayed": False,
     }
 
 

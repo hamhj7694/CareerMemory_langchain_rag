@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from AI_Engine.database.models import (
     AnalysisRunRecord,
+    AnalysisRunTarget,
     ContentBlock,
     ContentDocument,
     utc_now,
@@ -17,6 +18,44 @@ from AI_Engine.database.models import (
 
 
 CONTENT_SCHEMA_VERSION = "content-blocks-v1"
+INTERNAL_EXPERIENCE_EXTENSION_KEYS = frozenset({"experience_unit_v2"})
+
+
+def public_experience_extensions(value: Any) -> dict[str, Any]:
+    """Return extension values intended for people, excluding lineage metadata."""
+
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in INTERNAL_EXPERIENCE_EXTENSION_KEYS and not key.startswith("_")
+    }
+
+
+def _has_visible_block_value(data: dict[str, Any]) -> bool:
+    return any(
+        value not in (None, "", [], {})
+        for key, value in data.items()
+        if key not in {"title", "tone"}
+    )
+
+
+def sanitize_experience_content_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hide internal trace data and stale empty projection blocks in API responses."""
+
+    visible: list[dict[str, Any]] = []
+    for source in blocks:
+        block = dict(source)
+        data = dict(block.get("data") or {})
+        block_type = block.get("type") or block.get("block_type")
+        if block_type == "properties":
+            data["value"] = public_experience_extensions(data.get("value"))
+            block["data"] = data
+        if block.get("origin") == "system_projection" and not _has_visible_block_value(data):
+            continue
+        visible.append(block)
+    return visible
 
 
 def resource_id(prefix: str) -> str:
@@ -69,6 +108,7 @@ def complete_analysis_run(
     token_usage: dict[str, Any] | None = None,
     coverage_report: dict[str, Any] | None = None,
     omitted_source_ids: Iterable[str] = (),
+    status: str = "succeeded",
 ) -> AnalysisRunRecord:
     item.external_run_id = external_run_id
     item.target_id = target_id or item.target_id
@@ -77,7 +117,7 @@ def complete_analysis_run(
     item.token_usage = token_usage or {}
     item.coverage_report = coverage_report or {}
     item.omitted_source_ids = list(dict.fromkeys(omitted_source_ids))
-    item.status = "succeeded"
+    item.status = status
     item.error = None
     item.completed_at = utc_now()
     item.updated_at = utc_now()
@@ -98,6 +138,45 @@ def fail_analysis_run(
     item.completed_at = utc_now()
     item.updated_at = utc_now()
     database.commit()
+
+
+def link_analysis_target(
+    database: Session,
+    analysis_run: AnalysisRunRecord,
+    *,
+    unit_id: str,
+    target_type: str,
+    target_id: str,
+    commit: bool = True,
+) -> AnalysisRunTarget:
+    """분석 실행의 다중 결과를 연결하면서 기존 단일 target_id도 유지한다."""
+
+    existing = database.scalar(select(AnalysisRunTarget).where(
+        AnalysisRunTarget.analysis_run_id == analysis_run.id,
+        AnalysisRunTarget.unit_id == unit_id,
+    ))
+    if existing is not None:
+        if existing.target_type != target_type or existing.target_id != target_id:
+            raise ValueError("이미 다른 저장 결과와 연결된 경험 단위입니다.")
+        return existing
+    item = AnalysisRunTarget(
+        id=resource_id("ANALYSIS-TARGET"),
+        analysis_run_id=analysis_run.id,
+        user_id=analysis_run.user_id,
+        unit_id=unit_id,
+        target_type=target_type,
+        target_id=target_id,
+    )
+    database.add(item)
+    if not analysis_run.target_id:
+        analysis_run.target_id = target_id
+        analysis_run.updated_at = utc_now()
+    if commit:
+        database.commit()
+        database.refresh(item)
+    else:
+        database.flush()
+    return item
 
 
 def analysis_run_dict(item: AnalysisRunRecord | None) -> dict[str, Any] | None:
@@ -151,7 +230,7 @@ def experience_content_blocks(payload: dict[str, Any]) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
 
     def add(block_type: str, key: str, data: dict[str, Any]) -> None:
-        if not any(value not in (None, "", [], {}) for value in data.values()):
+        if not _has_visible_block_value(data):
             return
         blocks.append({
             "id": f"core-{key}",
@@ -193,7 +272,7 @@ def experience_content_blocks(payload: dict[str, Any]) -> list[dict[str, Any]]:
     })
     add("properties", "extensions", {
         "title": "추가 정보",
-        "value": payload.get("extensions") or {},
+        "value": public_experience_extensions(payload.get("extensions")),
     })
     return blocks
 
@@ -377,5 +456,7 @@ __all__ = [
     "fail_analysis_run",
     "job_content_blocks",
     "merge_projected_blocks",
+    "public_experience_extensions",
+    "sanitize_experience_content_blocks",
     "upsert_content_document",
 ]

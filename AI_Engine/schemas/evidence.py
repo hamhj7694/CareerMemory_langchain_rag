@@ -69,7 +69,10 @@ class EvidenceSource(SchemaModel):
     def normalize_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return normalize_newlines(value)
+        # EvidenceSource is the source boundary. Preserve its exact newline
+        # sequence so byte/character offsets remain reproducible; derived
+        # summaries may normalize formatting separately.
+        return value
 
     @model_validator(mode="after")
     def validate_source_identifier(self) -> "EvidenceSource":

@@ -2,3 +2,20 @@
 .detail-editor__classification{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)}
 .detail-editor__field-heading{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2)}.detail-editor__direct-button{width:30px;height:30px;padding:0;border:1px solid var(--color-border);border-radius:var(--radius-xs);display:grid;place-items:center;color:var(--color-primary);cursor:pointer;background:var(--color-surface)}.detail-editor__direct-button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.detail-editor__direct-button:hover,.detail-editor__direct-button[aria-pressed="true"]{border-color:var(--color-primary);background:var(--color-primary-subtle)}.detail-editor__direct-button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 @media(max-width:800px){.detail-editor__classification{grid-template-columns:1fr}}
+
+/* 경험 상세는 큰 카드 여러 개 대신 두 개의 조밀한 문서 컬럼으로 표시한다. */
+.memory-detail .detail-grid{gap:var(--space-4);margin-top:var(--space-4);align-items:start}
+.memory-detail .detail-grid>main,.memory-detail .detail-grid>aside{overflow:hidden;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface)}
+.memory-detail .detail-grid .detail-card{margin:0;padding:var(--space-4);border:0;border-bottom:1px solid var(--color-border);border-radius:0;background:transparent}
+.memory-detail .detail-grid .detail-card:last-child{border-bottom:0}
+.memory-detail .detail-grid .detail-card.lead{border-top:0}
+.memory-detail .detail-grid .detail-card.attention{background:var(--color-warning-subtle,var(--color-surface-subtle))}
+.memory-detail .detail-card h3{margin:0 0 var(--space-2);font-size:var(--text-body);line-height:1.35}
+.memory-detail .detail-card p,.memory-detail .detail-card ul,.memory-detail .detail-card ol{margin-top:0;margin-bottom:0}
+.memory-detail .detail-card li{margin-bottom:4px}
+.memory-detail .content-document{gap:0}
+.memory-detail .content-document .detail-card{border-bottom:1px solid var(--color-border)}
+.memory-detail .content-document .detail-card:last-child{border-bottom:0}
+.memory-detail .detail-grid--edit textarea{min-height:76px}
+.memory-detail .detail-grid--edit .detail-block-editor__item{margin-bottom:var(--space-2);padding:var(--space-3)}
+@media(max-width:800px){.memory-detail .detail-grid{gap:var(--space-3)}.memory-detail .detail-grid .detail-card{padding:var(--space-3)}}

@@ -1133,6 +1133,40 @@ class AnalysisRunRecord(Base):
     )
 
 
+class AnalysisRunTarget(Base):
+    """한 분석 실행에서 저장된 여러 결과를 안정적인 단위 ID와 연결한다."""
+
+    __tablename__ = "analysis_run_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_run_id",
+            "target_type",
+            "target_id",
+            name="uq_analysis_run_targets_target",
+        ),
+        UniqueConstraint(
+            "analysis_run_id",
+            "unit_id",
+            name="uq_analysis_run_targets_unit",
+        ),
+        Index("ix_analysis_run_targets_user", "user_id", "target_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    analysis_run_id: Mapped[str] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    unit_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ContentDocument(Base):
     """Experience나 Job의 표시 형식과 독립적인 자유 형식 블록 문서."""
 
@@ -1215,6 +1249,7 @@ class ContentBlock(Base):
 
 __all__ = [
     "AnalysisRunRecord",
+    "AnalysisRunTarget",
     "Attachment",
     "AuthSession",
     "Conversation",

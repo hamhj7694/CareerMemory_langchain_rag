@@ -26,6 +26,7 @@ class IntegratedJobResult(TypedDict):
 
 class IntegratedAnalysisFailure(TypedDict, total=False):
     stage: str
+    code: str
     message: str
     source_message_id: str
 
@@ -50,6 +51,26 @@ def _error_message(error: Exception) -> str:
     if isinstance(error, HTTPException):
         return str(error.detail)
     return str(error) or error.__class__.__name__
+
+
+def _failure_code(error: Exception) -> str:
+    """Classify failures without exposing source text or provider responses."""
+
+    status_code = getattr(error, "status_code", None)
+    if status_code in {401, 403}:
+        return "provider_auth"
+    if status_code == 429:
+        return "provider_limit"
+    if isinstance(status_code, int) and status_code >= 500:
+        return "provider_unavailable"
+    name = type(error).__name__
+    if name == "ExperienceAIOutputError":
+        return "invalid_output"
+    if name == "ExperienceAIInputError":
+        return "invalid_input"
+    if name in {"APIConnectionError", "APITimeoutError"}:
+        return "provider_unavailable"
+    return "analysis_error"
 
 
 class ConversationAnalysisWorkflow:
@@ -158,6 +179,7 @@ class ConversationAnalysisWorkflow:
                     if self.route_content is not None
                     else "discover_jobs"
                 ),
+                "code": _failure_code(error),
                 "message": _error_message(error),
             })
             content_route = None
@@ -221,6 +243,7 @@ class ConversationAnalysisWorkflow:
             sources = []
             failures.append({
                 "stage": "partition_sources",
+                "code": _failure_code(error),
                 "message": _error_message(error),
             })
         return {
@@ -254,6 +277,7 @@ class ConversationAnalysisWorkflow:
             except Exception as error:
                 failures.append({
                     "stage": "analyze_jobs",
+                    "code": _failure_code(error),
                     "message": _error_message(error),
                     "source_message_id": candidate.message_id,
                 })
@@ -289,10 +313,18 @@ class ConversationAnalysisWorkflow:
             result = self.analyze_experiences(
                 state.get("experience_sources", [])
             )
+            if getattr(getattr(result, "run", None), "status", "succeeded") == "partial":
+                succeeded = False
+                failures.append({
+                    "stage": "analyze_experiences",
+                    "code": "invalid_output",
+                    "message": "Some model drafts failed evidence validation.",
+                })
         except Exception as error:
             succeeded = False
             failures.append({
                 "stage": "analyze_experiences",
+                "code": _failure_code(error),
                 "message": _error_message(error),
             })
         return {

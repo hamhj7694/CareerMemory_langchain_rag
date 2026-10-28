@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import select
@@ -50,6 +51,7 @@ class ConversationMemoryManager:
         history: Sequence[Message],
         *,
         before_sequence: int | None = None,
+        redact_text: Callable[[str], str] | None = None,
     ) -> tuple[ConversationSummaryContext | None, list[Message]]:
         """필요할 때만 오래된 메시지를 요약하고 최근 원문 범위를 반환한다."""
 
@@ -94,8 +96,18 @@ class ConversationMemoryManager:
         if should_summarize:
             summarize_messages = unsummarized[:-keep_recent_count]
             summary_text = self._summarize(
-                previous_summary=stored.summary_text if stored else "",
-                messages=summarize_messages,
+                previous_summary=(
+                    redact_text(stored.summary_text) if redact_text and stored
+                    else stored.summary_text if stored else ""
+                ),
+                messages=[
+                    SimpleNamespace(
+                        role=item.role,
+                        sequence=item.sequence,
+                        content=redact_text(item.content),
+                    )
+                    for item in summarize_messages
+                ] if redact_text else summarize_messages,
             )
             summary_through = summarize_messages[-1].sequence
             if stored is None:

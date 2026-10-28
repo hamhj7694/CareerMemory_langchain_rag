@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyProposalPanelChanges, createLocalExperienceProposal, splitProposalSources, toProposalView } from './proposalMapper.js';
+import { applyExperienceUnitsChanges, applyProposalPanelChanges, createLocalExperienceProposal, splitProposalSources, toProposalView } from './proposalMapper.js';
 
 const sources = [
   { id: 'SRC-MSG-1', source_type: 'message_text', title: '대화 원문', text: '첫 번째 대화' },
@@ -138,5 +138,81 @@ describe('proposal mapper', () => {
       source_ref_ids: ['SRC-MSG-1', 'SRC-FILE-1'],
     });
     expect(payload.experiences[1].domain).toMatchObject({ id: 'DOM-1', name: '직장 경험' });
+  });
+
+  it('maps the v2 unit contract and keeps immutable trace fields when edited', () => {
+    const proposal = toProposalView({
+      id: 'UNITS-1',
+      version: 1,
+      contract_version: 'experience-units-v2',
+      coverage: { processing_status: 'complete' },
+      units: [{
+        unit_id: 'UNIT-1',
+        domain: { name: 'AI' },
+        project: { name: 'Career Memory' },
+        title: '기존 제목',
+        actions: ['설계'],
+        results: ['단축'],
+        source_ref_ids: ['SRC-1'],
+        source_refs: [{ id: 'SRC-1', message_id: 'MSG-1' }],
+        primary_span_ids: ['SPAN-1'],
+        context_span_ids: ['SPAN-H'],
+        field_span_ids: { actions: ['SPAN-1'] },
+      }],
+    });
+    const edited = { ...proposal, units: [{ ...proposal.units[0], title: '수정 제목' }] };
+    const wireUnits = applyExperienceUnitsChanges(proposal, edited);
+
+    expect(proposal).toMatchObject({ kind: 'experience-units', contractVersion: 'experience-units-v2' });
+    expect(wireUnits[0]).toMatchObject({
+      unit_id: 'UNIT-1',
+      title: '수정 제목',
+      source_ref_ids: ['SRC-1'],
+      primary_span_ids: ['SPAN-1'],
+      context_span_ids: ['SPAN-H'],
+    });
+  });
+
+  it('does not truncate a large v2 unit collection while mapping and editing', () => {
+    const sourceUnits = Array.from({ length: 80 }, (_, index) => ({
+      unit_id: `UNIT-${index + 1}`,
+      title: `경험 ${index + 1}`,
+      domain: { name: '개발 경험' },
+      project: { name: `프로젝트 ${Math.floor(index / 10) + 1}` },
+      actions: [`행동 ${index + 1}`],
+      results: [`결과 ${index + 1}`],
+      primary_span_ids: [`SPAN-${index + 1}`],
+      context_span_ids: [`HEADING-${Math.floor(index / 10) + 1}`],
+      source_ref_ids: [`SOURCE-${index + 1}`],
+    }));
+    const proposal = toProposalView({
+      id: 'UNITS-LARGE',
+      version: 1,
+      contract_version: 'experience-units-v2',
+      coverage: { processing_status: 'complete', experience_span_count: 80 },
+      units: sourceUnits,
+    });
+
+    expect(proposal.units).toHaveLength(80);
+    expect(proposal.units.at(-1)).toMatchObject({
+      unitId: 'UNIT-80',
+      title: '경험 80',
+      primarySpanIds: ['SPAN-80'],
+    });
+
+    const wireUnits = applyExperienceUnitsChanges(proposal, {
+      ...proposal,
+      units: proposal.units.map((unit, index) => (
+        index === 79 ? { ...unit, title: '수정한 마지막 경험' } : unit
+      )),
+    });
+
+    expect(wireUnits).toHaveLength(80);
+    expect(wireUnits.at(-1)).toMatchObject({
+      unit_id: 'UNIT-80',
+      title: '수정한 마지막 경험',
+      primary_span_ids: ['SPAN-80'],
+      source_ref_ids: ['SOURCE-80'],
+    });
   });
 });

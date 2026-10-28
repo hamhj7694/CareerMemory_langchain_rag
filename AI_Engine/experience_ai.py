@@ -59,7 +59,7 @@ from AI_Engine.schemas import (
 # 5. 모델·프롬프트·스키마 버전
 # 저장된 초안이 어떤 구성으로 생성됐는지 추적할 수 있도록 실행 결과에 기록한다.
 DEFAULT_EXPERIENCE_MODEL = "gpt-4o-mini"
-EXPERIENCE_PROMPT_VERSION = "experience-prompt-v5"
+EXPERIENCE_PROMPT_VERSION = "experience-prompt-v6-atomic-units"
 EXPERIENCE_SCHEMA_VERSION = "experience-schema-v3"
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,9 @@ EXPERIENCE_SYSTEM_PROMPT = """
 
 한 입력에 여러 경험이 있으면 여러 초안으로 분리하고,
 같은 경험 분류와 프로젝트·활동에 속하면 같은 이름을 일관되게 사용해.
+상위 프로젝트가 같아도 문제/목표가 다르거나 독립적으로 설명 가능한 행동·결과라면
+반드시 별도 초안으로 분리해. 한 초안에는 하나의 문제/목표와 그에 직접 연결된
+행동·결과만 포함해.
 
 [경험 판정 기준]
 - 사용자가 직접 수행한 업무, 프로젝트, 학습, 활동, 문제 해결, 협업 사례는 경험이야.
@@ -129,6 +132,10 @@ EXPERIENCE_SYSTEM_PROMPT = """
 - metrics에는 원문에 실제로 등장한 수치 표현만 넣어. 계산하거나 반올림하지 말고
   raw_expression, metric_name, source_ref_id, 정확한 quote를 반환해.
 - source_ref_ids에는 해당 초안 작성에 실제 사용한 근거 ID만 넣어.
+- 각 원본 근거 ID는 원문의 한 구간을 나타낸다. 그 구간을 경험 판단에 사용했다면
+  source_ref_ids와 해당 필드의 field_citations에 빠뜨리지 마.
+- 서로 다른 초안이 같은 구간을 주 내용으로 중복 사용하지 마. 프로젝트 제목 같은
+  공통 맥락만 필요한 경우에도 실제 행동·결과 구간을 함께 인용해.
 - 입력에 제공되지 않은 source_ref_id를 절대 만들지 마.
 - assistant_context는 연결된 사용자 원문의 생략된 대상만 해석하는 데 사용해.
 - assistant_context로 생략된 대상을 복원할 때 그 대상 명사를 그대로 보존하고
@@ -451,7 +458,13 @@ class ExperienceAI:
 
         try:
             file_analyses = self.file_analyzer.analyze_sources(
-                analyzed_sources
+                [
+                    source
+                    for source in analyzed_sources
+                    # V2 GROUP sources are already bounded exact-text spans,
+                    # not whole uploaded files that need another lossy summary.
+                    if not source.id.startswith("GROUP-")
+                ]
             )
         except (ExperienceFileAnalysisError, ValidationError, ValueError) as error:
             raise ExperienceAIOutputError(
@@ -505,6 +518,7 @@ class ExperienceAI:
         source_text_by_id = {
             source.id: source.text or "" for source in analyzed_sources
         }
+        rejected_draft_count = 0
         try:
             drafts = self._convert_drafts(
                 raw_drafts,
@@ -545,11 +559,32 @@ class ExperienceAI:
                 instructions=EXPERIENCE_SYSTEM_PROMPT,
             )
             retry_raw_drafts = self._function_arguments(format_retry_response)
-            drafts = self._convert_drafts(
-                retry_raw_drafts,
-                known_source_ids=known_source_ids,
-                source_text_by_id=source_text_by_id,
-            )
+            try:
+                drafts = self._convert_drafts(
+                    retry_raw_drafts,
+                    known_source_ids=known_source_ids,
+                    source_text_by_id=source_text_by_id,
+                )
+            except ExperienceAIOutputError:
+                drafts = self._valid_drafts(
+                    retry_raw_drafts,
+                    known_source_ids=known_source_ids,
+                    source_text_by_id=source_text_by_id,
+                )
+                rejected_draft_count = len(retry_raw_drafts) - len(drafts)
+                if not drafts:
+                    drafts = self._valid_drafts(
+                        raw_drafts,
+                        known_source_ids=known_source_ids,
+                        source_text_by_id=source_text_by_id,
+                    )
+                    rejected_draft_count = len(raw_drafts) - len(drafts)
+                if not drafts:
+                    raise
+                logger.warning(
+                    "Experience analysis retained %d valid drafts and rejected %d invalid drafts",
+                    len(drafts), rejected_draft_count,
+                )
         drafts = self._preserve_contextual_answers(
             drafts,
             analyzed_sources,
@@ -567,7 +602,8 @@ class ExperienceAI:
                     id=run_id,
                     client_request_id=request.client_request_id,
                     input_type=request.input_type,
-                    status=ExtractionRunStatus.SUCCEEDED,
+                    status=(ExtractionRunStatus.PARTIAL if rejected_draft_count
+                            else ExtractionRunStatus.SUCCEEDED),
                     conversation_id=request.conversation_id,
                     from_sequence=request.from_sequence,
                     to_sequence=request.to_sequence,
@@ -581,6 +617,7 @@ class ExperienceAI:
                     completed_at=completed_at,
                 ),
                 experience_drafts=drafts,
+                rejected_draft_count=rejected_draft_count,
                 sources=registered_sources,
                 file_analyses=file_analyses,
                 analyzed_source_ids=[
@@ -979,6 +1016,25 @@ class ExperienceAI:
             for raw_draft in raw_drafts
         ]
 
+    def _valid_drafts(
+        self,
+        raw_drafts: Sequence[Mapping[str, Any]],
+        *,
+        known_source_ids: set[str],
+        source_text_by_id: Mapping[str, str],
+    ) -> list[ExperienceDraft]:
+        valid = []
+        for raw_draft in raw_drafts:
+            try:
+                valid.append(self._to_experience_draft(
+                    raw_draft,
+                    known_source_ids=known_source_ids,
+                    source_text_by_id=source_text_by_id,
+                ))
+            except ExperienceAIOutputError:
+                continue
+        return valid
+
     # 근거에서 확인된 내용은 facts.N 위치별 EvidenceCitation과 함께 저장한다.
     def _to_experience_draft(
         self,
@@ -1010,7 +1066,16 @@ class ExperienceAI:
                 )
             if source_text_by_id is not None:
                 source_text = source_text_by_id.get(source_ref_id)
-                if source_text is None or quote not in source_text:
+                if source_text is not None and quote not in source_text:
+                    words = quote.split()
+                    if words:
+                        approximate = re.search(
+                            r"\s+".join(re.escape(word) for word in words),
+                            source_text,
+                        )
+                        if approximate is not None:
+                            quote = approximate.group()
+                if source_text is None or not quote or quote not in source_text:
                     raise ExperienceAIOutputError(
                         "facts의 quote가 해당 원본 근거의 정확한 인용이 아닙니다."
                     )

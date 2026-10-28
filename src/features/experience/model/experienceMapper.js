@@ -1,4 +1,5 @@
 import { toExperienceContent, toExperienceContentChanges } from './experienceContent.js';
+import { sanitizeExperienceContentBlocks } from './experienceDetailModel.js';
 
 const list = (value) => Array.isArray(value) ? value.filter(Boolean) : [];
 
@@ -30,7 +31,7 @@ export function toExperience(item = {}) {
     analysisRunId: item.analysisRunId || item.analysis_run_id || null,
     analysisRun: item.analysisRun || item.analysis_run || null,
     contentDocument: item.contentDocument || item.content_document || null,
-    contentBlocks: list(item.contentBlocks || item.content_blocks || item.contentDocument?.blocks || item.content_document?.blocks),
+    contentBlocks: sanitizeExperienceContentBlocks(item.contentBlocks || item.content_blocks || item.contentDocument?.blocks || item.content_document?.blocks),
     extensions: item.extensions && typeof item.extensions === 'object' ? item.extensions : {},
     factEvidenceStatus: item.factEvidenceStatus || item.fact_evidence_status || {},
     missingInformation: list(item.missingInformation || item.missing_information),

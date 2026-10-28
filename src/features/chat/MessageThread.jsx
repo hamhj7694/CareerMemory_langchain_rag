@@ -1,4 +1,4 @@
-import { InlineProposalCard } from './InlineProposalCard.jsx';
+import { ProposalCard } from './ProposalCard.jsx';
 import { MarkdownMessage } from './MarkdownMessage.jsx';
 import { CHAT_QUICK_ACTIONS } from './chatQuickActions.js';
 
@@ -57,9 +57,12 @@ export function MessageThread({ messages, proposals, busy, busyLabel = '답변�
       {message.proposalIds?.map((proposalId) => {
         const proposal = proposals[proposalId];
         if (!proposal) return null;
-        {/* 제안 버전이 갱신되어도 카드 컴포넌트를 재마운트하지 않아
-            각 경험 분류의 접힘/펼침 상태를 유지합니다. */}
-        return <InlineProposalCard key={proposalId} proposal={proposal} onApprove={onApproveProposal} onReject={onRejectProposal} onDiscardRemainingExperiences={onDiscardRemainingProposalExperiences} onChange={onChangeProposal} onRemoveExperience={onRemoveProposalExperience} showBatchActions />;
+        {/* Legacy 카드는 접힘 상태를 유지하고, V2 카드는 승인·편집 응답을
+            로컬 편집 상태에 안전하게 반영하기 위해 버전별로 다시 마운트합니다. */}
+        const cardKey = proposal.contractVersion === 'experience-units-v2'
+          ? `${proposalId}-${proposal.version}`
+          : proposalId;
+        return <ProposalCard key={cardKey} proposal={proposal} onApprove={onApproveProposal} onReject={onRejectProposal} onDiscardRemainingExperiences={onDiscardRemainingProposalExperiences} onChange={onChangeProposal} onRemoveExperience={onRemoveProposalExperience} showBatchActions />;
       })}
     </article>)}
     {busy && !streamingMessageId && <article className="v2-message v2-message--assistant v2-message--thinking" role="status"><div className="v2-message__meta">Career Memory</div><p><span /> {busyLabel}</p></article>}

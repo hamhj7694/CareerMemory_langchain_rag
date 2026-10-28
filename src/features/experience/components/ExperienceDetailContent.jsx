@@ -1,4 +1,11 @@
 import { listToText, textToMarkdownLines } from '../model/experienceContent.js';
+import {
+  editableCustomBlocks,
+  metricsToText,
+  periodToText,
+  textToMetrics,
+  textToPeriod,
+} from '../model/experienceDetailModel.js';
 import { ExperienceRichList, ExperienceRichText } from './ExperienceRichText.jsx';
 import { ContentDocumentRenderer } from './ContentBlockRenderer.jsx';
 
@@ -71,31 +78,34 @@ export function ExperienceDetailContent({
   openSources,
 }) {
   if (!editing) {
-    if (item.contentBlocks?.length) {
-      return (
-        <div className="detail-grid detail-grid--blocks">
-          <main><ContentDocumentRenderer blocks={item.contentBlocks} /></main>
-          <aside>
-            {item.analysisRun && <DetailCard title="AI 분석 기록"><p>{item.analysisRun.status === 'succeeded' ? '분석 결과가 원문과 함께 보존되어 있습니다.' : '분석 상태를 확인해 주세요.'}</p><small>스키마 {item.analysisRun.versions?.schema || '기록 없음'}</small></DetailCard>}
-            <EvidenceCard count={item.evidenceIds.length} isNew={isNew} openSources={openSources} manage />
-          </aside>
-        </div>
-      );
-    }
+    const customBlocks = editableCustomBlocks(item.contentBlocks);
+    const periodText = periodToText(item.period);
+    const metricsText = metricsToText(item.metrics);
+    const hasMainContent = Boolean(
+      item.summary?.trim()
+      || item.situation?.trim()
+      || item.actions?.some(Boolean)
+      || item.results?.some(Boolean)
+      || item.missingInformation?.some(Boolean)
+      || customBlocks.length,
+    );
     return (
-      <div className="detail-grid">
+      <div className="detail-grid detail-grid--compact">
         <main>
-          <DetailCard title="요약" tone="lead"><ExperienceRichText text={item.summary} /></DetailCard>
-          <DetailCard title="상황"><ExperienceRichText text={item.situation} /></DetailCard>
-          <DetailCard title="행동"><ExperienceRichList items={item.actions} /></DetailCard>
-          <DetailCard title="결과"><ExperienceRichList items={item.results} /></DetailCard>
+          {item.summary?.trim() && <DetailCard title="요약" tone="lead"><ExperienceRichText text={item.summary} /></DetailCard>}
+          {item.situation?.trim() && <DetailCard title="상황"><ExperienceRichText text={item.situation} /></DetailCard>}
+          {item.actions?.some(Boolean) && <DetailCard title="행동"><ExperienceRichList items={item.actions} /></DetailCard>}
+          {item.results?.some(Boolean) && <DetailCard title="결과"><ExperienceRichList items={item.results} /></DetailCard>}
+          {item.missingInformation?.some(Boolean) && <DetailCard title="확인이 필요한 정보" tone="attention"><ExperienceRichList items={item.missingInformation} /></DetailCard>}
+          {customBlocks.length > 0 && <ContentDocumentRenderer blocks={customBlocks} />}
+          {!hasMainContent && <DetailCard title="경험 내용"><p>{emptyText}</p></DetailCard>}
         </main>
         <aside>
-          <DetailCard title="내 직군·직업 및 역할"><p style={{ whiteSpace: 'pre-wrap' }}>{item.role || emptyText}</p></DetailCard>
-          <DetailCard title="역량">
-            <div className="skill-list">{item.skills?.length ? item.skills.map((value) => <span key={value}>{value}</span>) : <p>{emptyText}</p>}</div>
-          </DetailCard>
-          <DetailCard title="근거에서 확인된 내용"><ExperienceRichList items={item.facts} /></DetailCard>
+          {item.role?.trim() && <DetailCard title="내 직군·직업 및 역할"><p style={{ whiteSpace: 'pre-wrap' }}>{item.role}</p></DetailCard>}
+          {item.skills?.length > 0 && <DetailCard title="역량"><div className="skill-list">{item.skills.map((value) => <span key={value}>{value}</span>)}</div></DetailCard>}
+          {item.facts?.some(Boolean) && <DetailCard title="근거에서 확인된 내용"><ExperienceRichList items={item.facts} /></DetailCard>}
+          {periodText && <DetailCard title="기간"><ExperienceRichText text={periodText} /></DetailCard>}
+          {metricsText && <DetailCard title="수치 성과"><ExperienceRichText text={metricsText} /></DetailCard>}
           <EvidenceCard count={item.evidenceIds.length} isNew={isNew} openSources={openSources} manage />
         </aside>
       </div>
@@ -103,7 +113,7 @@ export function ExperienceDetailContent({
   }
 
   const systemBlocks = (form.contentBlocks || []).filter((block) => block.origin === 'system_projection');
-  const editableBlocks = (form.contentBlocks || []).filter((block) => block.origin !== 'system_projection');
+  const editableBlocks = editableCustomBlocks(form.contentBlocks);
   const setEditableBlocks = (blocks) => onFormChange('contentBlocks', [...systemBlocks, ...blocks]);
   const updateEditableBlock = (index, updater) => setEditableBlocks(editableBlocks.map((block, blockIndex) => blockIndex === index ? updater(block) : block));
   const moveEditableBlock = (index, offset) => {
@@ -128,6 +138,9 @@ export function ExperienceDetailContent({
         </DetailCard>
         <DetailCard title="결과">
           <textarea rows="6" value={listToText(form.results)} placeholder="마크업 문법으로 입력할 수 있습니다. 예: 1. 내용 / - 내용" onChange={(event) => onFormChange('results', textToMarkdownLines(event.target.value))} />
+        </DetailCard>
+        <DetailCard title="확인이 필요한 정보">
+          <textarea rows="4" value={listToText(form.missingInformation)} placeholder="추가 확인이 필요한 내용을 한 줄에 하나씩 입력해 주세요." onChange={(event) => onFormChange('missingInformation', textToMarkdownLines(event.target.value))} />
         </DetailCard>
         <DetailCard title="추가 정보 블록" className="detail-block-editor">
           <p className="detail-block-editor__guide">정해진 항목에 들어가지 않는 맥락도 블록으로 추가해 그대로 보존할 수 있습니다.</p>
@@ -173,6 +186,12 @@ export function ExperienceDetailContent({
         </DetailCard>
         <DetailCard title="근거에서 확인된 내용">
           <textarea rows="4" value={listToText(form.facts)} placeholder="원본 근거에서 확인된 수치, 기간, 횟수와 성과를 입력해 주세요." onChange={(event) => onFormChange('facts', textToMarkdownLines(event.target.value))} />
+        </DetailCard>
+        <DetailCard title="기간">
+          <textarea rows="2" value={periodToText(form.period)} placeholder="예: 2026-01 ~ 2026-06" onChange={(event) => onFormChange('period', textToPeriod(event.target.value))} />
+        </DetailCard>
+        <DetailCard title="수치 성과">
+          <textarea rows="4" value={metricsToText(form.metrics)} placeholder="한 줄에 하나씩 입력해 주세요." onChange={(event) => onFormChange('metrics', textToMetrics(event.target.value))} />
         </DetailCard>
         <EvidenceCard count={item.evidenceIds.length} isNew={isNew} openSources={openSources} />
       </aside>

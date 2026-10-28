@@ -427,6 +427,47 @@ class ConversationJobExtractionApiTests(unittest.TestCase):
             0,
         )
 
+    def test_guest_combined_analysis_sanitizes_existing_message_before_ai(self) -> None:
+        self.current_user.account_type = "guest"
+        conversation_id = self._add_conversation(
+            "# 함형준 | AI 엔지니어\n"
+            "Email · tester@example.com\n"
+            "Phone · 010-1234-5678\n"
+            "Career Memory에서 RAG를 구현했습니다."
+        )
+        captured = []
+
+        def organize(_request, *, sources):
+            captured.extend(sources)
+            return SimpleNamespace(experience_drafts=[])
+
+        app.dependency_overrides[get_conversation_job_discovery_ai] = (
+            lambda: SimpleNamespace(discover=lambda _sources: [])
+        )
+        app.dependency_overrides[get_experience_ai] = (
+            lambda: SimpleNamespace(organize=organize)
+        )
+        try:
+            response = self.client.post(
+                f"/api/v2/conversations/{conversation_id}/analyses",
+                json={"client_request_id": str(uuid4())},
+            )
+        finally:
+            self.current_user.account_type = "simple"
+            app.dependency_overrides[get_conversation_job_discovery_ai] = (
+                lambda: SimpleNamespace(discover=extract_job_posting_candidates)
+            )
+            app.dependency_overrides.pop(get_experience_ai, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["run"]["status"], "succeeded")
+        captured_text = "\n".join(source.text for source in captured)
+        self.assertGreaterEqual(len(captured), 1)
+        self.assertIn("Career Memory에서 RAG를 구현했습니다", captured_text)
+        self.assertNotIn("함형준", captured_text)
+        self.assertNotIn("tester@example.com", captured_text)
+        self.assertNotIn("010-1234-5678", captured_text)
+
 
 if __name__ == "__main__":
     unittest.main()

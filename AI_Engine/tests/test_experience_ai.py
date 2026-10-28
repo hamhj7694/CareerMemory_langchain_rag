@@ -415,6 +415,42 @@ class ExperienceAITests(unittest.TestCase):
         self.assertEqual(len(responses.calls), 2)
         self.assertIn("글자를 바꾸지 않고 복사", responses.calls[1]["input"])
 
+    def test_quote_with_whitespace_difference_uses_exact_source_span(self) -> None:
+        request = ExperienceExtractionRequest(
+            client_request_id="whitespace-quote",
+            input_type="direct_input",
+            text="Career Memory에서 RAG를 구현했습니다.\n처리시간을 65.30% 줄였습니다.",
+            manual_input_id="manual-1",
+        )
+        draft = valid_raw_draft(
+            quote="Career Memory에서 RAG를 구현했습니다. 처리시간을 65.30% 줄였습니다."
+        )
+        responses = FakeResponses({"experience_drafts": [draft]})
+
+        result = self.create_ai(responses).organize(request)
+
+        citation = result.experience_drafts[0].field_citations["facts.0"][0]
+        self.assertEqual(
+            citation.quote,
+            "Career Memory에서 RAG를 구현했습니다.\n처리시간을 65.30% 줄였습니다.",
+        )
+        self.assertEqual(len(responses.calls), 1)
+
+    def test_invalid_draft_does_not_discard_other_verified_drafts(self) -> None:
+        invalid = valid_raw_draft(title="검증 실패", quote="원문에 없는 사실")
+        valid = valid_raw_draft(title="검증 성공")
+        responses = SequentialFakeResponses([
+            {"experience_drafts": [valid, invalid]},
+            {"experience_drafts": [valid, invalid]},
+        ])
+
+        result = self.create_ai(responses).organize(self.request)
+
+        self.assertEqual(result.run.status, "partial")
+        self.assertEqual(result.rejected_draft_count, 1)
+        self.assertEqual(len(result.experience_drafts), 1)
+        self.assertEqual(result.experience_drafts[0].title, "검증 성공")
+
     def test_context_subject_is_preserved_with_user_reply_as_evidence(self) -> None:
         request = ExperienceExtractionRequest(
             client_request_id="request-context",

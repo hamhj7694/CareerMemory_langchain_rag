@@ -83,6 +83,111 @@ test('간단 아이디로 시작한 뒤 채팅 스트리밍과 새로고침 복�
   await expect(page.locator('.v2-message--assistant').last()).toContainText('채팅 응답 정상');
 });
 
+test('대화 입력을 분석한 경험 카드가 저장되고 새로고침 후에도 표시된다', async ({ page }) => {
+  test.skip(process.env.E2E_AI_MODE === 'live', '고정된 합성 분석 결과로 검증합니다.');
+  await startNewConversation(page);
+  const prompt = '# E2E 경험 분석\n\n## Career Memory\n- **핵심 구현** · FastAPI API를 구현했습니다.\n- **성과** · 처리 시간을 20% 줄였습니다.';
+
+  await page.locator('textarea').fill(prompt);
+  await page.getByRole('button', { name: '메시지 보내기' }).click();
+  await expect(page.locator('.v2-message--user').last()).toContainText(prompt);
+  await expect(page.locator('.v2-message--assistant').last()).toContainText('FastAPI');
+  await expect(page).toHaveURL(/\/chat\/CONV-/);
+
+  const analyzeButton = page.getByRole('button', { name: /대화내용으로 경험\/공고 분석하기/ });
+  await expect(analyzeButton).toBeEnabled();
+  await analyzeButton.click();
+  const proposal = page.locator('.v2-experience-units').last();
+  await expect(proposal).toContainText('개인 프로젝트');
+  await expect(proposal).toContainText('Career Memory');
+  await expect(proposal).toContainText('FastAPI 처리 시간 개선');
+  await expect(proposal).toContainText('처리 시간을 20% 줄였습니다.');
+  await proposal.getByText(/연결된 원문 구간/).click();
+  await expect(proposal).toContainText('처리 시간을 20% 줄였습니다.');
+
+  await proposal.getByRole('button', { name: '전체 저장' }).click();
+  await expect(proposal).toContainText('저장됨');
+  await expect(page.getByText('모든 경험 단위를 저장했습니다.')).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator('.v2-experience-units').last()).toContainText('저장됨');
+  await page.goto('/memory');
+  await expect(page.getByRole('button', { name: /FastAPI 처리 시간 개선/ })).toBeVisible();
+});
+
+test('여러 긴 혼합 메시지를 배치 분석해 모든 경험 카드를 저장한다', async ({ page }) => {
+  test.skip(process.env.E2E_AI_MODE === 'live', '고정된 대량 합성 분석 결과로 검증합니다.');
+  await startNewConversation(page);
+  const textarea = page.locator('textarea');
+  const sendButton = page.getByRole('button', { name: '메시지 보내기' });
+
+  for (let messageIndex = 1; messageIndex <= 3; messageIndex += 1) {
+    const lines = Array.from({ length: 24 }, (_, lineIndex) => (
+      lineIndex % 2 === 0
+        ? `- [경험] 기능 ${messageIndex}-${lineIndex}을 구현했습니다.`
+        : `- 점심 메뉴와 임시 메모 ${messageIndex}-${lineIndex}입니다.`
+    ));
+    await textarea.fill(`# E2E 혼합 스트레스 ${messageIndex}\n${lines.join('\n')}`);
+    await sendButton.click();
+    await expect(page.locator('.v2-message--assistant')).toHaveCount(messageIndex);
+  }
+
+  const analyzeButton = page.getByRole('button', { name: /대화내용으로 경험\/공고 분석하기/ });
+  await expect(analyzeButton).toBeEnabled();
+  await analyzeButton.click();
+
+  const proposal = page.locator('.v2-experience-units').last();
+  await expect(proposal).toContainText('경험 단위 · 36개');
+  await expect(proposal.locator('.v2-experience-unit')).toHaveCount(36);
+  await expect(proposal).toContainText('검토 필요 36');
+  await expect(proposal).toContainText('[경험] 기능 3-22을 구현했습니다.');
+
+  await proposal.getByRole('button', { name: '전체 저장' }).click();
+  await expect(proposal.locator('.v2-experience-unit.is-approved')).toHaveCount(36, { timeout: 30_000 });
+  await expect(proposal).toContainText('저장하지 않은 단위 0개');
+
+  await page.reload();
+  await expect(page.locator('.v2-experience-units').last().locator('.v2-experience-unit.is-approved')).toHaveCount(36);
+  await page.goto('/memory');
+  await expect(page.getByRole('button', { name: /\[경험\] 기능 3-22을 구현했습니다\./ })).toBeVisible();
+});
+
+test('경험 관리 직접 분석이 v2 단위로 저장되고 재분석은 기존 경험을 업데이트한다', async ({ page }) => {
+  test.skip(process.env.E2E_AI_MODE === 'live', '고정된 합성 분석 결과로 검증합니다.');
+  const title = '[경험] 관리 화면 전용 기능을 구현했습니다.';
+  const input = `# E2E 혼합 스트레스 경험 관리\n- ${title}`;
+  await page.goto('/memory');
+
+  const analyzeAndSave = async (expectedMode, saveButtonName, savedLabel) => {
+    await page.getByRole('button', { name: '+ 경험 분석하기', exact: true }).click();
+    const intake = page.getByRole('dialog', { name: '경험정리 AI' });
+    await intake.getByLabel('경험 내용').fill(input);
+    await intake.getByRole('button', { name: '경험 정리하기' }).click();
+    const preview = page.getByRole('dialog', { name: '경험 AI 분석 결과' });
+    await expect(preview).toContainText('경험 단위 · 1개');
+    await expect(preview).toContainText(expectedMode);
+    await preview.getByRole('button', { name: saveButtonName }).click();
+    await expect(preview).toContainText(savedLabel);
+    await preview.getByRole('button', { name: '닫기' }).click();
+    await expect(preview).toBeHidden();
+  };
+
+  await analyzeAndSave('새 경험 생성', '경험으로 저장', '저장됨');
+  const afterCreate = await page.request.get('/api/v2/experiences');
+  expect(afterCreate.status()).toBe(200);
+  const createdMatches = (await afterCreate.json()).items.filter((item) => item.title === title);
+  expect(createdMatches).toHaveLength(1);
+  const experienceId = createdMatches[0].id;
+
+  await analyzeAndSave('기존 경험 업데이트', '기존 경험에 추가', '업데이트됨');
+  const afterUpdate = await page.request.get('/api/v2/experiences');
+  expect(afterUpdate.status()).toBe(200);
+  const updatedMatches = (await afterUpdate.json()).items.filter((item) => item.title === title);
+  expect(updatedMatches).toHaveLength(1);
+  expect(updatedMatches[0].id).toBe(experienceId);
+  expect(updatedMatches[0].source_ids).toHaveLength(2);
+});
+
 test('답변 생성 중 추가 메시지를 보내면 이전 답변을 취소하고 사용자 문장을 합친다', async ({ page }) => {
   await startNewConversation(page);
   const textarea = page.locator('textarea');

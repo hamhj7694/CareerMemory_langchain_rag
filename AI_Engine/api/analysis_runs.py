@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.database.connection import get_database_session
-from AI_Engine.database.models import AnalysisRunRecord, User, utc_now
+from AI_Engine.database.models import AnalysisRunRecord, AnalysisRunTarget, User, utc_now
 
 
 router = APIRouter(prefix="/api/v2/analysis-runs", tags=["analysis-runs"])
@@ -24,7 +24,22 @@ def _owned_run(run_id: str, user_id: str, database: Session) -> AnalysisRunRecor
     return item
 
 
-def _run_payload(item: AnalysisRunRecord, *, include_payload: bool) -> dict:
+def _target_payloads(item: AnalysisRunRecord, database: Session) -> list[dict]:
+    return [
+        {
+            "unit_id": target.unit_id,
+            "target_type": target.target_type,
+            "target_id": target.target_id,
+            "created_at": target.created_at,
+        }
+        for target in database.scalars(select(AnalysisRunTarget).where(
+            AnalysisRunTarget.analysis_run_id == item.id,
+            AnalysisRunTarget.user_id == item.user_id,
+        ))
+    ]
+
+
+def _run_payload(item: AnalysisRunRecord, *, include_payload: bool, database: Session) -> dict:
     result = {
         "id": item.id,
         "external_run_id": item.external_run_id,
@@ -43,6 +58,7 @@ def _run_payload(item: AnalysisRunRecord, *, include_payload: bool) -> dict:
         "completed_at": item.completed_at,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+        "targets": _target_payloads(item, database),
     }
     if include_payload:
         result["input_payload"] = item.input_payload
@@ -67,15 +83,21 @@ def list_analysis_runs(
         statement = statement.where(AnalysisRunRecord.target_type == target_type)
     if unclaimed_only:
         statement = statement.where(
-            AnalysisRunRecord.target_id.is_(None),
-            AnalysisRunRecord.status == "succeeded",
+            AnalysisRunRecord.status.in_(("succeeded", "partial")),
         )
-    items = list(database.scalars(
-        statement.order_by(AnalysisRunRecord.created_at.desc()).limit(limit)
-    ))
+    items = list(database.scalars(statement.order_by(AnalysisRunRecord.created_at.desc())))
+    if unclaimed_only:
+        filtered = []
+        for item in items:
+            unit_ids = set((item.output_payload or {}).get("unit_ids") or [])
+            claimed = {target["unit_id"] for target in _target_payloads(item, database)}
+            if (unit_ids and unit_ids - claimed) or (not unit_ids and item.target_id is None):
+                filtered.append(item)
+        items = filtered
+    items = items[:limit]
     return {
         "items": [
-            _run_payload(item, include_payload=include_payload) for item in items
+            _run_payload(item, include_payload=include_payload, database=database) for item in items
         ],
         "total_count": len(items),
     }
@@ -88,7 +110,8 @@ def get_analysis_run(
     database: Session = Depends(get_database_session),
 ) -> dict:
     return _run_payload(
-        _owned_run(run_id, current_user.id, database), include_payload=True
+        _owned_run(run_id, current_user.id, database), include_payload=True,
+        database=database,
     )
 
 
@@ -99,7 +122,7 @@ def discard_analysis_run(
     database: Session = Depends(get_database_session),
 ) -> dict:
     item = _owned_run(run_id, current_user.id, database)
-    if item.target_id:
+    if item.target_id or _target_payloads(item, database):
         raise HTTPException(status_code=409, detail="저장된 결과의 분석 기록은 숨길 수 없습니다.")
     item.status = "discarded"
     item.updated_at = utc_now()

@@ -42,6 +42,44 @@ function toExperienceDraftView(item, index, approvedIndexes) {
 
 export function toProposalView(proposal) {
   if (!proposal) return null;
+  if ((proposal.contract_version || proposal.contractVersion) === 'experience-units-v2') {
+    const units = list(proposal.units).map((item, index) => ({
+      ...item,
+      unitId: item.unit_id || item.unitId,
+      draft_id: item.draft_id || item.draftId || item.unit_id || `unit-${index}`,
+      domain: structureName(item.domain),
+      project: structureName(item.project),
+      actions: list(item.actions),
+      results: list(item.results),
+      facts: list(item.facts),
+      skills: list(item.skills),
+      missingInformation: list(item.missing_information || item.missingInformation),
+      source_ref_ids: list(item.source_ref_ids || item.sourceRefIds),
+      source_refs: list(item.source_refs || item.sourceRefs),
+      fieldCitations: item.field_citations || item.fieldCitations || {},
+      primarySpanIds: list(item.primary_span_ids || item.primarySpanIds),
+      contextSpanIds: list(item.context_span_ids || item.contextSpanIds),
+      evidencePreview: item.evidence_preview || item.evidencePreview || '',
+      saveStrategy: item.save_strategy || item.saveStrategy || { operation: 'create' },
+      reusedSkills: list(item.reused_skills || item.reusedSkills),
+      saveOperation: item.save_operation || item.saveOperation || null,
+      approved: Boolean(item.saved_experience_id || item.savedExperienceId),
+      savedExperienceId: item.saved_experience_id || item.savedExperienceId || null,
+    }));
+    return {
+      ...proposal,
+      contractVersion: 'experience-units-v2',
+      kind: 'experience-units',
+      version: proposal.version || 1,
+      units,
+      experiences: units,
+      coverage: proposal.coverage || {},
+      analysisScope: proposal.analysis_scope || proposal.analysisScope,
+      analysisRunId: proposal.analysis_run_id || proposal.analysisRunId,
+      rawProposal: proposal,
+      title: proposal.title || '경험 단위 분석 결과',
+    };
+  }
   const payload = proposal.payload || proposal.rawPayload || {};
   const kind = proposal.kind || (proposal.type === 'analyze_job' ? 'job' : 'experience');
 
@@ -166,4 +204,28 @@ export function applyProposalPanelChanges(proposal, panel) {
     };
   });
   return payload;
+}
+
+export function applyExperienceUnitsChanges(proposal, panel) {
+  const sourceUnits = list(proposal.rawProposal?.units || proposal.units);
+  const sourceById = new Map(sourceUnits.map((item) => [item.unit_id || item.unitId, item]));
+  return list(panel.units).map((item) => {
+    const unitId = item.unitId || item.unit_id;
+    const source = sourceById.get(unitId) || {};
+    return {
+      ...source,
+      unit_id: unitId,
+      title: item.title || '',
+      domain: typeof item.domain === 'string' ? { ...(source.domain || {}), name: item.domain } : item.domain,
+      project: typeof item.project === 'string' ? { ...(source.project || {}), name: item.project } : item.project,
+      role: item.role || '',
+      summary: item.summary || '',
+      situation: item.situation || '',
+      actions: list(item.actions),
+      results: list(item.results),
+      facts: list(item.facts),
+      skills: list(item.skills),
+      missing_information: list(item.missingInformation || item.missing_information),
+    };
+  });
 }

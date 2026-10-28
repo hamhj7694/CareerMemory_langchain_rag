@@ -29,6 +29,7 @@ from AI_Engine.knowledge_documents import (
     content_document_dict,
     experience_content_blocks,
     merge_projected_blocks,
+    sanitize_experience_content_blocks,
     upsert_content_document,
 )
 from AI_Engine.normalization_backfill import structured_fields_for_experience
@@ -118,6 +119,12 @@ def project_dict(item: ExperienceProject) -> dict[str, Any]:
 def experience_dict(item: Experience) -> dict[str, Any]:
     project = item.project
     domain = project.domain
+    content_document = content_document_dict(item.content_document)
+    if content_document is not None:
+        content_document = {
+            **content_document,
+            "blocks": sanitize_experience_content_blocks(content_document["blocks"]),
+        }
     return {
         "id": item.id, "title": item.title, "summary": item.summary,
         "situation": item.situation, "actions": item.actions,
@@ -134,10 +141,8 @@ def experience_dict(item: Experience) -> dict[str, Any]:
         "extensions": item.extensions,
         "analysis_run_id": item.analysis_run_id,
         "analysis_run": analysis_run_dict(item.analysis_run),
-        "content_document": content_document_dict(item.content_document),
-        "content_blocks": (
-            content_document_dict(item.content_document) or {"blocks": []}
-        )["blocks"],
+        "content_document": content_document,
+        "content_blocks": (content_document or {"blocks": []})["blocks"],
         "status": item.status,
         "domain": {"id": domain.id, "name": domain.name},
         "domain_id": domain.id,

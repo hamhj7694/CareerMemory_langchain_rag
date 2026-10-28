@@ -23,6 +23,7 @@ from AI_Engine.chat_retrieval import (
 from AI_Engine.conversation_memory import ConversationMemoryManager
 from AI_Engine.database.models import Attachment, Conversation, Message, User
 from AI_Engine.intent_classifier import AutoIntentClassifier
+from AI_Engine.privacy import guest_private_mode, redact_guest_text
 from AI_Engine.schemas import (
     AIRequestType,
     AIRoute,
@@ -73,10 +74,13 @@ class CareerMemoryAI:
             if pending_user_messages
             else list(stored_history)
         )
+        guest = guest_private_mode(current_user)
         combined_content = _combined_user_content(
             pending_user_messages,
             user_message,
         )
+        if guest:
+            combined_content = redact_guest_text(combined_content)
         combined_attachment_ids = _combined_user_attachment_ids(
             pending_user_messages,
             user_message,
@@ -92,6 +96,13 @@ class CareerMemoryAI:
             query=combined_content,
             current_attachment_ids=set(combined_attachment_ids),
         )
+        if guest:
+            attachments = [
+                item.model_copy(update={
+                    "title": "첨부 파일",
+                    "content": redact_guest_text(item.content),
+                }) for item in attachments
+            ]
         route_request = AIRouteRequest(
             request_id=user_message.client_request_id or user_message.id,
             request_type=_request_type(user_message.requested_intent),
@@ -131,14 +142,20 @@ class CareerMemoryAI:
                 if pending_user_messages
                 else user_message.sequence
             ),
+            **({"redact_text": redact_guest_text} if guest else {}),
         )
+        if guest and summary is not None:
+            summary = summary.model_copy(update={
+                "text": redact_guest_text(summary.text),
+            })
         history_models = [
             ChatMessage(
                 id=message.id,
                 conversation_id=message.conversation_id,
                 sequence=message.sequence,
                 role=ChatRole(message.role),
-                content=message.content,
+                content=(redact_guest_text(message.content)
+                         if guest else message.content),
                 attachment_ids=message.attachment_ids,
                 created_at=message.created_at,
             )
@@ -169,6 +186,15 @@ class CareerMemoryAI:
             item for item in evidence
             if item.source_id not in attachment_ids
         ]
+        if guest:
+            experiences = [item.model_copy(update={
+                "title": redact_guest_text(item.title),
+                "content": redact_guest_text(item.content),
+            }) for item in experiences]
+            evidence = [item.model_copy(update={
+                "title": redact_guest_text(item.title),
+                "content": redact_guest_text(item.content),
+            }) for item in evidence]
         context = build_budgeted_context(
             summary=summary,
             attachments=attachments,
@@ -195,7 +221,7 @@ class CareerMemoryAI:
             routed_intent=route.route,
             content=combined_content,
             attachment_ids=combined_attachment_ids,
-            user_display_name=current_user.display_name,
+            user_display_name="" if guest else current_user.display_name,
             history=history_models,
             context=context,
         )

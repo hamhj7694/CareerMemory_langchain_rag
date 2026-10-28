@@ -89,7 +89,7 @@ export function LoginPage() {
             <li><strong>AI 경험 정리</strong><span>흩어진 경험을 구조화하고 확인 후 저장해요.</span></li>
             <li><strong>공고 매칭</strong><span>채용공고에 맞는 경험과 근거를 찾아요.</span></li>
           </ul>
-          <p className="start-privacy">체험 공간은 방문자별로 분리됩니다. 개인정보가 포함된 자료는 체험 모드에 업로드하지 않는 것을 권장합니다.</p>
+          <p className="start-privacy">체험 모드의 텍스트에서는 이메일·전화번호·주소 등 감지 가능한 개인정보를 가리고 나머지를 분석합니다. 자동 감지에는 한계가 있으니 민감한 자료는 업로드하지 마세요. 일반 계정에서는 입력한 원문을 분석할 수 있습니다.</p>
         </div>
 
         <div className="start-actions">
