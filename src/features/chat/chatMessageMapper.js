@@ -13,9 +13,9 @@ export function toEmbeddedProposalView(proposal, { messageId, conversationId } =
 export function toUiMessage(message) {
   const actions = message.actions || [];
   const hasEmbeddedProposalAction = actions
-    .some((action) => action.type === 'experience_proposal');
+    .some((action) => ['experience_units_proposal', 'experience_proposal'].includes(action.type));
   const embeddedProposals = actions
-    .filter((action) => action.type === 'experience_proposal' && action.proposal)
+    .filter((action) => ['experience_units_proposal', 'experience_proposal'].includes(action.type) && action.proposal)
     .map((action) => toEmbeddedProposalView(action.proposal, {
       messageId: message.id,
       conversationId: message.conversation_id || message.conversationId,

@@ -124,6 +124,54 @@ class ConversationApiTests(unittest.TestCase):
         self.chatbot.invoke_count = 0
         self.chatbot.requests = []
         self.current_user.id = "USER-test"
+        self.current_user.account_type = "simple"
+
+    def test_guest_chat_redacts_contact_data_before_storage_and_model(self) -> None:
+        self.current_user.account_type = "guest"
+        conversation = self.create_conversation().json()
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": "Career Memory에서 RAG를 구현했습니다. 연락처 tester@example.com, 010-1234-5678",
+                "intent": "question",
+                "attachment_ids": [],
+                "response_mode": "complete",
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        with self.session_factory() as database:
+            saved = database.query(models.Message).filter_by(role="user").one()
+            self.assertNotIn("tester@example.com", saved.content)
+            self.assertNotIn("010-1234-5678", saved.content)
+            self.assertIn("RAG를 구현했습니다", saved.content)
+        sent = self.chatbot.requests[-1]
+        self.assertNotIn("tester@example.com", sent.content)
+        self.assertNotIn("010-1234-5678", sent.content)
+        self.assertEqual(sent.user_display_name, "")
+
+    def test_registered_chat_keeps_contact_data_for_analysis(self) -> None:
+        conversation = self.create_conversation().json()
+        content = "연락처 tester@example.com, Career Memory에서 RAG를 구현했습니다."
+        response = self.client.post(
+            f"/api/v2/conversations/{conversation['id']}/messages",
+            json={
+                "content": content,
+                "intent": "question",
+                "attachment_ids": [],
+                "response_mode": "complete",
+                "client_request_id": str(uuid4()),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("tester@example.com", self.chatbot.requests[-1].content)
+        with self.session_factory() as database:
+            self.assertEqual(
+                database.query(models.Message).filter_by(role="user").one().content,
+                content,
+            )
 
     def create_conversation(self, *, title: str = "첫 대화"):
         return self.client.post(
@@ -1031,7 +1079,8 @@ class ConversationApiTests(unittest.TestCase):
             app.dependency_overrides.pop(get_experience_ai, None)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["proposal"]["type"], "create_experiences")
+        self.assertEqual(response.json()["proposal"]["type"], "create_experience_units")
+        self.assertEqual(response.json()["proposal"]["contract_version"], "experience-units-v2")
         messages = self.client.get(
             f"/api/v2/conversations/{conversation['id']}/messages"
         ).json()["items"]
@@ -1039,7 +1088,7 @@ class ConversationApiTests(unittest.TestCase):
         self.assertEqual(messages[0]["resolved_intents"], ["experience"])
         self.assertEqual(
             messages[1]["actions"][0]["type"],
-            "experience_proposal",
+            "experience_units_proposal",
         )
 
     def test_job_mode_records_result_link_in_conversation(self) -> None:
@@ -1121,7 +1170,7 @@ class ConversationApiTests(unittest.TestCase):
             app.dependency_overrides.pop(get_experience_ai, None)
 
         self.assertEqual(analyzed.status_code, 200)
-        self.assertEqual(analyzed.json()["proposal"]["type"], "create_experiences")
+        self.assertEqual(analyzed.json()["proposal"]["type"], "create_experience_units")
         after = self.client.get(
             f"/api/v2/conversations/{conversation['id']}/experience-extraction-status"
         ).json()
@@ -1196,38 +1245,35 @@ class ConversationApiTests(unittest.TestCase):
 
         message_id = extracted["message"]["id"]
         proposal = extracted["proposal"]
-        approval_input = {
-            "version": proposal["version"],
-            "draft_id": "atomic-draft-1",
-            "experience_index": 0,
-        }
+        first_unit_id = proposal["units"][0]["unit_id"]
+        second_unit_id = proposal["units"][1]["unit_id"]
+        approval_input = {"version": proposal["version"], "unit_id": first_unit_id}
         approved = self.client.post(
-            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-proposal/approve",
+            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-units-proposal/approve",
             json=approval_input,
         )
         second_approval = self.client.post(
-            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-proposal/approve",
+            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-units-proposal/approve",
             json={
                 "version": approved.json()["proposal"]["version"],
-                "draft_id": "atomic-draft-2",
-                "experience_index": 1,
+                "unit_id": second_unit_id,
             },
         )
         replayed = self.client.post(
-            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-proposal/approve",
+            f"/api/v2/conversations/{conversation['id']}/messages/{message_id}/experience-units-proposal/approve",
             json=approval_input,
         )
 
         self.assertEqual(approved.status_code, 200)
         self.assertEqual(approved.json()["proposal"]["status"], "edited")
-        self.assertEqual(approved.json()["proposal"]["approved_experience_indexes"], [0])
+        self.assertEqual(approved.json()["proposal"]["units"][0]["status"], "approved")
         self.assertFalse(approved.json()["replayed"])
         self.assertEqual(second_approval.status_code, 200)
         self.assertEqual(second_approval.json()["proposal"]["status"], "approved")
-        self.assertEqual(
-            second_approval.json()["proposal"]["approved_experience_indexes"],
-            [0, 1],
-        )
+        self.assertTrue(all(
+            unit["status"] == "approved"
+            for unit in second_approval.json()["proposal"]["units"]
+        ))
         self.assertEqual(replayed.status_code, 200)
         self.assertTrue(replayed.json()["replayed"])
         self.assertEqual(

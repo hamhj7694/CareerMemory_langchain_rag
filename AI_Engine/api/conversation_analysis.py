@@ -19,8 +19,6 @@ from AI_Engine.analysis_metrics import (
     capture_analysis_metrics,
 )
 from AI_Engine.api.conversation_experiences import (
-    _proposal_action,
-    _proposal_from_result,
     _unprocessed_user_messages as _unprocessed_experience_messages,
 )
 from AI_Engine.api.conversation_jobs import (
@@ -67,7 +65,18 @@ from AI_Engine.database.models import (
 )
 from AI_Engine.database.schemas import MessageResponse
 from AI_Engine.experience_ai import ExperienceAI
+from AI_Engine.experience_units import (
+    EXPERIENCE_UNITS_SEGMENTER_VERSION,
+    build_experience_units_proposal,
+    organize_segmented_sources,
+    proposal_action as experience_units_action,
+    segment_sources,
+    source_manifest,
+)
+from AI_Engine.experience_unit_storage import annotate_proposal_matches
+from AI_Engine.knowledge_documents import begin_analysis_run, complete_analysis_run
 from AI_Engine.llm_provider import get_ai_provider, get_chat_model_name
+from AI_Engine.privacy import guest_private_mode, redact_guest_text, redact_source_texts
 from AI_Engine.schemas import (
     EvidenceSource,
     EvidenceSourceType,
@@ -125,6 +134,8 @@ def _routing_sources(
     user_messages: list[Message],
     job_sources,
     database: Session,
+    *,
+    guest: bool = False,
 ) -> list[ConversationRouteSource]:
     """Build chronological router input while keeping assistant text non-evidence."""
 
@@ -165,7 +176,9 @@ def _routing_sources(
         next_user = user_by_sequence.get(message.sequence + 1)
         if next_user is None or not _needs_assistant_context(next_user.content):
             continue
-        excerpt = _assistant_context_excerpt(message.content)
+        excerpt = _assistant_context_excerpt(
+            redact_guest_text(message.content) if guest else message.content
+        )
         if not excerpt:
             continue
         sources.append(ConversationRouteSource(
@@ -219,7 +232,10 @@ def _proposal_from_message(message: Message) -> dict[str, Any] | None:
             item
             for item in (message.actions or [])
             if isinstance(item, dict)
-            and item.get("type") == "experience_proposal"
+            and item.get("type") in {
+                "experience_units_proposal",
+                "experience_proposal",
+            }
         ),
         None,
     )
@@ -294,6 +310,9 @@ def _build_experience_sources(
     current_candidates: list[ConversationJobCandidate],
     user_id: str,
     database: Session,
+    *,
+    guest: bool = False,
+    preserve_text: bool = False,
 ) -> list[EvidenceSource]:
     exclusions = _prior_job_contents(messages, user_id, database)
     for candidate in current_candidates:
@@ -328,9 +347,13 @@ def _build_experience_sources(
     sources: list[EvidenceSource] = []
     for message in messages:
         posting_contents = exclusions.get(message.id, [])
-        message_text = _without_job_postings(
-            message.content,
-            posting_contents,
+        if guest:
+            posting_contents = [redact_guest_text(item) for item in posting_contents]
+        allowed_text = redact_guest_text(message.content) if guest else message.content
+        message_text = (
+            allowed_text
+            if preserve_text
+            else _without_job_postings(allowed_text, posting_contents)
         )
         if message_text:
             sources.append(EvidenceSource(
@@ -348,9 +371,16 @@ def _build_experience_sources(
             if attachment_id in (message.attachment_ids or [])
             for posting_content in exclusions.get(message.id, [])
         ]
-        attachment_text = _without_job_postings(
-            attachment.extracted_text,
-            posting_contents,
+        if guest:
+            posting_contents = [redact_guest_text(item) for item in posting_contents]
+        allowed_text = (
+            redact_guest_text(attachment.extracted_text)
+            if guest else attachment.extracted_text
+        )
+        attachment_text = (
+            allowed_text
+            if preserve_text
+            else _without_job_postings(allowed_text, posting_contents)
         )
         if not attachment_text:
             continue
@@ -365,11 +395,12 @@ def _build_experience_sources(
             content_hash=attachment.content_hash,
             text=attachment_text,
         ))
-    return sources
+    return redact_source_texts(sources, guest=guest)
 
 
 def _safe_failures(failures: list[dict[str, Any]]) -> list[dict[str, Any]]:
     labels = {
+        "route_content": "대화내용 분류",
         "discover_jobs": "채용공고 탐색",
         "partition_sources": "대화내용 분류",
         "analyze_jobs": "채용공고 분석",
@@ -379,6 +410,7 @@ def _safe_failures(failures: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "stage": failure.get("stage", "unknown"),
             "label": labels.get(failure.get("stage"), "분석"),
+            "code": failure.get("code", "analysis_error"),
             **(
                 {"source_message_id": failure["source_message_id"]}
                 if failure.get("source_message_id")
@@ -454,10 +486,38 @@ def analyze_conversation(
         {message.id: message for message in [*experience_messages, *job_messages]}.values(),
         key=lambda message: message.sequence,
     )
-    job_sources = _job_sources_for_messages(
+    guest = guest_private_mode(current_user)
+    job_sources = redact_source_texts(_job_sources_for_messages(
         all_user_messages,
         current_user.id,
         database,
+    ), guest=guest)
+    run_id = f"ANALYSIS-RUN-{uuid4()}"
+    initial_experience_sources = _build_experience_sources(
+        experience_messages,
+        [],
+        current_user.id,
+        database,
+        guest=guest,
+        preserve_text=True,
+    )
+    initial_segments = segment_sources(
+        initial_experience_sources,
+        privacy_policy="guest_redacted" if guest else "registered_full",
+    )
+    analysis_record = begin_analysis_run(
+        database,
+        user_id=current_user.id,
+        client_request_id=request.client_request_id,
+        target_type="conversation_experience_units",
+        input_type="conversation",
+        input_payload={
+            "conversation_id": conversation.id,
+            "source_manifest": source_manifest(initial_segments),
+            "segmenter_version": EXPERIENCE_UNITS_SEGMENTER_VERSION,
+            "privacy_policy": "guest_redacted" if guest else "registered_full",
+        },
+        source_ids=[source.id for source in initial_experience_sources],
     )
     use_content_router = isinstance(discovery_ai, ConversationJobDiscoveryAI)
     routing_sources = (
@@ -466,6 +526,7 @@ def analyze_conversation(
             all_user_messages,
             job_sources,
             database,
+            guest=guest,
         )
         if use_content_router
         else []
@@ -520,15 +581,46 @@ def analyze_conversation(
             jobs_by_fingerprint[fingerprint] = item
         return JobWorkflowResolution(job_id=item.id, created=created)
 
+    segmented_experience = initial_segments
+
+    def segment_experience_sources(
+        sources: list[EvidenceSource],
+        candidates: list[ConversationJobCandidate],
+    ):
+        nonlocal segmented_experience
+        postings_by_source_id: dict[str, list[str]] = {}
+        for candidate in candidates:
+            source_id = f"source-{candidate.attachment_id or candidate.message_id}"
+            postings_by_source_id.setdefault(source_id, []).append(
+                redact_guest_text(candidate.posting_content)
+                if guest else candidate.posting_content
+            )
+        segmented_experience = segment_sources(
+            sources,
+            job_postings_by_source_id=postings_by_source_id,
+            privacy_policy="guest_redacted" if guest else "registered_full",
+        )
+        analysis_record.input_payload = {
+            **(analysis_record.input_payload or {}),
+            "source_manifest": source_manifest(segmented_experience),
+        }
+        analysis_record.source_ids = [source.id for source in sources]
+        analysis_record.updated_at = utc_now()
+        database.commit()
+        return list(segmented_experience.analysis_sources)
+
     def build_experience_sources(
         candidates: list[ConversationJobCandidate],
     ) -> list[EvidenceSource]:
-        return _build_experience_sources(
+        sources = _build_experience_sources(
             experience_messages,
             candidates,
             current_user.id,
             database,
+            guest=guest,
+            preserve_text=True,
         )
+        return segment_experience_sources(sources, candidates)
 
     assistant_contexts: list[AssistantConversationContext] = []
 
@@ -542,6 +634,8 @@ def analyze_conversation(
             candidates,
             current_user.id,
             database,
+            guest=guest,
+            preserve_text=True,
         )
         included: list[EvidenceSource] = []
         included_route_ids: set[str] = set()
@@ -560,7 +654,7 @@ def analyze_conversation(
             for context in routed.assistant_contexts
             if set(context.for_user_source_ids) & included_route_ids
         ]
-        return included
+        return segment_experience_sources(included, candidates)
 
     def analyze_experiences(sources: list[EvidenceSource]):
         message_ids = list(dict.fromkeys(
@@ -576,11 +670,7 @@ def analyze_conversation(
         request_digest = hashlib.sha256(
             f"{request.client_request_id}:experience".encode("utf-8")
         ).hexdigest()[:40]
-        organize_kwargs: dict[str, Any] = {"sources": sources}
-        if assistant_contexts:
-            organize_kwargs["assistant_contexts"] = assistant_contexts
-        return experience_ai.organize(
-            ExperienceExtractionRequest(
+        extraction_request = ExperienceExtractionRequest(
                 client_request_id=f"combined-exp-{request_digest}",
                 input_type=ExperienceExtractionInputType.CONVERSATION,
                 conversation_id=conversation.id,
@@ -588,8 +678,12 @@ def analyze_conversation(
                 to_sequence=experience_messages[-1].sequence,
                 message_ids=message_ids,
                 attachment_ids=attachment_ids,
-            ),
-            **organize_kwargs,
+        )
+        return organize_segmented_sources(
+            experience_ai,
+            extraction_request,
+            segmented_experience,
+            assistant_contexts=assistant_contexts,
         )
 
     content_router = get_conversation_content_router_ai() if use_content_router else None
@@ -618,7 +712,6 @@ def analyze_conversation(
             build_routed_experience_sources if use_content_router else None
         ),
     )
-    run_id = f"ANALYSIS-RUN-{uuid4()}"
     unique_source_texts: dict[str, str] = {}
     for source in job_sources:
         source_key = (
@@ -667,7 +760,14 @@ def analyze_conversation(
 
     proposal = None
     if experience_result is not None and experience_count:
-        proposal = _proposal_from_result(experience_result)
+        proposal = build_experience_units_proposal(
+            experience_result,
+            segmented_experience,
+            analysis_run_id=analysis_record.id,
+        )
+        proposal = annotate_proposal_matches(
+            database, proposal, user_id=current_user.id,
+        )
         proposal["analysis_scope"] = {
             "message_count": len(experience_messages),
             "attachment_count": len({
@@ -678,13 +778,20 @@ def analyze_conversation(
             "from_sequence": experience_messages[0].sequence,
             "to_sequence": experience_messages[-1].sequence,
         }
-        proposal["extraction_run"] = experience_result.run.model_dump(
-            mode="json"
+        extraction_run = getattr(experience_result, "run", None)
+        proposal["extraction_run"] = (
+            extraction_run.model_dump(mode="json")
+            if hasattr(extraction_run, "model_dump")
+            else {}
         )
 
+    coverage_partial = bool(
+        proposal
+        and proposal.get("coverage", {}).get("processing_status") == "partial"
+    )
     run = {
         "id": run_id,
-        "status": "partial" if safe_failures else "succeeded",
+        "status": "partial" if safe_failures or coverage_partial else "succeeded",
         "source_message_ids": list(dict.fromkeys(
             message.id
             for message in [*experience_messages, *job_messages]
@@ -725,10 +832,15 @@ def analyze_conversation(
         result_parts.append(f"채용공고 {len(job_ids)}개")
     if result_parts:
         content = f"대화내용에서 {'와 '.join(result_parts)}를 분석했어요."
+        if safe_failures:
+            content += " 일부 분석은 완료하지 못했어요. 원문은 저장되어 있어 다시 시도할 수 있어요."
+        elif coverage_partial:
+            content += " 경험으로 연결되지 않은 원문 구간은 검토 필요로 남겨 두었어요."
+    elif safe_failures:
+        failed_labels = ", ".join(dict.fromkeys(item["label"] for item in safe_failures))
+        content = f"{failed_labels} 단계에서 오류가 발생했어요. 원문은 저장되어 있어 다시 시도할 수 있어요."
     else:
         content = "대화내용에서 새로 정리할 경험이나 채용공고를 찾지 못했어요."
-    if safe_failures:
-        content += " 일부 분석은 완료하지 못해 다음 요청에서 다시 시도할 수 있어요."
 
     combined_action = {
         "type": COMBINED_ANALYSIS_ACTION,
@@ -739,7 +851,7 @@ def analyze_conversation(
     }
     actions: list[dict[str, Any]] = [combined_action]
     if proposal is not None:
-        actions.append(_proposal_action(proposal))
+        actions.append(experience_units_action(proposal))
     if job_ids:
         actions.append({"type": "open_job_analyses", "job_ids": job_ids})
         if len(job_ids) == 1:
@@ -806,6 +918,33 @@ def analyze_conversation(
     conversation.updated_at = utc_now()
     conversation.version += 1
     database.commit()
+    complete_analysis_run(
+        database,
+        analysis_record,
+        external_run_id=run_id,
+        output_payload={
+            "proposal_id": proposal["id"] if proposal else None,
+            "proposal": proposal,
+            "unit_ids": [unit["unit_id"] for unit in proposal["units"]]
+            if proposal else [],
+            "job_ids": job_ids,
+            "failures": safe_failures,
+        },
+        versions={
+            "architecture": ANALYSIS_ARCHITECTURE_VERSION,
+            "segmenter": EXPERIENCE_UNITS_SEGMENTER_VERSION,
+            "contract": "experience-units-v2",
+        },
+        token_usage=metrics_payload,
+        coverage_report=proposal.get("coverage", {}) if proposal else {
+            "integrity_status": "verified",
+            "processing_status": "partial" if safe_failures else "complete",
+            "review_status": "pending",
+        },
+        status="partial" if safe_failures or (
+            proposal and proposal.get("coverage", {}).get("processing_status") == "partial"
+        ) else "succeeded",
+    )
     return _response_from_message(
         assistant_message,
         combined_action,

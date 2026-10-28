@@ -34,6 +34,7 @@ class ExtractionRunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
     FAILED = "failed"
 
 
@@ -305,6 +306,8 @@ class ExperienceExtractionRequest(SchemaModel):
     manual_input_id: Identifier | None = None
     attachment_ids: list[Identifier] = Field(default_factory=list)
     source_ref_ids: list[Identifier] = Field(default_factory=list)
+    preferred_domain_id: Identifier | None = None
+    preferred_project_id: Identifier | None = None
 
     @field_validator("text")
     @classmethod
@@ -403,6 +406,7 @@ class ExperienceExtractionResult(SchemaModel):
         default_factory=list,
         description="Experience drafts found in the input, 0..N",
     )
+    rejected_draft_count: int = Field(default=0, ge=0)
     sources: list[EvidenceSource] = Field(
         default_factory=list,
         description="Original evidence used by this extraction run",

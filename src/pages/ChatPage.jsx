@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChatComposer, ConversationGuide, ConversationSidebar, MessageThread } from '../features/chat/index.js';
-import { applyProposalPanelChanges, toProposalView } from '../features/chat/proposalMapper.js';
+import { applyExperienceUnitsChanges, applyProposalPanelChanges, toProposalView } from '../features/chat/proposalMapper.js';
 import { toEmbeddedProposalView, toUiMessage } from '../features/chat/chatMessageMapper.js';
+import { conversationAnalysisNotice } from '../features/chat/analysisFeedback.js';
 import { chatAnalysisApi, chatExperienceApi, experienceTrashApi, jobApi, v2ChatApi } from '../api/index.js';
 import { attachmentUnavailableMessage, toUserFacingErrorMessage } from '../api/userFacingError.js';
 import { AnalysisProgress } from '../components/common/AnalysisProgress.jsx';
@@ -455,15 +456,7 @@ export function ChatPage({ onSend }) {
         } : null);
       setMessages((current) => [...current, resultMessage]);
       if (proposal) setProposals((current) => ({ ...current, [proposal.id]: proposal }));
-      const resultParts = [];
-      if (result.run?.experience_count) resultParts.push(`경험 초안 ${result.run.experience_count}개`);
-      if (result.run?.job_count) resultParts.push(`채용공고 ${result.run.job_count}개`);
-      const hasFailures = result.run?.failures?.length > 0;
-      setNotice(resultParts.length
-        ? `${resultParts.join('와 ')}를 분석했어요.${hasFailures ? ' 일부 분석은 완료하지 못해 다시 시도할 수 있어요.' : ' 결과를 확인해 주세요.'}`
-        : hasFailures
-          ? '일부 분석을 완료하지 못했어요. 다시 시도해 주세요.'
-          : '새로 정리할 경험이나 채용공고를 찾지 못했어요.');
+      setNotice(conversationAnalysisNotice(result.run));
       await Promise.all([refreshConversations(), refreshExtractionStatus()]);
     } catch (error) {
       setNotice(toUserFacingErrorMessage(error, '대화에서 경험과 채용공고를 정리하지 못했어요. 잠시 후 다시 시도해 주세요.'));
@@ -491,6 +484,27 @@ export function ChatPage({ onSend }) {
       await refreshConversations();
       navigate(`/jobs/${analyzed.jobId}`, { state: { job: analyzed } });
       return;
+    }
+    if (proposal?.contractVersion === 'experience-units-v2' && proposal.chatMessageId) {
+      const unitId = proposal.selection?.unit_id;
+      const item = proposal.units.find((unit) => unit.unitId === unitId);
+      if (!item || item.approved) return proposal;
+      const result = await chatExperienceApi.approveExperienceUnit(
+        proposal.conversationId,
+        proposal.chatMessageId,
+        { version: proposal.version, unitId },
+      );
+      const nextProposal = {
+        ...toProposalView(result.proposal),
+        chatMessageId: proposal.chatMessageId,
+        conversationId: proposal.conversationId,
+      };
+      setProposals((current) => ({ ...current, [nextProposal.id]: nextProposal }));
+      setNotice(nextProposal.units.every((unit) => unit.approved)
+        ? '모든 경험 단위를 저장했습니다.'
+        : '선택한 경험 단위를 저장했습니다.');
+      await Promise.all([refreshConversations(), refreshExtractionStatus()]);
+      return nextProposal;
     }
     if (proposal?.chatMessageId) {
       const requestedDraftId = proposal.selection?.draft_id;
@@ -539,7 +553,7 @@ export function ChatPage({ onSend }) {
     return nextProposal;
   };
   const reject = async (proposal) => {
-    if (proposal?.kind === 'experience') {
+    if (proposal?.kind === 'experience' || proposal?.kind === 'experience-units') {
       const pendingDrafts = (proposal.experiences || []).filter((item) => !item.approved);
       await Promise.all(pendingDrafts.map((draft) => experienceTrashApi.create({
         status: 'deleted',
@@ -547,7 +561,14 @@ export function ChatPage({ onSend }) {
         draft,
       })));
     }
-    if (proposal?.chatMessageId) {
+    if (proposal?.contractVersion === 'experience-units-v2' && proposal.chatMessageId) {
+      await chatExperienceApi.updateUnitsProposal(proposal.conversationId, proposal.chatMessageId, {
+        version: proposal.version,
+        units: applyExperienceUnitsChanges(proposal, proposal),
+        coverage: proposal.coverage,
+        status: 'rejected',
+      });
+    } else if (proposal?.chatMessageId) {
       await chatExperienceApi.updateProposal(proposal.conversationId, proposal.chatMessageId, {
         version: proposal.version,
         payload: proposal.rawPayload,
@@ -616,6 +637,19 @@ export function ChatPage({ onSend }) {
       setProposals((current) => ({ ...current, [id]: { ...panel, id } }));
       return panel;
     }
+    if (panel.contractVersion === 'experience-units-v2' && panel.chatMessageId) {
+      const source = proposals[panel.id];
+      const updated = await chatExperienceApi.updateUnitsProposal(panel.conversationId, panel.chatMessageId, {
+        version: panel.version,
+        units: applyExperienceUnitsChanges(source, panel),
+        coverage: panel.coverage,
+        status: 'edited',
+      });
+      const next = { ...toProposalView(updated), chatMessageId: panel.chatMessageId, conversationId: panel.conversationId };
+      setProposals((current) => ({ ...current, [next.id]: next }));
+      setNotice('수정한 경험 단위를 저장했습니다.');
+      return next;
+    }
     if (panel.chatMessageId) {
       const updated = await chatExperienceApi.updateProposal(panel.conversationId, panel.chatMessageId, {
         version: panel.version,
@@ -640,6 +674,34 @@ export function ChatPage({ onSend }) {
   const removeProposalExperience = async (proposal, sourceIndex) => {
     if (!proposal?.id) return;
     const currentProposal = proposals[proposal.id] || proposal;
+    if (currentProposal.contractVersion === 'experience-units-v2' && currentProposal.chatMessageId) {
+      const removedUnit = currentProposal.units[sourceIndex];
+      if (!removedUnit || removedUnit.approved) return currentProposal;
+      await experienceTrashApi.create({
+        status: 'deleted',
+        reason: '대화형 챗봇에서 선택하여 삭제한 경험 단위',
+        draft: removedUnit,
+      });
+      const remaining = currentProposal.units.filter((_, index) => index !== sourceIndex);
+      const updated = await chatExperienceApi.updateUnitsProposal(
+        currentProposal.conversationId,
+        currentProposal.chatMessageId,
+        {
+          version: currentProposal.version,
+          units: applyExperienceUnitsChanges(currentProposal, { units: remaining }),
+          coverage: currentProposal.coverage,
+          status: remaining.length ? 'edited' : 'rejected',
+        },
+      );
+      if (!remaining.length) {
+        setProposals((current) => { const next = { ...current }; delete next[proposal.id]; return next; });
+        return null;
+      }
+      const next = { ...toProposalView(updated), chatMessageId: currentProposal.chatMessageId, conversationId: currentProposal.conversationId };
+      setProposals((current) => ({ ...current, [next.id]: next }));
+      setNotice('선택한 경험 단위를 삭제했습니다. 원문은 유지됩니다.');
+      return next;
+    }
     const removedDraft = (currentProposal.experiences || [])[sourceIndex];
     if (removedDraft && !removedDraft.approved) {
       await experienceTrashApi.create({

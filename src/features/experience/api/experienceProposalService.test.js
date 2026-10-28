@@ -27,4 +27,42 @@ describe('buildExperienceAnalysisFromResult', () => {
     expect(analysis.proposal.experiences[0].title).toBe('전환율 개선');
     expect(analysis.proposal.experiences[0].source_refs[0].id).toBe('SRC-1');
   });
+
+  it('경험 관리 직접 입력에서도 v2 단위 계약과 기존 경험 업데이트 정보를 유지한다', () => {
+    const analysis = buildExperienceAnalysisFromResult({
+      result: {
+        analysis_record_id: 'ANALYSIS-2',
+        proposal: {
+          id: 'PROPOSAL-2',
+          version: 1,
+          contract_version: 'experience-units-v2',
+          analysis_run_id: 'ANALYSIS-2',
+          coverage: { processing_status: 'complete' },
+          units: [{
+            unit_id: 'UNIT-2',
+            title: '전환율 개선',
+            domain: { name: '직장 경험' },
+            project: { name: '서비스 개선' },
+            skills: ['FastAPI'],
+            save_strategy: {
+              operation: 'update',
+              experience_id: 'EXP-1',
+              experience_title: '기존 전환율 개선',
+            },
+            reused_skills: ['FastAPI'],
+          }],
+        },
+      },
+    });
+
+    expect(analysis.proposal).toMatchObject({
+      contractVersion: 'experience-units-v2',
+      analysisRunId: 'ANALYSIS-2',
+    });
+    expect(analysis.proposal.units[0]).toMatchObject({
+      unitId: 'UNIT-2',
+      saveStrategy: { operation: 'update', experience_id: 'EXP-1' },
+      reusedSkills: ['FastAPI'],
+    });
+  });
 });

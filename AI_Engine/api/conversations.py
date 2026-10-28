@@ -35,6 +35,7 @@ from AI_Engine.database.schemas import (
     MessageResponse,
 )
 from AI_Engine.chatbot_ai import ChatbotAI
+from AI_Engine.privacy import guest_private_mode, redact_guest_text
 from AI_Engine.AI_langchain import CareerMemoryAI
 from AI_Engine.file_extraction import MAX_FILES_TOTAL_BYTES, MAX_FILES_TOTAL_MIB
 from AI_Engine.schemas import ChatMessage, ChatMode, ChatRequest, ChatRole
@@ -591,10 +592,16 @@ def send_message(
             detail="같은 요청의 AI 처리가 아직 완료되지 않았습니다.",
         )
 
+    stored_content = (
+        redact_guest_text(request.content)
+        if guest_private_mode(current_user) else request.content
+    )
+    if not stored_content.strip() and not request.attachment_ids:
+        raise HTTPException(status_code=422, detail="분석할 수 있는 개인정보 외의 내용이 없습니다.")
     resolved_attachment_ids, web_metadata = resolve_message_web_content(
         database,
         user_id=current_user.id,
-        content=request.content,
+        content=stored_content,
         attachment_ids=request.attachment_ids,
     )
 
@@ -607,7 +614,7 @@ def send_message(
         sequence=user_sequence,
         role="user",
         status="completed",
-        content=request.content,
+        content=stored_content,
         requested_intent=request.intent,
         resolved_intents=[],
         attachment_ids=resolved_attachment_ids,
@@ -616,7 +623,7 @@ def send_message(
     )
     database.add(user_message)
     conversation.message_count = user_sequence
-    conversation.last_message_preview = request.content[:300]
+    conversation.last_message_preview = stored_content[:300]
     conversation.version += 1
     database.commit()
     database.refresh(user_message)
@@ -878,10 +885,16 @@ def stream_message(
             },
         )
 
+    stored_content = (
+        redact_guest_text(request.content)
+        if guest_private_mode(current_user) else request.content
+    )
+    if not stored_content.strip() and not request.attachment_ids:
+        raise HTTPException(status_code=422, detail="분석할 수 있는 개인정보 외의 내용이 없습니다.")
     resolved_attachment_ids, web_metadata = resolve_message_web_content(
         database,
         user_id=current_user.id,
-        content=request.content,
+        content=stored_content,
         attachment_ids=request.attachment_ids,
     )
 
@@ -894,7 +907,7 @@ def stream_message(
         sequence=user_sequence,
         role="user",
         status="completed",
-        content=request.content,
+        content=stored_content,
         requested_intent=request.intent,
         resolved_intents=[],
         attachment_ids=resolved_attachment_ids,
@@ -903,7 +916,7 @@ def stream_message(
     )
     database.add(user_message)
     conversation.message_count = user_sequence
-    conversation.last_message_preview = request.content[:300]
+    conversation.last_message_preview = stored_content[:300]
     conversation.version += 1
     database.commit()
     database.refresh(user_message)

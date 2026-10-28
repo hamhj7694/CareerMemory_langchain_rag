@@ -1,5 +1,5 @@
 import { v2ChatApi } from '../../../api/v2ChatApi.js';
-import { createLocalExperienceProposal } from '../../chat/proposalMapper.js';
+import { createLocalExperienceProposal, toProposalView } from '../../chat/proposalMapper.js';
 import { createEmptyExperience } from '../model/experienceMapper.js';
 
 const isFileSource = (source = {}) => source.source_type === 'file' || source.kind === 'file' || source.sourceType === 'file';
@@ -102,6 +102,22 @@ export function buildLocalExperienceAnalysis({ content, fileNames, uploadedAttac
  * 원본 근거는 초안마다 복사하지 않고 source_ref_id를 기준으로 연결한다.
  */
 export function buildExperienceAnalysisFromResult({ result, domain, project }) {
+  if (result.proposal?.contract_version === 'experience-units-v2') {
+    let proposal = toProposalView({
+      ...result.proposal,
+      analysis_run_id: result.analysis_record_id || result.proposal.analysis_run_id,
+    });
+    if (domain || project) {
+      const units = proposal.units.map((unit) => ({
+        ...unit,
+        domain: domain?.name || unit.domain,
+        project: project?.name || unit.project,
+        project_id: project?.id || unit.project_id,
+      }));
+      proposal = { ...proposal, units, experiences: units };
+    }
+    return { draft: proposal.units[0] || null, proposal };
+  }
   const sourceById = new Map((result.sources || []).map((source) => [
     source.id,
     {

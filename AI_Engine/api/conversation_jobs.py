@@ -40,6 +40,7 @@ from AI_Engine.database.models import (
     utc_now,
 )
 from AI_Engine.database.schemas import MessageResponse
+from AI_Engine.privacy import guest_private_mode, redact_source_texts
 
 
 router = APIRouter(prefix="/api/v2/conversations", tags=["conversation-jobs"])
@@ -160,7 +161,10 @@ def get_conversation_job_extraction_status(
 ) -> dict[str, Any]:
     conversation = get_conversation_or_404(conversation_id, current_user.id, database)
     messages = _unprocessed_user_messages(conversation, database)
-    sources = _sources_for_messages(messages, current_user.id, database)
+    sources = redact_source_texts(
+        _sources_for_messages(messages, current_user.id, database),
+        guest=guest_private_mode(current_user),
+    )
     candidates = extract_job_posting_candidates(sources)
     return {
         "conversation_id": conversation.id,

@@ -34,4 +34,26 @@ export const chatExperienceApi = {
       body: input,
     });
   },
+
+  updateUnitsProposal(conversationId, messageId, input) {
+    return http.request({
+      path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/experience-units-proposal`,
+      method: 'PATCH',
+      body: input,
+    });
+  },
+
+  approveExperienceUnit(conversationId, messageId, input) {
+    return http.request({
+      path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/experience-units-proposal/approve`,
+      method: 'POST',
+      body: input,
+    });
+  },
+
+  getUnitsProposalSpans(conversationId, messageId) {
+    return http.request({
+      path: `/api/v2/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/experience-units-proposal/spans`,
+    });
+  },
 };

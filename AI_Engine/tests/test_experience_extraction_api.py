@@ -21,7 +21,7 @@ from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
 from AI_Engine.blob_store import clear_blob_store_cache
 from AI_Engine.database import models  # noqa: F401
 from AI_Engine.database.connection import Base, get_database_session
-from AI_Engine.database.models import Attachment
+from AI_Engine.database.models import Attachment, Experience
 from AI_Engine.router import app
 from AI_Engine.schemas import (
     EvidenceSource,
@@ -184,6 +184,129 @@ class ExperienceExtractionApiTests(unittest.TestCase):
             params={"target_type": "experience_extraction", "unclaimed_only": True},
         )
         self.assertEqual(after_discard.json()["items"], [])
+
+    def test_direct_v2_reuses_existing_experience_and_same_unit_contract(self) -> None:
+        first = self.client.post(
+            "/api/v2/experience-extractions/direct-input-v2",
+            json={
+                "client_request_id": str(uuid4()),
+                "input_type": "direct_input",
+                "text": "사용자 전환율을 개선했습니다.",
+            },
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        first_payload = first.json()
+        first_proposal = first_payload["proposal"]
+        self.assertEqual(first_proposal["contract_version"], "experience-units-v2")
+        self.assertEqual(first_proposal["units"][0]["save_strategy"]["operation"], "create")
+
+        spans = self.client.get(
+            f"/api/v2/experience-extractions/{first_payload['analysis_record_id']}"
+            "/experience-units-proposal/spans"
+        )
+        self.assertEqual(spans.status_code, 200, spans.text)
+        self.assertIn("사용자 전환율", spans.json()["items"][0]["text"])
+
+        first_saved = self.client.post(
+            f"/api/v2/experience-extractions/{first_payload['analysis_record_id']}"
+            "/experience-units-proposal/approve",
+            json={
+                "version": first_proposal["version"],
+                "unit_id": first_proposal["units"][0]["unit_id"],
+            },
+        )
+        self.assertEqual(first_saved.status_code, 200, first_saved.text)
+        self.assertEqual(first_saved.json()["operation"], "created")
+        experience_id = first_saved.json()["created"]["experience_id"]
+
+        second = self.client.post(
+            "/api/v2/experience-extractions/direct-input-v2",
+            json={
+                "client_request_id": str(uuid4()),
+                "input_type": "direct_input",
+                "text": "사용자 전환율을 개선했습니다.",
+            },
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        second_payload = second.json()
+        second_proposal = second_payload["proposal"]
+        strategy = second_proposal["units"][0]["save_strategy"]
+        self.assertEqual(strategy["operation"], "update")
+        self.assertEqual(strategy["experience_id"], experience_id)
+
+        second_saved = self.client.post(
+            f"/api/v2/experience-extractions/{second_payload['analysis_record_id']}"
+            "/experience-units-proposal/approve",
+            json={
+                "version": second_proposal["version"],
+                "unit_id": second_proposal["units"][0]["unit_id"],
+            },
+        )
+        self.assertEqual(second_saved.status_code, 200, second_saved.text)
+        self.assertEqual(second_saved.json()["operation"], "updated")
+        self.assertEqual(second_saved.json()["created"]["experience_id"], experience_id)
+        with self.session_factory() as database:
+            self.assertEqual(database.query(Experience).count(), 1)
+            stored = database.get(Experience, experience_id)
+            self.assertEqual(len(stored.source_ids), 2)
+
+    def test_direct_v2_replays_same_client_request_without_reanalysis(self) -> None:
+        request_id = str(uuid4())
+        body = {
+            "client_request_id": request_id,
+            "input_type": "direct_input",
+            "text": "같은 요청은 한 번만 분석해야 합니다.",
+        }
+
+        first = self.client.post(
+            "/api/v2/experience-extractions/direct-input-v2", json=body,
+        )
+        second = self.client.post(
+            "/api/v2/experience-extractions/direct-input-v2", json=body,
+        )
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(len(self.fake_ai.requests), 1)
+        self.assertEqual(
+            second.json()["analysis_record_id"], first.json()["analysis_record_id"],
+        )
+        self.assertEqual(
+            second.json()["proposal"]["units"][0]["unit_id"],
+            first.json()["proposal"]["units"][0]["unit_id"],
+        )
+
+    def test_partial_draft_result_is_saved_and_remains_reviewable(self) -> None:
+        class PartialExperienceAI(FakeExperienceAI):
+            def organize(self, request, *, sources=()):
+                result = super().organize(request, sources=sources)
+                return result.model_copy(update={
+                    "run": result.run.model_copy(update={"status": "partial"}),
+                    "rejected_draft_count": 1,
+                })
+
+        app.dependency_overrides[get_experience_ai] = lambda: PartialExperienceAI()
+        try:
+            response = self.client.post(
+                "/api/v2/experience-extractions/direct-input",
+                json={
+                    "client_request_id": str(uuid4()),
+                    "input_type": "direct_input",
+                    "text": "Career Memory에서 RAG를 구현했습니다.",
+                },
+            )
+        finally:
+            app.dependency_overrides[get_experience_ai] = lambda: self.fake_ai
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["run"]["status"], "partial")
+        self.assertEqual(response.json()["rejected_draft_count"], 1)
+        recoverable = self.client.get(
+            "/api/v2/analysis-runs",
+            params={"target_type": "experience_extraction", "unclaimed_only": True},
+        )
+        self.assertEqual(recoverable.status_code, 200)
+        self.assertEqual(recoverable.json()["items"][0]["status"], "partial")
 
     def test_saved_attachment_is_used_as_experience_evidence(self) -> None:
         content = "파일 근거로 전환율을 50% 개선했습니다."

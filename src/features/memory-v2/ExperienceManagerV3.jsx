@@ -6,6 +6,7 @@ import { sourceApi } from '../../api/sourceApi.js';
 import { v2ChatApi } from '../../api/v2ChatApi.js';
 import { downloadEvidenceFile } from '../evidence/model/evidenceFileAccess.js';
 import { buildExperienceAnalysisFromResult, discardPendingProposalAttachments, markProposalExperienceSaved, saveProposalExperience } from '../experience/api/experienceProposalService.js';
+import { applyExperienceUnitsChanges, toProposalView } from '../chat/proposalMapper.js';
 import { ExperienceIntakeModal } from '../experience/components/ExperienceIntakeModal.jsx';
 import { ExperienceProposalModal } from '../experience/components/ExperienceProposalModal.jsx';
 import { formatExperienceSavedDateTime } from '../experience/model/experienceDate.js';
@@ -760,7 +761,7 @@ export function ExperienceManagerV3() {
   const openNewExperience = () => openExperienceIntake();
   const restoreRecoverableAnalysis = () => {
     const output = recoverableAnalysis?.outputPayload || recoverableAnalysis?.output_payload;
-    if (!output?.experience_drafts?.length) return;
+    if (!output?.proposal?.units?.length && !output?.experience_drafts?.length) return;
     const result = {
       ...output,
       analysis_record_id: recoverableAnalysis.id,
@@ -797,6 +798,8 @@ export function ExperienceManagerV3() {
       const result = await experienceExtractionApi.analyzeDirectInput({
         text: content,
         files,
+        domainId: domain?.id,
+        projectId: project?.id,
       });
       if (!result.experience_drafts?.length) {
         throw new Error('입력한 내용에서 정리할 경험을 찾지 못했어요. 상황, 행동, 결과를 조금 더 자세히 적어 주세요.');
@@ -841,11 +844,46 @@ export function ExperienceManagerV3() {
         reason: '분석 결과 창을 닫아 보관된 초안',
         draft,
       })));
+      if (experienceProposal?.contractVersion === 'experience-units-v2' && hasUnsaved) {
+        const approvedUnits = experienceProposal.units.filter((item) => item.approved);
+        await experienceExtractionApi.updateUnitsProposal(
+          experienceProposal.analysisRunId,
+          {
+            version: experienceProposal.version,
+            units: applyExperienceUnitsChanges(experienceProposal, { ...experienceProposal, units: approvedUnits }),
+            coverage: experienceProposal.coverage,
+            status: 'rejected',
+          },
+        );
+        if (!approvedUnits.length) {
+          await experienceExtractionApi.discard(experienceProposal.analysisRunId);
+        }
+      }
       await discardPendingProposalAttachments(experienceProposal);
       setExperiencePreviewOpen(false); setExperienceProposal(null); setExperienceProposalEditing(false);
     } finally { setExperiencePreviewBusy(false); }
   };
-  const updateExperiencePreview = async (panel) => { setExperienceProposal(panel); return panel; };
+  const updateExperiencePreview = async (panel) => {
+    if (panel.contractVersion === 'experience-units-v2') {
+      const result = await experienceExtractionApi.updateUnitsProposal(
+        panel.analysisRunId,
+        {
+          version: panel.version,
+          units: applyExperienceUnitsChanges(panel, panel),
+          coverage: panel.coverage,
+          status: 'edited',
+        },
+      );
+      const next = toProposalView({
+        ...result.proposal,
+        analysis_run_id: panel.analysisRunId,
+      });
+      setExperienceProposal(next);
+      return next;
+    }
+    setExperienceProposal(panel);
+    return panel;
+  };
   const preserveFailedExperienceDrafts = async (items, reason = '') => {
     if (!items.length) return;
     await Promise.all(items.map((draft) => experienceTrashApi.create({
@@ -855,6 +893,25 @@ export function ExperienceManagerV3() {
     })));
   };
   const approveExperiencePreview = async (proposal) => {
+    if (proposal.contractVersion === 'experience-units-v2') {
+      const unitId = proposal.selection?.unit_id;
+      const unit = proposal.units?.find((item) => item.unitId === unitId);
+      if (!unit || unit.approved) return proposal;
+      setExperiencePreviewBusy(true); setError('');
+      try {
+        const result = await experienceExtractionApi.approveExperienceUnit(
+          proposal.analysisRunId,
+          { version: proposal.version, unit_id: unitId },
+        );
+        const nextProposal = toProposalView({
+          ...result.proposal,
+          analysis_run_id: proposal.analysisRunId,
+        });
+        setExperienceProposal(nextProposal);
+        await refresh();
+        return nextProposal;
+      } finally { setExperiencePreviewBusy(false); }
+    }
     const requestedDraftId = proposal.selection?.draft_id;
     const draftIndex = requestedDraftId ? proposal.experiences?.findIndex((item) => item.draft_id === requestedDraftId) : -1;
     const index = draftIndex >= 0 ? draftIndex : (proposal.selection?.experience_indexes?.[0] ?? 0);
@@ -891,6 +948,27 @@ export function ExperienceManagerV3() {
       const removedFileIds = (removed.source_refs || []).filter((source) => source.source_type === 'file' || source.kind === 'file').map((source) => source.id).filter(Boolean);
       await Promise.all([...new Set(removedFileIds)].filter((id) => !remainingSourceIds.has(id)).map((id) => v2ChatApi.deleteAttachment(id).catch(() => null)));
     }
+    if (current.contractVersion === 'experience-units-v2') {
+      const result = await experienceExtractionApi.updateUnitsProposal(
+        current.analysisRunId,
+        {
+          version: current.version,
+          units: applyExperienceUnitsChanges(current, { ...current, units: experiences }),
+          coverage: current.coverage,
+          status: experiences.length ? 'edited' : 'rejected',
+        },
+      );
+      if (!experiences.length) {
+        await experienceExtractionApi.discard(current.analysisRunId);
+        setExperiencePreviewOpen(false); setExperienceProposal(null); return null;
+      }
+      const persisted = toProposalView({
+        ...result.proposal,
+        analysis_run_id: current.analysisRunId,
+      });
+      setExperienceProposal(persisted);
+      return persisted;
+    }
     if (!nextProposal) { setExperiencePreviewOpen(false); setExperienceProposal(null); return null; }
     setExperienceProposal(nextProposal);
     return nextProposal;
@@ -911,6 +989,21 @@ export function ExperienceManagerV3() {
         reason: '사용자가 나머지 초안을 삭제함',
         draft,
       })));
+      if (experienceProposal?.contractVersion === 'experience-units-v2') {
+        const approvedUnits = experienceProposal.units.filter((item) => item.approved);
+        await experienceExtractionApi.updateUnitsProposal(
+          experienceProposal.analysisRunId,
+          {
+            version: experienceProposal.version,
+            units: applyExperienceUnitsChanges(experienceProposal, { ...experienceProposal, units: approvedUnits }),
+            coverage: experienceProposal.coverage,
+            status: 'rejected',
+          },
+        );
+        if (!approvedUnits.length) {
+          await experienceExtractionApi.discard(experienceProposal.analysisRunId);
+        }
+      }
       await discardPendingProposalAttachments(experienceProposal);
     } finally {
       setExperiencePreviewOpen(false);

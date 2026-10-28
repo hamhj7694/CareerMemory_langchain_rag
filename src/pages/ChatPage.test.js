@@ -75,6 +75,33 @@ describe('ChatPage 메시지 제안 복원', () => {
       downloadUrl: '/api/v2/attachments/ATT-1/download',
     }]);
   });
+
+  it('V2 경험 단위 액션을 새 계약으로 복원한다', () => {
+    const message = toUiMessage({
+      id: 'MSG-UNITS',
+      conversation_id: 'CONV-1',
+      role: 'assistant',
+      status: 'completed',
+      content: '경험 단위 1개를 분석했어요.',
+      actions: [{
+        type: 'experience_units_proposal',
+        proposal: {
+          id: 'UNITS-1',
+          version: 1,
+          contract_version: 'experience-units-v2',
+          status: 'pending',
+          units: [{ unit_id: 'UNIT-1', title: '단위 경험' }],
+        },
+      }],
+    });
+
+    expect(message.proposalIds).toEqual(['UNITS-1']);
+    expect(message.embeddedProposals[0]).toMatchObject({
+      kind: 'experience-units',
+      contractVersion: 'experience-units-v2',
+      chatMessageId: 'MSG-UNITS',
+    });
+  });
 });
 
 describe('streamed proposal server identifiers', () => {

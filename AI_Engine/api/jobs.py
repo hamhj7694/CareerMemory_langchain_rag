@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from AI_Engine.attachment_service import attachment_service
 from AI_Engine.auth.dependencies import get_current_user, require_csrf_user
+from AI_Engine.privacy import guest_private_mode, redact_guest_data, redact_guest_text
 from AI_Engine.blob_store import BlobStoreError
 from AI_Engine.database.connection import PROJECT_ROOT, get_database_session
 from AI_Engine.database.models import (
@@ -366,6 +367,13 @@ def analyze_job(
     current_user: User = Depends(require_csrf_user),
     database: Session = Depends(get_database_session),
 ) -> dict[str, Any]:
+    if guest_private_mode(current_user):
+        body = body.model_copy(update={
+            "company_name": redact_guest_text(body.company_name),
+            "role_name": redact_guest_text(body.role_name),
+            "posting_title": redact_guest_text(body.posting_title),
+            "posting_content": redact_guest_text(body.posting_content),
+        })
     existing = database.scalar(
         select(JobAnalysisRecord).where(
             JobAnalysisRecord.user_id == current_user.id,
@@ -445,7 +453,11 @@ def analyze_job(
         try:
             VECTOR_ROOT.mkdir(parents=True, exist_ok=True)
             retriever = create_experience_retriever(
-                [_experience_dict(item) for item in searchable],
+                [
+                    redact_guest_data(_experience_dict(item))
+                    if guest_private_mode(current_user) else _experience_dict(item)
+                    for item in searchable
+                ],
                 persist_directory=str(VECTOR_ROOT),
                 collection_name=_user_collection_name(current_user.id),
             )
@@ -469,7 +481,9 @@ def analyze_job(
         ).invoke(
             request,
             attachment_texts={
-                attachment.id: attachment.extracted_text
+                attachment.id: (redact_guest_text(attachment.extracted_text)
+                                if guest_private_mode(current_user)
+                                else attachment.extracted_text)
                 for attachment in attachments
                 if attachment.extracted_text.strip()
             },

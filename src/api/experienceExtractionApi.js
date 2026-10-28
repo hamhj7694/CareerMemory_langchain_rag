@@ -25,27 +25,50 @@ export const experienceExtractionApi = {
       method: 'POST',
     });
   },
-  analyzeDirectInput({ text, files = [], clientRequestId } = {}) {
+  analyzeDirectInput({ text, files = [], clientRequestId, domainId, projectId } = {}) {
     if (files.length) {
       const body = new FormData();
       body.append('client_request_id', clientRequestId || createRequestId());
       body.append('text', text || '');
+      if (domainId) body.append('preferred_domain_id', domainId);
+      if (projectId) body.append('preferred_project_id', projectId);
       files.forEach((item) => body.append('files', item.file || item));
       return http.request({
-        path: '/api/v2/experience-extractions/direct-input-files',
+        path: '/api/v2/experience-extractions/direct-input-files-v2',
         method: 'POST',
         body,
       });
     }
     return http.request({
-      path: '/api/v2/experience-extractions/direct-input',
+      path: '/api/v2/experience-extractions/direct-input-v2',
       method: 'POST',
       body: {
         client_request_id: clientRequestId || createRequestId(),
         input_type: 'direct_input',
         text,
         attachment_ids: [],
+        preferred_domain_id: domainId || null,
+        preferred_project_id: projectId || null,
       },
+    });
+  },
+  updateUnitsProposal(analysisRunId, input) {
+    return http.request({
+      path: `/api/v2/experience-extractions/${encodeURIComponent(analysisRunId)}/experience-units-proposal`,
+      method: 'PATCH',
+      body: input,
+    });
+  },
+  approveExperienceUnit(analysisRunId, input) {
+    return http.request({
+      path: `/api/v2/experience-extractions/${encodeURIComponent(analysisRunId)}/experience-units-proposal/approve`,
+      method: 'POST',
+      body: input,
+    });
+  },
+  getUnitsProposalSpans(analysisRunId) {
+    return http.request({
+      path: `/api/v2/experience-extractions/${encodeURIComponent(analysisRunId)}/experience-units-proposal/spans`,
     });
   },
 };

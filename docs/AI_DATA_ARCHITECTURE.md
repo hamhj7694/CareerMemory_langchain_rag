@@ -36,7 +36,7 @@
 - 채용공고 원문과 원본 URL
 - 원본 해시, MIME type, 생성 시각
 
-Bronze 데이터는 사용자 삭제 정책 외에는 AI 분석으로 덮어쓰지 않는다.
+Bronze 데이터는 사용자 삭제 정책 외에는 AI 분석으로 덮어쓰지 않는다. 단, 게스트의 새 대화 텍스트는 저장 전에 감지 가능한 이메일·전화번호·주소 등 직접 식별자를 공백으로 가린다. 기존 게스트 대화와 첨부에서 추출한 텍스트도 AI 분석 입력을 만들 때 가린다. 자동 감지는 모든 개인정보를 보장하지 않으며 첨부 원본 파일 자체는 별도 보관된다.
 
 현재 `Attachment`는 파일 형식 검증 직후 원본을 `LocalBlobStore`에 기록하고,
 사용자별 SHA-256 해시, storage key, MIME과 크기를 DB에 먼저 저장한다. 신규 원본을
@@ -135,6 +135,44 @@ Message / Attachment / Job posting
 구조화 출력을 `output_payload`에 기록하고, 아직 Gold 레코드로 승인되지 않은 성공 결과는
 경험 관리 화면에서 복구하거나 명시적으로 폐기할 수 있다. 실패도 오류 코드와 상태를
 남기므로 브라우저 이탈이나 모델 오류가 곧 입력 유실로 이어지지 않는다.
+
+### 4.1 경험 단위 분석 V2
+
+2026-10-27 이후 새 대화·직접 입력 경험 분석은 `experience-units-v2` 계약을 사용한다.
+기존 `experience_proposal` 메시지와 인덱스 승인 API는 과거 데이터 호환 경로로 유지한다.
+
+```text
+Message / Attachment의 분석 허용 원문
+  -> 결정적 line span (char/UTF-8 byte offset + SHA-256)
+  -> bounded analysis group / batch
+  -> ExperienceUnitDraft + CanonicalFact + CoverageReport
+  -> unit_id 승인
+  -> Experience + AnalysisRunTarget + 기존 Evidence projection
+```
+
+- 등록 계정은 원문을, 게스트는 개인정보 공백 치환 뒤의 분석 허용 텍스트를 분할한다.
+- `EvidenceSource`는 줄바꿈을 정규화하지 않는다. 모든 leaf span을 순서대로 이어 붙였을 때
+  분석 허용 텍스트와 문자 길이·UTF-8 byte 길이·해시가 같아야 한다.
+- 실행 JSON에는 원문 사본 대신 Message/Attachment 식별자, 해시, offset, span 상태를 둔다.
+  화면은 권한을 다시 검사하는 spans API로 필요한 원문 조각만 조회한다.
+- 공고는 문자열을 삭제하지 않고 해당 offset span을 `job`으로 표시한다. 경험에 배정되지
+  않은 수행 문장은 `unresolved`로 남겨 화면에 노출한다.
+- 24,000자 또는 60개 구간을 넘으면 결정적으로 배치를 나눈다. 일부 배치가 실패하면 성공한
+  단위는 유지하고 `failed_batch_ids` 및 `processing_status=partial`을 기록한다.
+- 동일 정규화 문구인 fact만 같은 canonical fact ID로 묶는다. 의미가 비슷하다는 이유만으로
+  병합하지 않는다.
+- `analysis_run_targets`가 실행과 여러 Experience를 연결한다. 기존
+  `analysis_runs.target_id`에는 첫 결과를 계속 기록해 구버전 조회를 깨지 않는다.
+- 승인 시에는 기존 검색/RAG를 위한 `source_refs`를 권한 확인 후 원본에서 재구성해
+  Evidence 문서·청크를 동기화한다. 이 투영은 검색 어댑터 전환 전까지 유지한다.
+- 채팅 분석과 경험 관리의 `+ 경험 분석하기`는 같은 분할·AI·제안·승인 계약을 사용한다.
+  `client_request_id`가 같은 완료 요청은 저장된 제안을 재생하고 모델을 다시 호출하지 않는다.
+- 저장 전에는 같은 사용자에게 이미 승인된 경험 중 동일 원문이거나, 동일 분류·프로젝트에서
+  제목과 행동·성과 내용이 충분히 겹치는 대상만 `update` 후보로 제시한다. 단순히 같은 기술을
+  썼다는 이유만으로 서로 다른 프로젝트 경험을 합치지 않는다.
+- `update` 승인 시 사용자 수정 제목·요약·상황·역할과 사용자 정의 블록은 보존하고, 새 행동·성과·
+  사실·기술·측정값·근거·인용을 정규화한 뒤 중복 없이 추가한다. 분석 실행과 단위 ID는
+  `analysis_run_targets`와 내부 업데이트 이력에 남기며 Evidence 검색 문서를 다시 동기화한다.
 
 ## 5. 무손실 저장과 자유 형식 표시 문서
 
